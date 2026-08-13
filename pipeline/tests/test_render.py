@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from publikclip_pipeline.captions import ass as ass_mod
-from publikclip_pipeline.render import renderer
+from publikclip_pipeline.render import ffmpeg_bin, renderer
 
 
 def test_crop_boxes_even_and_bounded():
@@ -83,9 +83,11 @@ def test_render_smoke(tmp_path):
     """Full path: synthetic source → sendcmd crop with a mid-clip cut →
     caption burn → verified 9:16 output."""
     src = tmp_path / "src.mp4"
+    # Resolve like the product does — on a bare machine (Windows CI) the only
+    # ffmpeg is the fetched static one, reachable via PUBLIKCLIP_FFMPEG.
     subprocess.run(
         [
-            "ffmpeg", "-v", "error", "-y",
+            ffmpeg_bin.ffmpeg(), "-v", "error", "-y",
             "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=20",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=20",
             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(src),
