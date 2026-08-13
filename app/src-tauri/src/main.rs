@@ -19,9 +19,25 @@ fn home_dir() -> PathBuf {
 }
 
 fn dirs_home() -> PathBuf {
+    // HOME on Unix; Windows services and some launch paths only set USERPROFILE.
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Command that never flashes a console window on Windows (CREATE_NO_WINDOW).
+/// Every pipeline/tool spawn goes through this — a GUI app popping cmd.exe
+/// windows for each sidecar call reads as malware to most people.
+fn quiet_command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
 }
 
 /// Where the Python pipeline lives and how to invoke it.
@@ -43,15 +59,23 @@ fn pipeline_invocation() -> (String, Vec<String>) {
             ],
         )
     } else {
-        // Packaged: bundled uv + pipeline source under Resources/. The venv
+        // Packaged: bundled uv + pipeline source under the platform's
+        // resource layout — macOS keeps them in the .app's Resources dir,
+        // Windows (NSIS) lands them in resources\ next to the exe. The venv
         // bootstraps into PUBLIKCLIP_HOME on first run (uv handles Python
         // 3.12 download + deps; the onboarding screen owns expectations).
-        let resources = std::env::current_exe()
+        let exe_dir = std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|d| d.join("../Resources/resources")))
-            .unwrap_or_else(|| PathBuf::from("resources"));
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let resources = if cfg!(target_os = "macos") {
+            exe_dir.join("../Resources/resources")
+        } else {
+            exe_dir.join("resources")
+        };
+        let uv = if cfg!(target_os = "windows") { "bin/uv.exe" } else { "bin/uv" };
         (
-            resources.join("bin/uv").to_string_lossy().to_string(),
+            resources.join(uv).to_string_lossy().to_string(),
             vec![
                 "--directory".to_string(),
                 resources.join("pipeline").to_string_lossy().to_string(),
@@ -115,7 +139,7 @@ fn resume_job(
 }
 
 fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
-    let child = Command::new(program)
+    let child = quiet_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -235,7 +259,7 @@ fn mark_onboarded() -> Result<(), String> {
 
 #[tauri::command]
 async fn check_ollama() -> Result<Value, String> {
-    let out = Command::new("curl")
+    let out = quiet_command("curl")
         .args(["-s", "-m", "3", "http://localhost:11434/api/tags"])
         .output()
         .map_err(|e| e.to_string())?;
@@ -259,7 +283,7 @@ async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
     let mut full = base_args;
     full.push("edit".to_string());
     full.extend(args);
-    let out = Command::new(&program)
+    let out = quiet_command(&program)
         .args(&full)
         .output()
         .map_err(|e| e.to_string())?;
@@ -349,7 +373,7 @@ async fn ig_connect(app_id: String, app_secret: String) -> Result<String, String
         "--app-id".into(), app_id,
         "--app-secret".into(), app_secret,
     ]);
-    let out = Command::new(&program)
+    let out = quiet_command(&program)
         .args(&args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -370,7 +394,7 @@ async fn ig_tool(args: Vec<String>) -> Result<Value, String> {
     let mut full = base_args;
     full.push("ig".to_string());
     full.extend(args);
-    let out = Command::new(&program)
+    let out = quiet_command(&program)
         .args(&full)
         .output()
         .map_err(|e| e.to_string())?;

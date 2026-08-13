@@ -19,6 +19,7 @@ CRF and the hardware encoder's bitrate model.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -84,8 +85,17 @@ def sendcmd_lines(boxes: list[tuple[int, int, int, int]], fps: float, target: st
 
 def _q(path: str) -> str:
     """ffmpeg filter-option quoting: single quotes make the value literal;
-    an embedded quote closes, escapes, reopens ('\\'')."""
-    return "'" + str(path).replace("'", "'\\''") + "'"
+    an embedded quote closes, escapes, reopens ('\\'').
+
+    Windows adds two wrinkles the mac path never sees: backslash is
+    ffmpeg's escape character even inside quotes (av_get_token), and the
+    drive-letter colon reads as an option separator on some parse levels.
+    Forward slashes (fine for libass and every filter) plus an escaped
+    colon is the canonical portable form: 'C\\:/Users/…/clip.ass'."""
+    text = str(path)
+    if os.name == "nt":
+        text = text.replace("\\", "/").replace(":", "\\:")
+    return "'" + text.replace("'", "'\\''") + "'"
 
 
 def render_clip(
