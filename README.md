@@ -31,6 +31,11 @@ out, validated on real footage. The Instagram feedback loop ships in-app
 Builds are currently unsigned — install from source below, or follow the
 guided install at [publikhq.com/publikclip](https://publikhq.com/publikclip).
 
+Runs on macOS (Apple silicon) and Windows 10/11 x64. The Windows path is
+validated on every push by the `windows` workflow: env resolve, full test
+suite, NSIS build, silent install, and a launch of the installed app on a
+clean VM.
+
 ## Layout
 
 ```
@@ -56,6 +61,25 @@ The app downloads its speech/audio models (~4–5 GB) on first run with a
 progress UI, and fetches a caption-capable static ffmpeg automatically if the
 machine has none. Scoring uses your own Gemini API key, or a local Ollama
 model at reduced scoring quality — onboarding walks through both.
+
+## Install from source (Windows)
+
+You need [Rust](https://rustup.rs), the Visual Studio **Desktop development
+with C++** build tools, [Node](https://nodejs.org), git, and
+[uv](https://docs.astral.sh/uv/) (`winget install --id astral-sh.uv -e`).
+Then, in PowerShell:
+
+```powershell
+git clone https://github.com/Blueturboguy07/publikclip.git
+cd publikclip\app
+npm.cmd install
+node_modules\.bin\tauri.cmd build --bundles nsis
+# run the installer it produces:
+Start-Process (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *-setup.exe).FullName
+```
+
+First run behaves the same as on macOS: models download behind a progress
+bar, and a caption-capable static ffmpeg is fetched automatically.
 
 ## Development
 
