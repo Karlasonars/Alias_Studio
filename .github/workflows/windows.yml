@@ -42,7 +42,12 @@ jobs:
 
       - name: Fetch caption-capable ffmpeg (Windows static build)
         working-directory: pipeline
-        run: uv run python -c "from publikclip_pipeline.render import ffmpeg_bin; ok = ffmpeg_bin.ensure_capable(); print('resolved:', ffmpeg_bin.resolve()); assert ok, 'no subtitles-capable ffmpeg on Windows'"
+        run: |
+          uv run python -c "from publikclip_pipeline.render import ffmpeg_bin; ok = ffmpeg_bin.ensure_capable(); print('resolved:', ffmpeg_bin.resolve()); assert ok, 'no subtitles-capable ffmpeg on Windows'"
+          # The test suite isolates PUBLIKCLIP_HOME per-test, which hides the
+          # fetch above — PUBLIKCLIP_FFMPEG is the resolution order's first
+          # stop, so the render smoke test runs against the real fetched exe.
+          Add-Content $env:GITHUB_ENV "PUBLIKCLIP_FFMPEG=$env:PUBLIKCLIP_HOME\bin\ffmpeg.exe"
 
       - name: Pipeline test suite on Windows
         working-directory: pipeline
