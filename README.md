@@ -126,6 +126,12 @@ cd app && npm install && npm run tauri dev
 `PUBLIKCLIP_DEVICE=cpu` forces every model back onto the CPU — the first thing
 to try when diagnosing a suspected GPU problem.
 
+[SPECIFICATION.md](SPECIFICATION.md) is the engineering reference: the eight
+stages and what each one produces, the checkpoint contract that decides what
+re-runs, the settings model, the two render paths and how they are kept in
+agreement, and the conventions that exist because breaking them caused a real
+failure. Read it before changing pipeline behaviour.
+
 ## License
 
 AGPL-3.0-or-later, inherited from
