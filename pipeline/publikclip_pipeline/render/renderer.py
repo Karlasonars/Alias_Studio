@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from . import ffmpeg_bin
@@ -98,6 +99,113 @@ def _q(path: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+@lru_cache(maxsize=1)
+def _available_encoders() -> frozenset[str]:
+    try:
+        proc = subprocess.run(
+            [ffmpeg_bin.ffmpeg(), "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    return frozenset(
+        line.split()[1]
+        for line in proc.stdout.splitlines()
+        if line.startswith(" V") and len(line.split()) > 1
+    )
+
+
+# Hardware encoders in preference order, each with the flags that keep it
+# quality-targeted rather than a bitrate guess (so output stays close to the
+# x264 baseline). Probed in order; the first that actually encodes wins.
+_HW_ENCODERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("h264_videotoolbox", ("-b:v", VT_BITRATE, "-allow_sw", "1")),
+    ("h264_nvenc", ("-preset", "p5", "-rc", "vbr", "-cq", str(X264_CRF), "-b:v", "0")),
+    ("h264_amf", ("-quality", "balanced", "-rc", "cqp", "-qp_i", str(X264_CRF),
+                  "-qp_p", str(X264_CRF))),
+    ("h264_qsv", ("-global_quality", str(X264_CRF))),
+)
+
+
+@lru_cache(maxsize=None)
+def encoder_works(name: str, args: tuple[str, ...] = ()) -> bool:
+    """Actually encode a few frames through this encoder.
+
+    Being listed by `ffmpeg -encoders` is not the same as being usable, and
+    the difference is not academic: h264_nvenc is compiled into every BtbN
+    build and lists fine, then refuses to open when the driver's NVENC API
+    is older than the build wants ("Required: 13.1 Found: 13.0"). QuickSync
+    lists on machines with no Intel GPU and fails to create a session. Both
+    would surface as a failed render halfway through a job, long after the
+    user flipped the setting — so pay a fraction of a second here instead.
+
+    Probed at the real output size: some encoders only fail on particular
+    dimensions or alignments.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin.ffmpeg(), "-hide_banner", "-v", "error", "-y",
+                "-f", "lavfi", "-i", f"testsrc2=size={OUT_W}x{OUT_H}:rate=30:duration=0.2",
+                "-c:v", name, *args, "-pix_fmt", "yuv420p", "-f", "null", "-",
+            ],
+            capture_output=True, timeout=120,
+        )
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def video_encoder_args(hardware: bool) -> list[str]:
+    """Encoder flags for one clip.
+
+    x264 at CRF 19 is the reference path and stays the default: hardware
+    encoders are dramatically faster but produce different bits, so switching
+    silently would change every existing render. When `hardware` is on, the
+    best accelerator that actually works on this machine wins; when none do,
+    this quietly returns the x264 path rather than failing the render.
+    """
+    if hardware:
+        for name, args in _HW_ENCODERS:
+            if encoder_works(name, args):
+                return ["-c:v", name, *args]
+    elif encoder_works("h264_videotoolbox", _HW_ENCODERS[0][1]):
+        # macOS has always used VideoToolbox as its baseline.
+        return ["-c:v", "h264_videotoolbox", *_HW_ENCODERS[0][1]]
+    return ["-c:v", "libx264", "-preset", "medium", "-crf", str(X264_CRF)]
+
+
+def hardware_encoder_name(hardware: bool = True) -> str:
+    """Which accelerator would actually be used, '' for none. For the
+    settings panel, so 'hardware encoding' can say what it resolved to
+    instead of leaving the user guessing why nothing got faster."""
+    if not hardware:
+        return ""
+    for name, args in _HW_ENCODERS:
+        if encoder_works(name, args):
+            return name
+    return ""
+
+
+def scale_pad_vf(content_w: float, content_h: float) -> list[str]:
+    """Scale-to-width + center-pad-to-height -vf fragment for a crop window
+    whose aspect ratio doesn't match 9:16 (the gameplay end of the framing
+    dial — see camera.director._resolve_content_box). Degenerates to the
+    original single scale (no pad, no new filter) whenever content is
+    already 9:16-or-narrower, so gameplay_amount=0 has zero rendering
+    regression."""
+    if content_w and content_h:
+        scaled_h = content_h * (OUT_W / content_w)
+        scaled_h = max(2, int(round(scaled_h / 2)) * 2)  # even, for x264/NVENC
+        if scaled_h < OUT_H:
+            pad_y = (OUT_H - scaled_h) // 2
+            return [
+                f"scale={OUT_W}:{scaled_h}:flags=lanczos",
+                f"pad={OUT_W}:{OUT_H}:0:{pad_y}:color=black",
+            ]
+    return [f"scale={OUT_W}:{OUT_H}:flags=lanczos"]
+
+
 def render_clip(
     media_path: str,
     out_path: Path,
@@ -111,6 +219,7 @@ def render_clip(
     src_w: int = 1920,
     src_h: int = 1080,
     timeout: float = 1800.0,
+    hardware_encode: bool = False,
 ) -> None:
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
@@ -125,7 +234,7 @@ def render_clip(
     vf_parts = [
         f"sendcmd=f={_q(cmd_path)}",
         f"crop@c=w={w0}:h={h0}:x={x0}:y={y0}",
-        f"scale={OUT_W}:{OUT_H}:flags=lanczos",
+        *scale_pad_vf(trajectory.get("content_w", 0), trajectory.get("content_h", 0)),
         "setsar=1",
     ]
     if ass_path is not None:
@@ -134,10 +243,7 @@ def render_clip(
             sub += f":fontsdir={_q(fonts_dir)}"
         vf_parts.append(sub)
 
-    if videotoolbox_available():
-        vcodec = ["-c:v", "h264_videotoolbox", "-b:v", VT_BITRATE, "-allow_sw", "1"]
-    else:
-        vcodec = ["-c:v", "libx264", "-preset", "medium", "-crf", str(X264_CRF)]
+    vcodec = video_encoder_args(hardware_encode)
 
     args = [
         ffmpeg_bin.ffmpeg(), "-y", "-v", "error",

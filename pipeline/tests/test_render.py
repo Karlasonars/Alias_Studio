@@ -20,6 +20,36 @@ def test_crop_boxes_even_and_bounded():
         assert x + w <= 1920 and y + h <= 1080
 
 
+def test_scale_pad_vf_no_pad_when_already_9x16():
+    # gameplay_amount=0 crop (607.5x1080) — degenerates to the original
+    # single scale, byte-identical, no pad filter, zero rendering regression.
+    parts = renderer.scale_pad_vf(1080 * 9 / 16, 1080)
+    assert parts == [f"scale={renderer.OUT_W}:{renderer.OUT_H}:flags=lanczos"]
+
+
+def test_scale_pad_vf_no_pad_when_content_box_missing():
+    # trajectory.get("content_w", 0) on an old/absent key — must fall back
+    # to the original behavior exactly (existing callers with no content_w).
+    parts = renderer.scale_pad_vf(0, 0)
+    assert parts == [f"scale={renderer.OUT_W}:{renderer.OUT_H}:flags=lanczos"]
+
+
+def test_scale_pad_vf_pads_full_frame_source():
+    # gameplay_amount=1.0 on a 1920x1080 source — full width, letterboxed.
+    parts = renderer.scale_pad_vf(1920, 1080)
+    assert len(parts) == 2
+    assert parts[0] == f"scale={renderer.OUT_W}:608:flags=lanczos"
+    assert parts[1] == f"pad={renderer.OUT_W}:{renderer.OUT_H}:0:656:color=black"
+
+
+def test_scale_pad_vf_pad_is_zoom_invariant():
+    # Punch-in zoom shrinks w/h by the same factor — the pad must be
+    # unaffected, since aspect ratio (and thus scaled_h) never changes.
+    full = renderer.scale_pad_vf(1920, 1080)
+    zoomed = renderer.scale_pad_vf(1920 / 1.12, 1080 / 1.12)  # mid-punch-in
+    assert full == zoomed
+
+
 def test_sendcmd_dedupes_to_change_points():
     boxes = [(608, 1080, 100, 0)] * 50 + [(608, 1080, 700, 0)] * 50
     lines = renderer.sendcmd_lines(boxes, 25.0)

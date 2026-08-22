@@ -9,6 +9,31 @@ from pathlib import Path
 from ..jobs.queue import Stage, StageContext, StageError
 
 
+def _caption_style_fingerprint(ctx: StageContext) -> dict:
+    """Everything that changes how captions look on screen, resolved through
+    the same layers the renderer uses (built-in → saved edits → job
+    overrides) so editing a preset invalidates the render too."""
+    from ..captions import ass as ass_mod
+
+    preset = ass_mod.resolve_preset(
+        ctx.settings.caption_preset, ctx.settings.captions.overrides
+    )
+    return preset.__dict__.copy()
+
+
+def _audio_fingerprint(ctx: StageContext) -> dict:
+    return {"lufs": ctx.settings.lufs_target, "true_peak": ctx.settings.true_peak_db}
+
+
+def _encoder_fingerprint(ctx: StageContext) -> list[str]:
+    """Which encoder produced these files. Switching to hardware encoding
+    changes the bits, so it invalidates the render like any other visual
+    setting."""
+    from . import renderer
+
+    return renderer.video_encoder_args(ctx.settings.performance.hardware_encode)
+
+
 class RenderStage(Stage):
     name = "render"
     schema_version = 1
@@ -16,6 +41,18 @@ class RenderStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("caption_preset") != ctx.settings.caption_preset:
             return False  # restyle requested → re-render
+        if data.get("camera_settings") != ctx.settings.camera.__dict__:
+            return False  # framing/camera restyle requested → re-render
+        # Caption style edits (font/size/colors/words-per-caption) are burned
+        # into the pixels, so they invalidate the render exactly like a preset
+        # switch does. The saved-preset fingerprint covers edits made to the
+        # named preset itself, not just this job's ad-hoc overrides.
+        if data.get("caption_style") != _caption_style_fingerprint(ctx):
+            return False
+        if data.get("audio") != _audio_fingerprint(ctx):
+            return False  # loudness targets are baked in by loudnorm
+        if data.get("encoder") != _encoder_fingerprint(ctx):
+            return False
         return all(Path(c["path"]).exists() for c in data.get("outputs", []))
 
     def run(self, ctx: StageContext) -> dict:
@@ -88,7 +125,10 @@ class RenderStage(Stage):
             ]
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
-                ass_mod.build_ass(words, clip_events, preset_name=preset, emoji_ok=emoji_ok)
+                ass_mod.build_ass(
+                    words, clip_events, preset_name=preset, emoji_ok=emoji_ok,
+                    overrides=ctx.settings.captions.overrides,
+                )
             )
 
             out_path = out_dir / f"clip_{i:02d}.mp4"
@@ -99,6 +139,7 @@ class RenderStage(Stage):
                     lufs=ctx.settings.lufs_target,
                     true_peak=ctx.settings.true_peak_db,
                     src_w=src_w, src_h=src_h,
+                    hardware_encode=ctx.settings.performance.hardware_encode,
                 )
             except RuntimeError as err:
                 raise StageError(str(err)) from err
@@ -128,4 +169,8 @@ class RenderStage(Stage):
             "emoji_ok": emoji_ok,
             "captions_burned": captions_ok,
             "caption_preset": preset,
+            "camera_settings": ctx.settings.camera.__dict__.copy(),
+            "caption_style": _caption_style_fingerprint(ctx),
+            "audio": _audio_fingerprint(ctx),
+            "encoder": _encoder_fingerprint(ctx),
         }

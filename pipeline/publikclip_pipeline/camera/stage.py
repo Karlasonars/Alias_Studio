@@ -18,6 +18,11 @@ class CameraStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("camera_settings") != ctx.settings.camera.__dict__:
             return False  # camera style changed → re-direct
+        # Punch-in shape/frequency is baked into the trajectory's zoom
+        # envelope, so retention edits invalidate it exactly like a camera
+        # mode switch does.
+        if data.get("retention_settings") != ctx.settings.retention.__dict__:
+            return False
         return all(Path(p).exists() for p in data.get("trajectories", {}).values())
 
     def run(self, ctx: StageContext) -> dict:
@@ -74,6 +79,8 @@ class CameraStage(Stage):
                         "frames": traj.frames,
                         "cuts": traj.cuts,
                         "punches": traj.punches,
+                        "content_w": traj.content_w,
+                        "content_h": traj.content_h,
                         "meta": traj.meta,
                     }
                 )
@@ -93,4 +100,5 @@ class CameraStage(Stage):
             "trajectories": trajectories,
             "stats": stats,
             "camera_settings": ctx.settings.camera.__dict__.copy(),
+            "retention_settings": ctx.settings.retention.__dict__.copy(),
         }

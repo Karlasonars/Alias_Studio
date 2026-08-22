@@ -123,6 +123,76 @@ def test_crop_stays_in_bounds():
         assert y + h <= 1080 + 0.01
 
 
+def test_resolve_content_box_endpoints_16x9_source():
+    # 0.0: today's exact tight crop — full height, 9:16-derived width.
+    w, h = director._resolve_content_box(0.0, 1920, 1080)
+    assert (w, h) == (1080 * 9 / 16, 1080)
+    # 1.0: the entire source frame, letterboxed by the renderer.
+    w, h = director._resolve_content_box(1.0, 1920, 1080)
+    assert (w, h) == (1920, 1080)
+
+
+def test_resolve_content_box_midpoint_is_between_endpoints():
+    w0, h0 = director._resolve_content_box(0.0, 1920, 1080)
+    w_mid, h_mid = director._resolve_content_box(0.5, 1920, 1080)
+    w1, h1 = director._resolve_content_box(1.0, 1920, 1080)
+    assert w0 < w_mid < w1
+    assert h_mid == h0 == h1  # height stays full-frame throughout for 16:9
+
+
+def test_resolve_content_box_clamps_out_of_range():
+    assert director._resolve_content_box(-1.0, 1920, 1080) == director._resolve_content_box(0.0, 1920, 1080)
+    assert director._resolve_content_box(5.0, 1920, 1080) == director._resolve_content_box(1.0, 1920, 1080)
+
+
+def test_resolve_content_box_portrait_source_grows_height_not_width():
+    # A source already narrower than 9:16 fills width at bias=0 (pillar-fit);
+    # the dial must grow height instead, and be a no-op at bias=0.
+    w0, h0 = director._resolve_content_box(0.0, 600, 1080)
+    assert w0 == 600  # already full width
+    w1, h1 = director._resolve_content_box(1.0, 600, 1080)
+    assert w1 == 600 and h1 == 1080  # both endpoints show the full source
+
+
+def test_gameplay_amount_default_reproduces_tight_crop():
+    """Existing Cam mocks (no gameplay_amount attr) must behave exactly as
+    before — getattr's default keeps zero-regression callers unaffected."""
+    analysis = _two_speaker_analysis()
+
+    class Cam:
+        speaker_change = "cut"
+        punch_in = False
+        punch_in_sensitivity = 1.0
+        zoom_lock_per_scene = True
+
+    traj = director.build_trajectory(
+        analysis, [], [], np.zeros(0), 0.1, 0.0, 10.0, 1920, 1080, Cam()
+    )
+    assert traj.content_w == 1080 * 9 / 16
+    assert traj.content_h == 1080
+
+
+def test_gameplay_amount_one_forces_full_width_regardless_of_target():
+    """At gameplay_amount=1.0, x must be 0 for every frame — the tracked
+    face's position becomes irrelevant once the crop fills the source."""
+    analysis = _two_speaker_analysis()
+    analysis.tracks[0].centres = [0.02] * 250  # parked at the extreme edge
+
+    class Cam:
+        speaker_change = "cut"
+        punch_in = False
+        punch_in_sensitivity = 1.0
+        zoom_lock_per_scene = True
+        gameplay_amount = 1.0
+
+    traj = director.build_trajectory(
+        analysis, [], [], np.zeros(0), 0.1, 0.0, 10.0, 1920, 1080, Cam()
+    )
+    for x, y, w, h in traj.frames:
+        assert x == 0.0
+        assert w == 1920.0
+
+
 def test_median_filter_suppresses_interior_spikes():
     # A single-frame detection glitch must not survive the filter at its own
     # index (edge behavior matches upstream: upper median on even windows).

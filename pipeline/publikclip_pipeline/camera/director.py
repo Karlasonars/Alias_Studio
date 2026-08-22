@@ -58,6 +58,8 @@ class Trajectory:
     frames: list           # per frame [x, y, w, h] in source px (crop rect)
     cuts: list[int]        # frame indices where a hard cut lands
     punches: list[dict]
+    content_w: float = 0.0  # baseline (zoom=1) crop width in source px — for
+    content_h: float = 0.0  # the renderer's letterbox decision (see director._resolve_content_box)
     meta: dict = field(default_factory=dict)
 
 
@@ -209,9 +211,12 @@ def punch_schedule(
     clip_start: float,
     clip_end: float,
     sensitivity: float = 1.0,
+    min_spacing_s: float = 3.0,
+    seconds_per_punch: float = 8.0,
 ) -> list[Punch]:
     """Punch-ins from events (laugh/gasp/scream at their onset) plus vocal
-    energy peaks, min 3 s apart, capped at one per 8 s of clip."""
+    energy peaks, min `min_spacing_s` apart, capped at one per
+    `seconds_per_punch` of clip — the pattern-interrupt frequency knobs."""
     punches: list[Punch] = []
     for event in timeline:
         if event["type"] not in ("laugh", "gasp", "scream"):
@@ -234,35 +239,71 @@ def punch_schedule(
     punches.sort(key=lambda p: p.start)
     spaced: list[Punch] = []
     for p in punches:
-        if not spaced or p.start - spaced[-1].start >= 3.0:
+        if not spaced or p.start - spaced[-1].start >= max(0.0, min_spacing_s):
             spaced.append(p)
-    cap = max(1, int((clip_end - clip_start) / 8))
+    cap = max(1, int((clip_end - clip_start) / max(0.5, seconds_per_punch)))
     return spaced[:cap]
 
 
-def punch_envelope(n_frames: int, fps: int, punches: list[Punch]) -> np.ndarray:
+def punch_envelope(
+    n_frames: int,
+    fps: int,
+    punches: list[Punch],
+    zoom: float = PUNCH_ZOOM,
+    rise_s: float = PUNCH_RISE,
+    hold_s: float = PUNCH_HOLD,
+    fall_s: float = PUNCH_FALL,
+) -> np.ndarray:
     """Multiplicative zoom envelope: smoothstep rise, hold, smoothstep fall
-    (openshorts punch_in.py's tuned asymmetric shape)."""
+    (openshorts punch_in.py's tuned asymmetric shape). `zoom` of 1.0 makes
+    punch-ins a no-op without having to disable them."""
     env = np.ones(n_frames)
     for p in punches:
         f0 = int(p.start * fps)
-        rise_f = max(1, int(PUNCH_RISE * fps))
-        hold_f = int(PUNCH_HOLD * fps)
-        fall_f = max(1, int(PUNCH_FALL * fps))
+        rise_f = max(1, int(rise_s * fps))
+        hold_f = max(0, int(hold_s * fps))
+        fall_f = max(1, int(fall_s * fps))
         for i in range(rise_f + hold_f + fall_f):
             f = f0 + i
             if not 0 <= f < n_frames:
                 continue
             if i < rise_f:
                 t = i / rise_f
-                z = 1 + (PUNCH_ZOOM - 1) * (t * t * (3 - 2 * t))
+                z = 1 + (zoom - 1) * (t * t * (3 - 2 * t))
             elif i < rise_f + hold_f:
-                z = PUNCH_ZOOM
+                z = zoom
             else:
                 t = (i - rise_f - hold_f) / fall_f
-                z = PUNCH_ZOOM - (PUNCH_ZOOM - 1) * (t * t * (3 - 2 * t))
+                z = zoom - (zoom - 1) * (t * t * (3 - 2 * t))
             env[f] = max(env[f], z)
     return env
+
+
+def _resolve_content_box(gameplay_amount: float, src_w: float, src_h: float) -> tuple[float, float]:
+    """Baseline (zoom=1) crop-window size in source px, for one point on the
+    podcast(0.0)-to-gameplay(1.0) framing dial. 0.0 reproduces today's tight
+    9:16 crop exactly (full source height, ~31.6% of a 16:9 source's width —
+    the physical ceiling of a 9:16 crop that fills the canvas with no
+    padding). 1.0 reveals the entire source frame; the renderer letterboxes
+    it (see render.renderer.scale_pad_vf). Linear in source pixels between
+    the two endpoints — simplest thing that is monotonic and hits both
+    endpoints exactly.
+
+    Only ONE axis ever grows: whichever one the tight crop does NOT already
+    fill at 100%. For a 16:9-or-wider source that's width (height is
+    already full-frame at bias=0). For a narrower-than-9:16 (portrait-ish)
+    source the existing pillar-fit branch already fills width at bias=0, so
+    height is the one that grows instead — this keeps the dial a true no-op
+    for sources that already show 100% of one dimension.
+    """
+    bias = max(0.0, min(1.0, float(gameplay_amount)))
+    tight_h = float(src_h)
+    tight_w = tight_h * 9.0 / 16.0
+    if tight_w > src_w:  # narrower-than-9:16 source: pillar-fit width instead
+        tight_w = float(src_w)
+        tight_h = tight_w * 16.0 / 9.0
+        return tight_w, tight_h + bias * (src_h - tight_h)
+    return tight_w + bias * (src_w - tight_w), tight_h
 
 
 def build_trajectory(
@@ -299,34 +340,64 @@ def build_trajectory(
     for ci, f in enumerate(all_cuts):
         scene_ids[f:] = ci + 1
 
+    settings = getattr(camera, "camera", camera)
+
+    # Deadzone: hold the previous target while the new one is within
+    # deadzone_frac of frame width. Stops the crop chasing sub-pixel jitter
+    # (and is why the value is expressed as a fraction of width, not pixels).
+    deadzone = float(getattr(settings, "deadzone_frac", 0.05) or 0.0)
+    if deadzone > 0:
+        held: list[tuple[float, float]] = []
+        anchor = filled[0]
+        for i, t in enumerate(filled[:n]):
+            # A cut is a new shot — always re-anchor, never hold across it.
+            if i in set(all_cuts) or abs(t[0] - anchor[0]) > deadzone:
+                anchor = t
+            held.append(anchor)
+        filled = held
+
     raw = [(t[0] * src_w, t[1] * src_h, 1.0) for t in filled[:n]]
-    window = max(5, int(SAVGOL_WINDOW_SEC * fps)) | 1
+    # In pan/locked mode the eased-pan length IS the smoothing window: a
+    # longer pan_duration_s glides more slowly between speakers. Cut mode
+    # keeps the tight default, since it jumps rather than glides.
+    window_sec = SAVGOL_WINDOW_SEC
+    if not cut_mode:
+        window_sec = max(0.1, float(getattr(settings, "pan_duration_s", 0.6) or 0.6))
+    window = max(5, int(window_sec * fps)) | 1
     smoothed = build_smoothed_trajectory(
         raw, list(scene_ids), window, SAVGOL_POLY,
         float(src_w), float(src_h),
         min_zoom=1.0, max_zoom=1.6,
         method="savgol",
         stationary_threshold=0.15,   # AutoFlip tripod lock on near-static scenes
-        lock_zoom=getattr(getattr(camera, "camera", camera), "zoom_lock_per_scene", True),
+        lock_zoom=getattr(settings, "zoom_lock_per_scene", True),
     )
 
-    settings = getattr(camera, "camera", camera)
+    # Retention knobs live on settings.retention (the whole Settings object),
+    # not on CameraSettings — fall back to the module defaults when the
+    # caller passed a bare camera object (tests, per-clip overrides).
+    ret = getattr(camera, "retention", None)
     punches = (
         punch_schedule(
             timeline, energy_dynamics, dynamics_grid, clip_start, clip_end,
             sensitivity=getattr(settings, "punch_in_sensitivity", 1.0),
+            min_spacing_s=float(getattr(ret, "punch_min_spacing_s", 3.0)),
+            seconds_per_punch=float(getattr(ret, "punch_seconds_per_punch", 8.0)),
         )
         if getattr(settings, "punch_in", True)
         else []
     )
-    env = punch_envelope(n, fps, punches)
+    env = punch_envelope(
+        n, fps, punches,
+        zoom=float(getattr(ret, "punch_zoom", PUNCH_ZOOM)),
+        rise_s=float(getattr(ret, "punch_rise_s", PUNCH_RISE)),
+        hold_s=float(getattr(ret, "punch_hold_s", PUNCH_HOLD)),
+        fall_s=float(getattr(ret, "punch_fall_s", PUNCH_FALL)),
+    )
 
-    # Crop geometry: full-height 9:16 window, zoom tightens it.
-    base_h = float(src_h)
-    base_w = base_h * 9.0 / 16.0
-    if base_w > src_w:  # narrower-than-9:16 source: pillar-fit width instead
-        base_w = float(src_w)
-        base_h = base_w * 16.0 / 9.0
+    # Crop geometry: full-height 9:16 window (or wider, per the framing
+    # dial), zoom tightens it.
+    base_w, base_h = _resolve_content_box(getattr(settings, "gameplay_amount", 0.0), src_w, src_h)
     frames = []
     for f in range(n):
         cx, cy, zoom = smoothed[f] if smoothed[f] is not None else (src_w / 2, src_h / 2, 1.0)
@@ -342,6 +413,8 @@ def build_trajectory(
         frames=frames,
         cuts=all_cuts,
         punches=[{"start": round(p.start, 3), "end": round(p.end, 3), "trigger": p.trigger} for p in punches],
+        content_w=base_w,
+        content_h=base_h,
         meta={
             "tracks": len(analysis.tracks),
             "speakers_canonical": {str(k): [round(v[0], 3), round(v[1], 3)] for k, v in canon.items()},
