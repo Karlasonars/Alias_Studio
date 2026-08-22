@@ -53,6 +53,15 @@ def _has_subtitles_filter(binary: str) -> bool:
     return " subtitles " in proc.stdout
 
 
+def _prepend_to_path(directory: str) -> None:
+    """So third-party libraries that shell out to a bare `ffmpeg`/`ffprobe`
+    (whisperx, notably) find the same binary we resolved, even when it's
+    our downloaded static build rather than anything on the system PATH."""
+    current = os.environ.get("PATH", "")
+    if directory and directory not in current.split(os.pathsep):
+        os.environ["PATH"] = directory + os.pathsep + current
+
+
 @lru_cache(maxsize=1)
 def resolve() -> tuple[str, bool]:
     """(ffmpeg_path, has_subtitles)."""
@@ -76,7 +85,10 @@ def resolve() -> tuple[str, bool]:
             continue
         fallback = fallback or cand
         if _has_subtitles_filter(cand):
+            _prepend_to_path(str(Path(cand).parent))
             return cand, True
+    if fallback:
+        _prepend_to_path(str(Path(fallback).parent))
     return (fallback or "ffmpeg"), False
 
 
@@ -118,7 +130,7 @@ def _ensure_capable_macos(progress) -> bool:
         if dest.exists() and (_has_subtitles_filter(str(dest)) if tool == "ffmpeg" else True):
             continue
         if progress:
-            progress(-1, f"Downloading {tool} (one-time, caption support)…")
+            progress(-1, f"Downloading {tool} (one-time)…")
         zpath = dest.with_suffix(".zip")
         try:
             if not _download(_STATIC_BASE.format(arch=arch, tool=tool), zpath):
@@ -147,7 +159,7 @@ def _ensure_capable_windows(progress) -> bool:
     ):
         return True
     if progress:
-        progress(-1, "Downloading ffmpeg (one-time, caption support)…")
+        progress(-1, "Downloading ffmpeg (one-time)…")
     zpath = config.bin_dir() / "ffmpeg-static.zip"
     try:
         if not _download(_STATIC_WINDOWS, zpath):

@@ -29,7 +29,14 @@ PANNS_CNN14_MAX = register(
             "https://zenodo.org/record/3987831/files/"
             "Cnn14_DecisionLevelMax_mAP%3D0.385.pth?download=1"
         ),
-        approx_mb=466,
+        # Zenodo's CDN has been observed serving a different, unparseable
+        # blob under this same URL on some requests (content-length varied
+        # 327428481 vs 513950654 bytes across otherwise-identical fetches).
+        # Pinned against the file's own oc-checksum response header so a
+        # bad edge response gets rejected and retried instead of silently
+        # accepted.
+        sha256="dd3b4043a87d4ec13df8082c0fcfee3fb5084151808e47e060987a95eabdd142",
+        approx_mb=312,
     )
 )
 

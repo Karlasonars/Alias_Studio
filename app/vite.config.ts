@@ -7,7 +7,12 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 1430,
-    strictPort: true
+    strictPort: true,
+    watch: {
+      // cargo writes into src-tauri/target mid-build; Vite's watcher racing
+      // those file locks crashes the dev server on Windows (EBUSY).
+      ignored: ['**/src-tauri/**']
+    }
   },
   build: {
     target: 'es2022'

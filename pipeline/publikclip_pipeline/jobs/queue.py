@@ -137,7 +137,7 @@ def set_job_status(job_id: str, status: str, error: str | None = None, title: st
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(path)
 
 
@@ -171,8 +171,8 @@ def read_checkpoint(job: Job, stage: str, schema_version: int) -> dict | None:
     if not path.exists():
         return None
     try:
-        envelope = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if envelope.get("schema_version") != schema_version:
         return None
@@ -227,6 +227,35 @@ class StageContext:
         self.progress(stage, fraction, message)
 
 
+def fingerprint_ok(stored: Any, current: Any, factory: Any) -> bool:
+    """Compare a stage's persisted settings fingerprint against the current one.
+
+    The naive comparison (`stored == current`) is wrong the moment a new
+    setting is added: every checkpoint written before it exists lacks the
+    key, mismatches, and throws away work that is still perfectly valid —
+    an hour of transcription discarded because someone added an unrelated
+    toggle.
+
+    So a key missing from `stored` is compared against the FACTORY default
+    instead. If the user never touched that setting, the old checkpoint is
+    genuinely still correct and survives; if they did change it, the
+    checkpoint really is stale and re-runs. Keys present on both sides are
+    compared directly, nested dicts recursively.
+    """
+    if not isinstance(current, dict):
+        return stored == current
+    if not isinstance(stored, dict):
+        return False
+    for key, value in current.items():
+        fac = factory.get(key) if isinstance(factory, dict) else None
+        if key in stored:
+            if not fingerprint_ok(stored[key], value, fac):
+                return False
+        elif value != fac:
+            return False
+    return True
+
+
 class Stage:
     """Subclass contract: set `name` + `schema_version`, implement run().
 
@@ -246,17 +275,29 @@ class Stage:
 
 
 def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[str, dict]:
-    """Run stages in order, skipping fresh checkpoints. Returns stage→data."""
+    """Run stages in order, skipping fresh checkpoints. Returns stage→data.
+
+    The pipeline is a linear chain — every stage consumes the outputs of the
+    ones before it — so a stage that re-runs invalidates everything after it,
+    regardless of what those stages' own checkpoints say. Without this
+    cascade a settings change can recompute an upstream stage while a
+    downstream stage happily serves output derived from the OLD upstream
+    data (e.g. new candidate windows but stale scores, or a re-directed
+    camera whose trajectories never reach a cached render). That silent
+    mismatch is what makes a setting look like it "does nothing".
+    """
     settings = config.Settings.from_json(json.loads(job.settings_json))
     ctx = StageContext(job=job, settings=settings, progress=progress)
     results: dict[str, dict] = {}
+    upstream_stale = False
     set_job_status(job.id, "running")
     for stage in stages:
         cached = read_checkpoint(job, stage.name, stage.schema_version)
-        if cached is not None and stage.artifacts_ok(ctx, cached):
+        if cached is not None and not upstream_stale and stage.artifacts_ok(ctx, cached):
             results[stage.name] = cached
             progress(stage.name, 1.0, "cached")
             continue
+        upstream_stale = True  # this stage re-runs → everything after it is stale
         mark_stage(job.id, stage.name, "running", stage.schema_version)
         progress(stage.name, -1.0, "starting")
         try:

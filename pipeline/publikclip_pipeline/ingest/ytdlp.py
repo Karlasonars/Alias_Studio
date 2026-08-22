@@ -18,7 +18,6 @@ import json
 import os
 import platform
 import re
-import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -28,6 +27,7 @@ from typing import Callable
 import httpx
 
 from .. import config
+from ..render import ffmpeg_bin
 
 ProgressFn = Callable[[float, str], None]  # (fraction 0..1 or -1, message)
 
@@ -243,7 +243,12 @@ _PCT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 
 def download(url: str, out_path: Path, progress: ProgressFn) -> None:
     bin_path = ensure_ytdlp(progress)
-    ffmpeg = shutil.which("ffmpeg")
+    # Merging separate video/audio streams (the common case above 720p)
+    # needs a real ffmpeg binary. PATH alone isn't reliable on end-user
+    # machines, so fetch the same static build the render stage uses if
+    # nothing capable exists yet.
+    ffmpeg_bin.ensure_capable(progress=progress)
+    ffmpeg = ffmpeg_bin.ffmpeg()
     args = [
         "-f", DOWNLOAD_FORMAT,
         "--merge-output-format", "mp4",

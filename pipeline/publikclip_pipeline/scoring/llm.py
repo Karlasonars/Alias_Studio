@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,20 @@ LLM_TIMEOUT = 120.0
 
 
 class LlmError(Exception):
-    """User-actionable LLM failure (bad key, daemon down, model missing)."""
+    """User-actionable LLM failure (bad key, daemon down, model missing).
+
+    `fatal` distinguishes "every remaining candidate will fail the same
+    way" (bad key, no daemon, no quota left — abort the whole stage) from
+    "this one call didn't pan out even after retries" (a transient outage
+    on one candidate — skip it and keep scoring the rest, same as any other
+    exception the scoring loop already tolerates). Defaults to True: an
+    LlmError site that doesn't say otherwise keeps the prior fail-fast
+    behavior.
+    """
+
+    def __init__(self, message: str, *, fatal: bool = True):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 def gemini_api_key() -> str | None:
@@ -62,6 +76,21 @@ def _cache_key(backend: str, model: str, prompt: str, schema: dict, images: list
     for img in images:
         h.update(hashlib.sha256(img).digest())
     return h.hexdigest()[:32]
+
+
+def _retry_delay_seconds(error_body: dict) -> float | None:
+    """Google's 429 responses attach a RetryInfo detail with an honest
+    retryDelay (e.g. "40.17s") whenever waiting and retrying can succeed —
+    the per-minute free-tier throttle. A genuine no-quota-left stop omits
+    it. Returns None when there's nothing worth retrying for."""
+    for d in error_body.get("details") or []:
+        raw = d.get("retryDelay")
+        if isinstance(raw, str) and raw.endswith("s"):
+            try:
+                return float(raw[:-1])
+            except ValueError:
+                continue
+    return None
 
 
 def _strip_fences(text: str) -> str:
@@ -110,7 +139,8 @@ class GeminiClient:
             },
         }
         last_err: Exception | None = None
-        for attempt in range(3):
+        attempts = 5
+        for attempt in range(attempts):
             try:
                 res = httpx.post(
                     GEMINI_URL.format(model=self.model),
@@ -121,19 +151,26 @@ class GeminiClient:
                 if res.status_code in (401, 403):
                     raise LlmError("Gemini rejected the API key. Check it in Settings.")
                 if res.status_code == 429:
-                    import time
-
-                    # Surface the API's own words — a quota backoff and a
-                    # "credits depleted" billing stop look identical as bare
-                    # 429s but need opposite user actions.
+                    # Both a per-minute free-tier throttle and a genuine
+                    # "no credits left" stop come back as a bare 429 whose
+                    # message text always mentions "plan and billing
+                    # details" as boilerplate — keying off that wording
+                    # (the original approach) false-positives on the RPM
+                    # case, which is the common one and clears in seconds.
+                    # Google's structured error instead includes a
+                    # RetryInfo detail with an honest retryDelay whenever
+                    # retrying can actually help; trust that over wording.
                     try:
-                        detail = res.json()["error"]["message"]
+                        error_body = res.json()["error"]
+                        detail = error_body["message"]
                     except Exception:  # noqa: BLE001
-                        detail = "rate limited"
+                        error_body, detail = {}, "rate limited"
                     last_err = LlmError(f"Gemini 429: {detail}")
-                    if "credit" in detail.lower() or "billing" in detail.lower():
+                    retry_delay = _retry_delay_seconds(error_body)
+                    if retry_delay is None:
                         raise last_err
-                    time.sleep(4 * (attempt + 1))
+                    if attempt < attempts - 1:
+                        time.sleep(min(retry_delay, 60.0))
                     continue
                 res.raise_for_status()
                 payload = res.json()
@@ -145,7 +182,16 @@ class GeminiClient:
                 raise
             except (httpx.HTTPError, KeyError, json.JSONDecodeError, IndexError) as err:
                 last_err = err
-        raise LlmError(f"Gemini call failed after retries: {last_err}")
+                # 5xx / timeouts / connection blips are transient — the
+                # first pass through this code retried instantly 3x with no
+                # delay, which is barely different from 1 attempt against a
+                # server that's still overloaded milliseconds later. This is
+                # deep enough into the pipeline (post-ingest/asr/diarize/
+                # events/candidates) that losing the whole job to a brief
+                # 503 is a much worse outcome than waiting under a minute.
+                if attempt < attempts - 1:
+                    time.sleep(min(30, 2 ** attempt))
+        raise LlmError(f"Gemini call failed after {attempts} attempts: {last_err}", fatal=False)
 
 
 class OllamaClient:
@@ -185,7 +231,7 @@ class OllamaClient:
             res.raise_for_status()
             data = json.loads(_strip_fences(res.json()["message"]["content"]))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as err:
-            raise LlmError(f"Ollama call failed: {err}") from err
+            raise LlmError(f"Ollama call failed: {err}", fatal=False) from err
         cache_file.write_text(json.dumps(data))
         return data
 
