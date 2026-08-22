@@ -11,8 +11,10 @@ import argparse
 import json
 import sys
 
-from . import config
+from . import config, winpatches
 from .jobs import queue
+
+winpatches.apply_all()
 
 
 def _stages() -> list[queue.Stage]:
@@ -66,13 +68,17 @@ def _emit_result(jsonl: bool, payload: dict) -> None:
 def cmd_run(args: argparse.Namespace) -> int:
     source = args.source
     source_type = "url" if source.startswith(("http://", "https://")) else "file"
-    settings = config.Settings()
+    # New jobs start from the user's saved global settings; CLI flags below
+    # override just those fields. Existing jobs keep their own snapshot.
+    settings = config.load_defaults()
     if args.llm:
         settings.llm_mode = args.llm
     if args.captions:
         settings.caption_preset = args.captions
     if args.camera:
         settings.camera.speaker_change = args.camera
+    if args.gameplay_amount is not None:  # 0.0 is a legitimate value, not falsy-skippable
+        settings.camera.gameplay_amount = args.gameplay_amount
     job = queue.create_job(source_type, source, json.dumps(settings.to_json()))
     return _execute(job, args.jsonl)
 
@@ -82,7 +88,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if job is None:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
-    if args.llm or args.captions or args.camera:
+    if args.llm or args.captions or args.camera or args.gameplay_amount is not None:
         settings = config.Settings.from_json(json.loads(job.settings_json))
         if args.llm:
             settings.llm_mode = args.llm
@@ -90,6 +96,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
             settings.caption_preset = args.captions
         if args.camera:
             settings.camera.speaker_change = args.camera
+        if args.gameplay_amount is not None:
+            settings.camera.gameplay_amount = args.gameplay_amount
         new_json = json.dumps(settings.to_json())
         with queue._connect() as conn:  # noqa: SLF001 — CLI is a queue friend
             conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (new_json, job.id))
@@ -103,6 +111,13 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
         print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir)}), flush=True)
     else:
         print(f"job {job.id} → {job.dir}", file=sys.stderr)
+    # Resolve (and fetch if missing) ffmpeg once, up front — several stages
+    # (ingest merging, ASR decoding, rendering) need it and some, like
+    # whisperx's ASR step, shell out to a bare `ffmpeg` on PATH rather than
+    # asking us for the path, so it must be in place before any stage runs.
+    from .render import ffmpeg_bin
+
+    ffmpeg_bin.ensure_capable(progress=lambda f, m: emit("setup", f, m))
     try:
         results = queue.run_stages(job, _stages(), emit)
     except queue.StageError as err:
@@ -125,6 +140,76 @@ def cmd_jobs(args: argparse.Namespace) -> int:
         done = sum(1 for s in stages.values() if s == "done")
         print(f"{job.id}  {job.status:<8} {done} stage(s) done  {job.title or job.source}")
     return 0
+
+
+def cmd_settings(args: argparse.Namespace) -> int:
+    """Settings panel backend. All output is one JSON blob on stdout.
+
+    The panel edits GLOBAL defaults (what new jobs start from) and caption
+    presets. Existing jobs keep their own snapshot on purpose — editing a
+    default must never silently rescore or reframe finished work.
+    """
+    from . import settings_schema
+    from .captions import ass as ass_mod
+
+    def payload() -> dict:
+        defaults = config.load_defaults()
+        saved = config.load_caption_presets()
+        return {
+            "ok": True,
+            "defaults": defaults.to_json(),
+            "factory": config.Settings().to_json(),
+            "schema": settings_schema.schema_payload(),
+            "presets": {
+                name: ass_mod.preset_to_ui(ass_mod.resolve_preset(name))
+                for name in ass_mod.preset_names()
+            },
+            "preset_names": ass_mod.preset_names(),
+            "edited_presets": sorted(saved),
+        }
+
+    if args.settings_cmd == "get":
+        print(json.dumps(payload()))
+        return 0
+
+    if args.settings_cmd == "set":
+        try:
+            incoming = json.loads(args.json)
+        except json.JSONDecodeError as err:
+            print(json.dumps({"ok": False, "error": f"bad settings JSON: {err}"}))
+            return 2
+        # Round-trip through Settings so unknown/garbage keys are dropped and
+        # every missing field lands on its default rather than being lost.
+        config.save_defaults(config.Settings.from_json(incoming))
+        print(json.dumps(payload()))
+        return 0
+
+    if args.settings_cmd == "reset":
+        config.save_defaults(config.Settings())
+        print(json.dumps(payload()))
+        return 0
+
+    if args.settings_cmd == "preset-save":
+        try:
+            patch = json.loads(args.json)
+        except json.JSONDecodeError as err:
+            print(json.dumps({"ok": False, "error": f"bad preset JSON: {err}"}))
+            return 2
+        saved = config.load_caption_presets()
+        saved[args.name] = ass_mod.preset_from_ui(args.name, patch)
+        config.save_caption_presets(saved)
+        print(json.dumps(payload()))
+        return 0
+
+    if args.settings_cmd == "preset-reset":
+        saved = config.load_caption_presets()
+        saved.pop(args.name, None)
+        config.save_caption_presets(saved)
+        print(json.dumps(payload()))
+        return 0
+
+    print(json.dumps({"ok": False, "error": f"unknown settings command {args.settings_cmd}"}))
+    return 2
 
 
 def cmd_edit(args: argparse.Namespace) -> int:
@@ -170,6 +255,96 @@ def cmd_edit(args: argparse.Namespace) -> int:
         edits[str(args.clip)] = current
         store.save(job_dir, edits)
         print(json.dumps({"ok": True, "edit": current.to_json()}))
+        return 0
+
+    if args.edit_cmd in ("titles", "description", "hook"):
+        from .copywriting import descriptions as desc_mod
+        from .copywriting import hooks as hooks_mod
+        from .copywriting import titles as titles_mod
+        from .scoring import llm as llm_mod
+
+        score = json.loads((job_dir / "score.json").read_text())["data"]
+        clip = score["clips"][args.clip]
+        edit = store.edit_for_clip(job_dir, args.clip, clip)
+        settings = config.Settings.from_json(json.loads(job.settings_json))
+        diarize = json.loads((job_dir / "diarize.json").read_text())["data"]
+        try:
+            client = llm_mod.make_client(settings.llm_mode)
+        except llm_mod.LlmError as err:
+            print(json.dumps({"ok": False, "error": str(err)}))
+            return 1
+
+        if args.edit_cmd == "titles":
+            words = [
+                w["word"]
+                for seg in diarize["segments"]
+                for w in seg.get("words", [])
+                if edit.start <= w["start"] < edit.end
+            ]
+            opts = titles_mod.TitleOptions(**settings.titles.__dict__)
+            try:
+                out = titles_mod.generate(
+                    client, " ".join(words), clip.get("summary", ""), opts
+                )
+            except Exception as err:  # noqa: BLE001 — surface, don't crash the app
+                print(json.dumps({"ok": False, "error": str(err)}))
+                return 1
+            # Keep the variants on the clip so they survive a restart and can
+            # be compared later without paying to regenerate them.
+            edits = store.load(job_dir)
+            current = edits.get(str(args.clip), edit)
+            current.title_variants = out["titles"]
+            edits[str(args.clip)] = current
+            store.save(job_dir, edits)
+            print(json.dumps({"ok": True, **out, "edit": current.to_json()}))
+            return 0
+
+        if args.edit_cmd == "description":
+            words = [
+                w["word"]
+                for seg in diarize["segments"]
+                for w in seg.get("words", [])
+                if edit.start <= w["start"] < edit.end
+            ]
+            opts = desc_mod.DescriptionOptions(**settings.descriptions.__dict__)
+            try:
+                out = desc_mod.generate(
+                    client, " ".join(words), clip.get("summary", ""), opts,
+                    # The title is passed so the description complements it
+                    # instead of restating it.
+                    {"title": edit.title},
+                )
+            except Exception as err:  # noqa: BLE001 — surface, don't crash the app
+                print(json.dumps({"ok": False, "error": str(err)}))
+                return 1
+            edits = store.load(job_dir)
+            current = edits.get(str(args.clip), edit)
+            current.description = out["full"]
+            current.description_meta = {
+                k: out[k] for k in ("description", "hashtags", "warnings", "chars", "grounded_in")
+            }
+            edits[str(args.clip)] = current
+            store.save(job_dir, edits)
+            print(json.dumps({"ok": True, **out, "edit": current.to_json()}))
+            return 0
+
+        # hook: rank alternative openings for this clip
+        words = [
+            {"word": w["word"], "start": w["start"], "end": w["end"]}
+            for seg in diarize["segments"]
+            for w in seg.get("words", [])
+        ]
+        sentence_starts = [float(s["start"]) for s in diarize["segments"]]
+        opts = hooks_mod.HookOptions(**settings.hooks.__dict__)
+        try:
+            out = hooks_mod.analyze(
+                client, sentence_starts, words, edit.start, edit.end, opts,
+                summary=clip.get("summary", ""),
+            )
+        except Exception as err:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": str(err)}))
+            return 1
+        print(json.dumps({"ok": True, **out}))
         return 0
 
     if args.edit_cmd == "render-clip":
@@ -287,6 +462,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--llm", choices=["gemini", "ollama"], default=None)
     p_run.add_argument("--captions", default=None, help="caption preset name")
     p_run.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
+    p_run.add_argument(
+        "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
+        help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
+    )
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -294,10 +473,27 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.add_argument("--llm", choices=["gemini", "ollama"], default=None)
     p_resume.add_argument("--captions", default=None, help="caption preset name")
     p_resume.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
+    p_resume.add_argument(
+        "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
+        help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
+    )
     p_resume.set_defaults(fn=cmd_resume)
 
     p_jobs = sub.add_parser("jobs", help="list jobs")
     p_jobs.set_defaults(fn=cmd_jobs)
+
+    p_set = sub.add_parser("settings", help="read/write global settings + caption presets")
+    set_sub = p_set.add_subparsers(dest="settings_cmd", required=True)
+    set_sub.add_parser("get")
+    p_set_set = set_sub.add_parser("set")
+    p_set_set.add_argument("json", help="full settings tree as JSON")
+    set_sub.add_parser("reset")
+    p_preset = set_sub.add_parser("preset-save")
+    p_preset.add_argument("name")
+    p_preset.add_argument("json", help="partial preset patch as JSON (hex colours)")
+    p_preset_reset = set_sub.add_parser("preset-reset")
+    p_preset_reset.add_argument("name")
+    p_set.set_defaults(fn=cmd_settings)
 
     p_edit = sub.add_parser("edit", help="per-clip editing (context / visuals / render)")
     edit_sub = p_edit.add_subparsers(dest="edit_cmd", required=True)
@@ -308,6 +504,15 @@ def main(argv: list[str] | None = None) -> int:
     p_sv.add_argument("job_id")
     p_sv.add_argument("clip", type=int)
     p_sv.add_argument("--prefer", choices=["pexels", "gemini"], default="pexels")
+    p_titles = edit_sub.add_parser("titles", help="generate title options for one clip")
+    p_titles.add_argument("job_id")
+    p_titles.add_argument("clip", type=int)
+    p_desc = edit_sub.add_parser("description", help="generate the post description for one clip")
+    p_desc.add_argument("job_id")
+    p_desc.add_argument("clip", type=int)
+    p_hook = edit_sub.add_parser("hook", help="rank alternative openings for one clip")
+    p_hook.add_argument("job_id")
+    p_hook.add_argument("clip", type=int)
     p_rcl = edit_sub.add_parser("render-clip")
     p_rcl.add_argument("job_id")
     p_rcl.add_argument("clip", type=int)

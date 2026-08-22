@@ -66,6 +66,27 @@ class ScoreStage(Stage):
     name = "score"
     schema_version = 1
 
+    @staticmethod
+    def _settings_used(ctx: StageContext) -> dict:
+        return {
+            "llm_mode": ctx.settings.llm_mode,
+            "select_count": ctx.settings.clips.select_count,
+            "min_words": ctx.settings.clips.min_words,
+            "scoring": {
+                "t0_weight": ctx.settings.scoring.t0_weight,
+                "text_weight": ctx.settings.scoring.text_weight,
+                "visual_weight": ctx.settings.scoring.visual_weight,
+                "platform_weights": ctx.settings.scoring.platform_weights,
+            },
+        }
+
+    def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
+        # Weights and the word gate change which clips win and what they
+        # score — a change here must rescore rather than serve old numbers.
+        # (LLM calls themselves are disk-cached, so a rescore is cheap when
+        # only the weights moved.)
+        return data.get("settings_used") == self._settings_used(ctx)
+
     def run(self, ctx: StageContext) -> dict:
         prior = ctx.prior or {}
         ingest = prior.get("ingest")
@@ -109,7 +130,7 @@ class ScoreStage(Stage):
             start, end = cand["start"], cand["end"]
             ctx.emit(i / max(1, len(candidates)) * 0.6, f"Scoring moment {i + 1}/{len(candidates)}…")
             labeled, flat = _transcript_slice(segments, start, end)
-            if len(flat.split()) < 20:
+            if len(flat.split()) < ctx.settings.clips.min_words:
                 continue
             window_events = _events_in(timeline, start, end)
             near_laughs = [e for e in _events_in(timeline, start, end, pad=3.0) if e["type"] == "laugh"]
@@ -119,8 +140,11 @@ class ScoreStage(Stage):
             }
             try:
                 t1 = client.generate_json(rubric.t1_prompt(labeled, context), rubric.T1_SCHEMA)
-            except llm_mod.LlmError:
-                raise
+            except llm_mod.LlmError as err:
+                if err.fatal:
+                    raise
+                ctx.emit(-1, f"moment {i + 1} scoring failed, skipping: {err}")
+                continue
             except Exception as err:  # noqa: BLE001
                 ctx.emit(-1, f"moment {i + 1} scoring failed, skipping: {err}")
                 continue
@@ -159,12 +183,12 @@ class ScoreStage(Stage):
         def _text_rank(entry: dict) -> float:
             scores, _ = rubric.composite(
                 entry["subscores"], entry["curve_score"], entry["heatmap_pct"], None,
-                constants=cv_constants,
+                constants=cv_constants, scoring=ctx.settings.scoring,
             )
             return max(scores.values())
 
         scored.sort(key=_text_rank, reverse=True)
-        finalists = scored[:SELECT_COUNT]
+        finalists = scored[: ctx.settings.clips.select_count]
 
         # T2 visual pass + music brief on finalists only.
         supports_vision = client.backend == "gemini"
@@ -190,7 +214,7 @@ class ScoreStage(Stage):
 
             platform_scores, comp_adjustments = rubric.composite(
                 entry["subscores"], entry["curve_score"], entry["heatmap_pct"], visual,
-                constants=cv_constants,
+                constants=cv_constants, scoring=ctx.settings.scoring,
             )
             entry["adjustments"].extend(comp_adjustments)
             entry["platform_scores"] = platform_scores
@@ -234,4 +258,5 @@ class ScoreStage(Stage):
             "t2_ran": supports_vision,
             "scoring_config_version": scoring_config["version"],
             "scoring_constants": cv_constants,
+            "settings_used": self._settings_used(ctx),
         }

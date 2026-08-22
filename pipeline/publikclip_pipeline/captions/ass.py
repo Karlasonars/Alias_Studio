@@ -24,6 +24,7 @@ THEBOLDFONT has unresolved licensing, so it was deliberately not vendored.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +75,11 @@ class Preset:
     margin_v: int       # from bottom, in PlayRes units
     pop: bool           # chunk entrance pop
     event_tag_color: str
+    # Pacing of the caption line itself: how many words share one on-screen
+    # caption, and the pause that forces an early break. Defaulted so every
+    # built-in preset below keeps its original behavior.
+    max_words: int = CHUNK_MAX_WORDS
+    pause_break: float = CHUNK_PAUSE_BREAK
 
 
 PRESETS: dict[str, Preset] = {
@@ -123,6 +129,103 @@ PRESETS: dict[str, Preset] = {
 }
 
 
+_COLOR_FIELDS = ("primary", "active", "emphasis", "outline_color", "event_tag_color")
+
+
+def ass_to_hex(value: str) -> str:
+    """&HAABBGGRR → #RRGGBB. ASS stores colours byte-reversed with alpha
+    first, which no colour picker understands — the settings UI works in
+    plain hex and converts at this boundary."""
+    raw = str(value).strip().lstrip("&").lstrip("Hh").zfill(8)[-8:]
+    bb, gg, rr = raw[2:4], raw[4:6], raw[6:8]
+    return f"#{rr}{gg}{bb}".upper()
+
+
+def hex_to_ass(value: str, keep_alpha_from: str | None = None) -> str:
+    """#RRGGBB → &HAABBGGRR, preserving the alpha byte of the value being
+    replaced (presets use it for semi-transparent outlines)."""
+    raw = str(value).strip().lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(c * 2 for c in raw)
+    raw = raw.zfill(6)[-6:]
+    rr, gg, bb = raw[0:2], raw[2:4], raw[4:6]
+    alpha = "00"
+    if keep_alpha_from:
+        alpha = str(keep_alpha_from).strip().lstrip("&").lstrip("Hh").zfill(8)[-8:][0:2]
+    return f"&H{alpha}{bb}{gg}{rr}".upper()
+
+
+def preset_to_ui(preset: "Preset") -> dict:
+    """Preset as the settings panel wants it: colours in hex, no font_file
+    (it is derived from the font choice, not user-editable)."""
+    out = {k: v for k, v in preset.__dict__.items() if k != "font_file"}
+    for key in _COLOR_FIELDS:
+        if key in out:
+            out[key] = ass_to_hex(out[key])
+    return out
+
+
+def preset_from_ui(name: str, patch: dict) -> dict:
+    """Inverse of preset_to_ui: hex colours back to ASS, and the font_file
+    kept in sync with the font so a style switch actually loads the face."""
+    base = PRESETS.get(name) or PRESETS["classic"]
+    out: dict = {}
+    for key, value in (patch or {}).items():
+        if key in _COLOR_FIELDS:
+            out[key] = hex_to_ass(value, getattr(base, key, None))
+        elif key not in ("name", "font_file"):
+            out[key] = value
+    font = out.get("font")
+    if font:
+        for candidate in PRESETS.values():
+            if candidate.font == font:
+                out["font_file"] = candidate.font_file
+                break
+    return out
+
+
+def preset_names() -> list[str]:
+    """Built-ins plus any user-defined presets, for the settings UI."""
+    from .. import config
+
+    return sorted(set(PRESETS) | set(config.load_caption_presets()))
+
+
+def resolve_preset(name: str, overrides: dict | None = None) -> Preset:
+    """Built-in defaults → the user's saved edits (caption_presets.json) →
+    this job's own overrides. Every layer is a partial patch, so a user who
+    only changed the font size keeps every other field of the built-in, and
+    a fully custom preset can be defined by patching a built-in it resembles.
+
+    Unknown keys and wrong-typed values are ignored rather than raising: a
+    hand-edited presets file must never break a render.
+    """
+    from .. import config
+
+    base = PRESETS.get(name) or PRESETS["classic"]
+    patch: dict = {}
+    saved = config.load_caption_presets().get(name)
+    if isinstance(saved, dict):
+        patch.update(saved)
+    if overrides:
+        patch.update(overrides)
+    if not patch:
+        return base
+
+    valid = {f.name for f in dataclasses.fields(Preset)}
+    merged = {f: getattr(base, f) for f in valid}
+    for key, value in patch.items():
+        if key not in valid or key == "name":
+            continue
+        want = type(merged[key])
+        try:
+            merged[key] = bool(value) if want is bool else want(value)
+        except (TypeError, ValueError):
+            continue  # keep the built-in value for anything unusable
+    merged["name"] = name
+    return Preset(**merged)
+
+
 @dataclass
 class Word:
     text: str
@@ -144,17 +247,24 @@ class Chunk:
         return self.words[-1].end
 
 
-def chunk_words(words: list[Word]) -> list[Chunk]:
-    """Punctuation OR pause > 0.6 s OR budget (ViralMint rule)."""
+def chunk_words(
+    words: list[Word],
+    max_words: int = CHUNK_MAX_WORDS,
+    pause_break: float = CHUNK_PAUSE_BREAK,
+) -> list[Chunk]:
+    """Punctuation OR pause > pause_break OR budget (ViralMint rule).
+
+    max_words is how many words may share one on-screen caption — the main
+    pacing knob for how fast the subtitle line turns over."""
     chunks: list[Chunk] = []
     current = Chunk()
     for i, word in enumerate(words):
         current.words.append(word)
         nxt = words[i + 1] if i + 1 < len(words) else None
         should_break = (
-            len(current.words) >= CHUNK_MAX_WORDS
+            len(current.words) >= max(1, int(max_words))
             or _PUNCT_BREAK.search(word.text) is not None
-            or (nxt is not None and nxt.start - word.end > CHUNK_PAUSE_BREAK)
+            or (nxt is not None and nxt.start - word.end > pause_break)
         )
         if should_break:
             chunks.append(current)
@@ -238,13 +348,17 @@ def build_ass(
     events: list[dict],
     preset_name: str = "classic",
     emoji_ok: bool = False,
+    overrides: dict | None = None,
 ) -> str:
     """The full ASS document for one clip. `events` carry clip-relative
-    start/end + type; only bus-detected non-speech events become tags."""
-    preset = PRESETS.get(preset_name, PRESETS["classic"])
+    start/end + type; only bus-detected non-speech events become tags.
+
+    `overrides` patches the resolved preset for this render only (the app's
+    per-job caption tweaks), on top of any saved edits to the preset."""
+    preset = resolve_preset(preset_name, overrides)
     lines = [_header(preset)]
 
-    for chunk in chunk_words(words):
+    for chunk in chunk_words(words, preset.max_words, preset.pause_break):
         for i, word in enumerate(chunk.words):
             start = word.start
             end = chunk.words[i + 1].start if i + 1 < len(chunk.words) else chunk.end

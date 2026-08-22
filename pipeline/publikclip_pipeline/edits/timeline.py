@@ -56,9 +56,28 @@ class ClipEdit:
     end: float
     caption_preset: str | None = None
     camera_mode: str | None = None
+    gameplay_amount: float | None = None  # None = inherit the job's setting
+    # Publishing copy. `title` is the one the user picked; `title_variants`
+    # keeps the alternatives so they can be compared (and A/B tested later)
+    # without paying for regeneration.
+    title: str = ""
+    title_variants: list[dict] = field(default_factory=list)
+    # The post caption. `description` is what the user copies (text plus
+    # hashtags, ready to paste); description_meta keeps the parts and any
+    # warnings so the UI can show why it was trimmed or what was stripped.
+    description: str = ""
+    description_meta: dict = field(default_factory=dict)
     remove_dead_space: bool = False
     disabled_cuts: list[int] = field(default_factory=list)  # indices into auto cuts
     overlays: list[Overlay] = field(default_factory=list)
+    # Per-clip overrides of the settings whose only cost is a re-render, so
+    # they can be tuned here — where the result is visible — instead of in the
+    # global panel. Both are partial patches: a key that isn't here inherits
+    # the job's value, so a clip only carries what was actually changed.
+    pacing: dict = field(default_factory=dict)              # PacingSettings fields
+    caption_overrides: dict = field(default_factory=dict)   # ass.Preset fields
+    lufs_target: float | None = None
+    true_peak_db: float | None = None
 
     def to_json(self) -> dict:
         d = self.__dict__.copy()
@@ -73,10 +92,35 @@ class ClipEdit:
             end=float(data["end"]),
             caption_preset=data.get("caption_preset"),
             camera_mode=data.get("camera_mode"),
+            gameplay_amount=data.get("gameplay_amount"),
+            title=str(data.get("title", "")),
+            title_variants=list(data.get("title_variants", [])),
+            description=str(data.get("description", "")),
+            description_meta=dict(data.get("description_meta") or {}),
             remove_dead_space=bool(data.get("remove_dead_space", False)),
             disabled_cuts=list(data.get("disabled_cuts", [])),
             overlays=overlays,
+            pacing=dict(data.get("pacing") or {}),
+            caption_overrides=dict(data.get("caption_overrides") or {}),
+            lufs_target=data.get("lufs_target"),
+            true_peak_db=data.get("true_peak_db"),
         )
+
+
+def resolve_pacing(settings: "object", edit: "ClipEdit | None" = None) -> "object":
+    """The job's pacing, with this clip's overrides applied on top.
+
+    Kept here rather than inline at the call sites because BOTH the editor's
+    timeline preview and the actual re-render must resolve it identically —
+    if they drift, the cuts the user sees stop matching the cuts they get.
+    """
+    from .. import config
+
+    base = config.PacingSettings(**settings.pacing.__dict__)
+    for key, value in ((edit.pacing if edit else None) or {}).items():
+        if hasattr(base, key) and isinstance(value, (int, float)) and not isinstance(value, bool):
+            setattr(base, key, float(value))
+    return base
 
 
 def detect_dead_space(
@@ -84,13 +128,22 @@ def detect_dead_space(
     events: list[dict],
     clip_start: float,
     clip_end: float,
+    pacing: "object | None" = None,
 ) -> list[dict]:
     """Candidate cut ranges (source time) with the reason each pause was or
-    wasn't protected — the UI shows every decision, click-to-toggle."""
+    wasn't protected — the UI shows every decision, click-to-toggle.
+
+    `pacing` (settings.pacing) tunes how aggressive the trim is; omit it for
+    the built-in defaults."""
+    min_cut_gap = float(getattr(pacing, "min_cut_gap", MIN_CUT_GAP))
+    breath_pad = float(getattr(pacing, "breath_pad", BREATH_PAD))
+    event_protect = float(getattr(pacing, "event_protect_s", EVENT_PROTECT_SEC))
+    natural_pause_max = float(getattr(pacing, "natural_pause_max", NATURAL_PAUSE_MAX))
+
     inside = [w for w in words if clip_start <= w["start"] < clip_end]
     cuts: list[dict] = []
     protect_spans = [
-        (e["start"] - EVENT_PROTECT_SEC, e["end"] + EVENT_PROTECT_SEC)
+        (e["start"] - event_protect, e["end"] + event_protect)
         for e in events
         if e["type"] in ("laugh", "gasp", "scream", "applause", "cheer")
     ]
@@ -107,7 +160,7 @@ def detect_dead_space(
 
     for gap_start, gap_end, prev_word in boundary_pairs:
         gap = gap_end - gap_start
-        if gap < MIN_CUT_GAP:
+        if gap < min_cut_gap:
             continue
         if protected_by_event(gap_start, gap_end):
             cuts.append(
@@ -115,13 +168,13 @@ def detect_dead_space(
             )
             continue
         sentence_end = bool(prev_word and prev_word.get("word", "").rstrip().endswith((".", "!", "?")))
-        if sentence_end and gap <= NATURAL_PAUSE_MAX:
+        if sentence_end and gap <= natural_pause_max:
             cuts.append(
                 {"start": gap_start, "end": gap_end, "kept": True, "reason": "natural sentence pacing"}
             )
             continue
-        cut_a = gap_start + BREATH_PAD
-        cut_b = gap_end - BREATH_PAD
+        cut_a = gap_start + breath_pad
+        cut_b = gap_end - breath_pad
         if cut_b - cut_a < 0.2:
             continue
         cuts.append(

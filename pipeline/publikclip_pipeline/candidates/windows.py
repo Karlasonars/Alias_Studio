@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..config import ClipSettings
+
+# Defaults live on ClipSettings (config.py) — these module constants remain
+# only as the fallback for callers that don't pass settings (tests, tools).
 MIN_LEN = 15.0
 MAX_LEN = 75.0
 TARGET_LEN = 42.0
@@ -55,7 +59,9 @@ def _snap(t: float, boundaries: np.ndarray, radius: float = SNAP_RADIUS) -> floa
     return None
 
 
-def local_maxima(curve: np.ndarray, min_distance_sec: int = 20) -> list[int]:
+def local_maxima(
+    curve: np.ndarray, min_distance_sec: int = 20, max_candidates: int = MAX_CANDIDATES
+) -> list[int]:
     """Peak indices, greedily suppressing neighbors within min_distance."""
     order = np.argsort(curve)[::-1]
     picked: list[int] = []
@@ -64,7 +70,7 @@ def local_maxima(curve: np.ndarray, min_distance_sec: int = 20) -> list[int]:
             break
         if all(abs(idx - p) >= min_distance_sec for p in picked):
             picked.append(int(idx))
-        if len(picked) >= MAX_CANDIDATES * 3:  # generous pool pre-dedupe
+        if len(picked) >= max_candidates * 3:  # generous pool pre-dedupe
             break
     return sorted(picked)
 
@@ -75,15 +81,17 @@ def window_around(
     seg_starts: np.ndarray,
     seg_ends: np.ndarray,
     duration: float,
+    clips: ClipSettings | None = None,
 ) -> tuple[float, float] | None:
     """Grow a window around the peak until curve mass drops off, then snap
     both edges to sentence boundaries."""
-    half = TARGET_LEN / 2
+    clips = clips or ClipSettings()
+    half = clips.target_len / 2
     raw_start = max(0.0, peak - half)
     raw_end = min(duration, peak + half)
 
-    start = _snap(raw_start, seg_starts)
-    end = _snap(raw_end, seg_ends)
+    start = _snap(raw_start, seg_starts, clips.snap_radius)
+    end = _snap(raw_end, seg_ends, clips.snap_radius)
     if start is None:
         start = raw_start
     if end is None:
@@ -93,15 +101,17 @@ def window_around(
     if start >= end:
         return None
     length = end - start
-    if length < MIN_LEN:
+    if length < clips.min_len:
         # try extending the end to the next sentence end
-        later = seg_ends[seg_ends > start + MIN_LEN]
+        later = seg_ends[seg_ends > start + clips.min_len]
         if len(later) == 0:
             return None
         end = float(later[0])
         length = end - start
-    if length > MAX_LEN:
-        earlier = seg_ends[(seg_ends > start + MIN_LEN) & (seg_ends <= start + MAX_LEN)]
+    if length > clips.max_len:
+        earlier = seg_ends[
+            (seg_ends > start + clips.min_len) & (seg_ends <= start + clips.max_len)
+        ]
         if len(earlier) == 0:
             return None
         end = float(earlier[-1])
@@ -116,13 +126,17 @@ def _iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     return inter / union
 
 
-def dedupe(candidates: list[Candidate], iou: float = DEDUPE_IOU) -> list[Candidate]:
+def dedupe(
+    candidates: list[Candidate],
+    iou: float = DEDUPE_IOU,
+    max_candidates: int = MAX_CANDIDATES,
+) -> list[Candidate]:
     """Keep the higher-scored of any overlapping pair (autoclip pattern)."""
     kept: list[Candidate] = []
     for cand in sorted(candidates, key=lambda c: c.curve_score, reverse=True):
         if all(_iou((cand.start, cand.end), (k.start, k.end)) < iou for k in kept):
             kept.append(cand)
-        if len(kept) >= MAX_CANDIDATES:
+        if len(kept) >= max_candidates:
             break
     return sorted(kept, key=lambda c: c.start)
 
@@ -132,12 +146,14 @@ def extract(
     channels: dict[str, np.ndarray],
     segments: list[dict],
     duration: float,
+    clips: ClipSettings | None = None,
 ) -> list[Candidate]:
+    clips = clips or ClipSettings()
     seg_starts, seg_ends = sentence_boundaries(segments)
-    peaks = local_maxima(curve)
+    peaks = local_maxima(curve, clips.peak_min_distance_s, clips.max_candidates)
     out: list[Candidate] = []
     for peak in peaks:
-        window = window_around(peak, curve, seg_starts, seg_ends, duration)
+        window = window_around(peak, curve, seg_starts, seg_ends, duration, clips)
         if window is None:
             continue
         start, end = window
@@ -156,4 +172,4 @@ def extract(
                 channel_scores=per_channel,
             )
         )
-    return dedupe(out)
+    return dedupe(out, clips.dedupe_iou, clips.max_candidates)

@@ -183,16 +183,24 @@ def composite(
     heatmap_pct: float | None,
     visual: dict | None,
     constants: dict | None = None,
+    scoring: "object | None" = None,
 ) -> tuple[dict[str, float], list[dict]]:
-    """Per-platform 0–100 scores + any composite-level adjustments."""
+    """Per-platform 0–100 scores + any composite-level adjustments.
+
+    `scoring` (settings.scoring) overrides the research-derived platform
+    weights and the text/visual split; omit it to use the built-in defaults.
+    """
     adjustments: list[dict] = []
     platform_scores: dict[str, float] = {}
     heatmap_boost = _c(constants, "heatmap_boost", HEATMAP_BOOST)
-    for platform, weights in PLATFORM_WEIGHTS.items():
-        t1_part = sum(sub[k] / 10.0 * w for k, w in weights.items())
-        text_score = (1 - T0_WEIGHT) * t1_part + T0_WEIGHT * min(1.0, curve_score)
+    platform_weights = getattr(scoring, "platform_weights", None) or PLATFORM_WEIGHTS
+    t0_weight = float(getattr(scoring, "t0_weight", T0_WEIGHT))
+    tw = float(getattr(scoring, "text_weight", TEXT_VISUAL_SPLIT[0]))
+    vw = float(getattr(scoring, "visual_weight", TEXT_VISUAL_SPLIT[1]))
+    for platform, weights in platform_weights.items():
+        t1_part = sum(sub[k] / 10.0 * w for k, w in weights.items() if k in sub)
+        text_score = (1 - t0_weight) * t1_part + t0_weight * min(1.0, curve_score)
         if visual is not None:
-            tw, vw = TEXT_VISUAL_SPLIT
             score = tw * text_score + vw * (visual["visual_interest"] / 10.0)
         else:
             score = text_score

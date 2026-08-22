@@ -17,7 +17,11 @@ from .. import config
 from ..captions import ass as ass_mod
 from ..render import ffmpeg_bin, renderer
 from . import store
-from .timeline import ClipEdit, TimeRemap, detect_dead_space, keep_ranges
+from .timeline import ClipEdit, TimeRemap, detect_dead_space, keep_ranges, resolve_pacing
+
+
+def _job_settings(job_dir: Path) -> config.Settings:
+    return config.Settings.from_json(json.loads((job_dir / "settings.json").read_text()))
 
 
 def _load_stage(job_dir: Path, stage: str) -> dict:
@@ -53,7 +57,11 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
     all_words = [
         w for seg in diarize["segments"] for w in seg.get("words", [])
     ]
-    cuts = detect_dead_space(all_words, events["timeline"], edit.start, edit.end)
+    settings = _job_settings(job_dir)
+    cuts = detect_dead_space(
+        all_words, events["timeline"], edit.start, edit.end,
+        resolve_pacing(settings, edit),
+    )
 
     trajectory = None
     camera_path = job_dir / "camera.json"
@@ -62,7 +70,12 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
         traj_file = cam.get("trajectories", {}).get(str(clip_idx))
         if traj_file and Path(traj_file).exists():
             t = json.loads(Path(traj_file).read_text())
-            trajectory = {"fps": t.get("fps", 25), "frames": t.get("frames", [])}
+            trajectory = {
+                "fps": t.get("fps", 25),
+                "frames": t.get("frames", []),
+                "content_w": t.get("content_w"),
+                "content_h": t.get("content_h"),
+            }
 
     return {
         "clip_index": clip_idx,
@@ -80,16 +93,38 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
         "run_caption_preset": _load_stage(job_dir, "render").get("caption_preset", "classic")
         if (job_dir / "render.json").exists()
         else "classic",
+        # What "inherit the job" currently resolves to, so the editor's
+        # per-clip controls can show a real starting value rather than a
+        # blank. Caption style is resolved through the same layers the
+        # renderer uses, and handed over in hex for the colour pickers.
+        "pacing": settings.pacing.__dict__.copy(),
+        "caption_style": ass_mod.preset_to_ui(
+            ass_mod.resolve_preset(
+                edit.caption_preset or settings.caption_preset,
+                {**settings.captions.overrides, **(edit.caption_overrides or {})},
+            )
+        ),
+        "audio": {
+            "lufs_target": settings.lufs_target,
+            "true_peak_db": settings.true_peak_db,
+        },
     }
 
 
 def _camera_needs_redirect(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: dict) -> bool:
     if abs(edit.start - score_clip["start"]) > 0.05 or abs(edit.end - score_clip["end"]) > 0.05:
         return True
+    camera = None
     if edit.camera_mode:
-        camera = _load_stage(job_dir, "camera")
+        camera = camera or _load_stage(job_dir, "camera")
         run_mode = (camera.get("camera_settings") or {}).get("speaker_change", "cut")
-        return edit.camera_mode != run_mode
+        if edit.camera_mode != run_mode:
+            return True
+    if edit.gameplay_amount is not None:
+        camera = camera or _load_stage(job_dir, "camera")
+        run_amount = (camera.get("camera_settings") or {}).get("gameplay_amount", 0.0)
+        if abs(edit.gameplay_amount - run_amount) > 1e-6:
+            return True
     return False
 
 
@@ -119,6 +154,8 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
     cam_settings = config.CameraSettings(**{**settings.camera.__dict__})
     if edit.camera_mode:
         cam_settings.speaker_change = edit.camera_mode
+    if edit.gameplay_amount is not None:
+        cam_settings.gameplay_amount = edit.gameplay_amount
 
     src_w, src_h = int(ingest["probe"]["width"]), int(ingest["probe"]["height"])
     analysis = asd_mod.analyze_clip(
@@ -130,7 +167,14 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
         np.asarray(curves["dynamics"], dtype=float), float(curves["grid_sec"]),
         edit.start, edit.end, src_w, src_h, cam_settings,
     )
-    return {"fps": traj.fps, "frames": traj.frames, "cuts": traj.cuts, "punches": traj.punches}
+    return {
+        "fps": traj.fps,
+        "frames": traj.frames,
+        "cuts": traj.cuts,
+        "punches": traj.punches,
+        "content_w": traj.content_w,
+        "content_h": traj.content_h,
+    }
 
 
 def _overlay_filters(overlays, input_offset: int, out_w: int, out_h: int) -> tuple[list[str], list[str], str]:
@@ -174,14 +218,19 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     diarize = _load_stage(job_dir, "diarize")
     events = _load_stage(job_dir, "events")
     score = _load_stage(job_dir, "score")
-    settings = config.Settings.from_json(json.loads((job_dir / "settings.json").read_text()))
+    settings = _job_settings(job_dir)
     clip = score["clips"][clip_idx]
     edit = store.edit_for_clip(job_dir, clip_idx, clip)
 
     # --- keep ranges + remap ------------------------------------------------
     if edit.remove_dead_space:
         all_words = [w for seg in diarize["segments"] for w in seg.get("words", [])]
-        cuts = detect_dead_space(all_words, events["timeline"], edit.start, edit.end)
+        # Same resolution as the editor's preview, so the cuts that get
+        # rendered are exactly the ones the user was shown.
+        cuts = detect_dead_space(
+            all_words, events["timeline"], edit.start, edit.end,
+            resolve_pacing(settings, edit),
+        )
         ranges = keep_ranges(edit.start, edit.end, cuts, edit.disabled_cuts)
     else:
         ranges = [(edit.start, edit.end)]
@@ -245,7 +294,14 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     out_dir = job_dir / "clips"
     out_dir.mkdir(exist_ok=True)
     ass_path = out_dir / f"clip_{clip_idx:02d}.ass"
-    ass_path.write_text(ass_mod.build_ass(cap_words, clip_events_out, preset_name=preset, emoji_ok=emoji_ok))
+    # Job-level caption tweaks first, then this clip's own on top.
+    cap_overrides = {**settings.captions.overrides, **(edit.caption_overrides or {})}
+    ass_path.write_text(
+        ass_mod.build_ass(
+            cap_words, clip_events_out, preset_name=preset,
+            emoji_ok=emoji_ok, overrides=cap_overrides,
+        )
+    )
 
     # --- build the graph ----------------------------------------------------
     emit(-1, "Rendering clip…")
@@ -262,10 +318,13 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
 
     cmd_path = out_dir / f"clip_{clip_idx:02d}.cmd"
     cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n")
+    scale_pad = ",".join(
+        renderer.scale_pad_vf(trajectory.get("content_w", 0), trajectory.get("content_h", 0))
+    )
     vchain = (
         f"[vc]sendcmd=f={renderer._q(cmd_path)},"  # noqa: SLF001
         f"crop@c=w={boxes[0][0]}:h={boxes[0][1]}:x={boxes[0][2]}:y={boxes[0][3]},"
-        f"scale={renderer.OUT_W}:{renderer.OUT_H}:flags=lanczos,setsar=1[vb]"
+        f"{scale_pad},setsar=1[vb]"
     )
     graph.append(vchain)
 
@@ -276,12 +335,14 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
             f"[{vlabel}]subtitles=filename={renderer._q(ass_path)}:fontsdir={renderer._q(ass_mod.FONTS_DIR)}[vf]"  # noqa: SLF001
         )
         vlabel = "vf"
-    graph.append(f"[ac]loudnorm=I={settings.lufs_target}:TP={settings.true_peak_db}:LRA=11[af]")
+    lufs = edit.lufs_target if edit.lufs_target is not None else settings.lufs_target
+    peak = edit.true_peak_db if edit.true_peak_db is not None else settings.true_peak_db
+    graph.append(f"[ac]loudnorm=I={lufs}:TP={peak}:LRA=11[af]")
 
-    if renderer.videotoolbox_available():
-        vcodec = ["-c:v", "h264_videotoolbox", "-b:v", renderer.VT_BITRATE, "-allow_sw", "1"]
-    else:
-        vcodec = ["-c:v", "libx264", "-preset", "medium", "-crf", str(renderer.X264_CRF)]
+    # Same encoder selection as the main render stage — this path had its own
+    # hardcoded copy, which meant the hardware-encoding setting silently did
+    # nothing when a clip was re-rendered from the editor.
+    vcodec = renderer.video_encoder_args(settings.performance.hardware_encode)
 
     out_path = out_dir / f"clip_{clip_idx:02d}.mp4"
     args = [

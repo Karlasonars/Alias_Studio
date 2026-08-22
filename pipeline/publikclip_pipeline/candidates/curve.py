@@ -136,16 +136,24 @@ def lexical_channel(segments: list[dict], n: int) -> np.ndarray:
     return _norm(out)
 
 
-def interest_curve(channels: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[str, float]]:
+def interest_curve(
+    channels: dict[str, np.ndarray], weights: dict[str, float] | None = None
+) -> tuple[np.ndarray, dict[str, float]]:
     """Weighted sum. Missing channels (all-zero heatmap on most videos) get
     their weight redistributed proportionally so the curve never silently
-    deflates — and the redistribution is reported for provenance."""
+    deflates — and the redistribution is reported for provenance.
+
+    `weights` overrides the built-in SHAP-anchored defaults (settings.curve);
+    a channel the caller omits falls back to its default weight."""
+    resolved = dict(WEIGHTS)
+    if weights:
+        resolved.update({k: float(v) for k, v in weights.items() if k in WEIGHTS})
     n = max(len(c) for c in channels.values())
     active = {k: v for k, v in channels.items() if len(v) and float(np.max(v)) > 0}
-    total_w = sum(WEIGHTS[k] for k in active)
+    total_w = sum(resolved.get(k, 0.0) for k in active)
     if total_w == 0:
         return np.zeros(n), {}
-    effective = {k: WEIGHTS[k] / total_w for k in active}
+    effective = {k: resolved.get(k, 0.0) / total_w for k in active}
     curve = np.zeros(n)
     for name, weight in effective.items():
         ch = channels[name]
