@@ -108,6 +108,7 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
             "lufs_target": settings.lufs_target,
             "true_peak_db": settings.true_peak_db,
         },
+        "letterbox_fill": settings.camera.letterbox_fill,
     }
 
 
@@ -322,7 +323,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         renderer.scale_pad_vf(
             trajectory.get("content_w", 0),
             trajectory.get("content_h", 0),
-            settings.camera.letterbox_fill,
+            edit.letterbox_fill or settings.camera.letterbox_fill,
         )
     )
     vchain = (

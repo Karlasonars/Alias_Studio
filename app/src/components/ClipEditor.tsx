@@ -34,6 +34,7 @@ interface EditState {
   caption_overrides: Record<string, string | number | boolean>
   lufs_target: number | null
   true_peak_db: number | null
+  letterbox_fill: string | null
 }
 
 /** The re-render-cost knobs, surfaced here so a clip can be tuned where the
@@ -80,6 +81,7 @@ interface EditContext {
   pacing: Record<string, number>
   caption_style: Record<string, string | number | boolean>
   audio: { lufs_target: number; true_peak_db: number }
+  letterbox_fill: string
 }
 
 const PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
@@ -413,7 +415,8 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
     Object.keys(edit.pacing ?? {}).length +
     Object.keys(edit.caption_overrides ?? {}).length +
     (edit.lufs_target !== null && edit.lufs_target !== undefined ? 1 : 0) +
-    (edit.true_peak_db !== null && edit.true_peak_db !== undefined ? 1 : 0)
+    (edit.true_peak_db !== null && edit.true_peak_db !== undefined ? 1 : 0) +
+    (edit.letterbox_fill ? 1 : 0)
 
   return (
     <div className="editor-shell">
@@ -608,6 +611,42 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
                   Turn on “remove dead space” to apply these.
                 </p>
               )}
+            </section>
+
+            <section>
+              <h4 className="editor-tuning-h">Framing</h4>
+              <div className="tune-row">
+                <label
+                  className="tune-label"
+                  title="What fills the bars when the framing dial is wide enough that the crop stops filling the frame. Blurred repeats this frame zoomed and blurred behind the image; it roughly doubles render time."
+                >
+                  letterbox bars
+                  {edit.letterbox_fill && <span className="set-dot" />}
+                </label>
+                <div className="set-opts">
+                  {(['black', 'blur'] as const).map((v) => (
+                    <button
+                      key={v}
+                      className={`opt ${(edit.letterbox_fill ?? ctx.letterbox_fill ?? 'black') === v ? 'opt-on' : ''}`}
+                      onClick={() => persist({ ...edit, letterbox_fill: v })}
+                    >
+                      {v === 'black' ? 'black' : 'blurred'}
+                    </button>
+                  ))}
+                </div>
+                {edit.letterbox_fill && (
+                  <button
+                    className="btn-ghost tune-reset"
+                    title="inherit the job's value"
+                    onClick={() => persist({ ...edit, letterbox_fill: null })}
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+              <p className="tune-hint">
+                Only visible once framing is wide enough to letterbox.
+              </p>
             </section>
 
             <section>

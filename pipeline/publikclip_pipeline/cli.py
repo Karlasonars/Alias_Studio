@@ -362,9 +362,35 @@ def cmd_edit(args: argparse.Namespace) -> int:
 def cmd_ig(args: argparse.Namespace) -> int:
     from .insights import calibration, instagram
 
+    if args.ig_cmd == "auth-url":
+        # Printed so the user can open it themselves and paste the code back.
+        # Needed because Meta rejects http:// redirect URIs, so the browser
+        # cannot reach our local callback server at all.
+        import secrets as pysecrets
+
+        print(json.dumps({
+            "ok": True,
+            "url": instagram.auth_url(args.app_id, pysecrets.token_urlsafe(16), args.redirect),
+            "redirect_uri": instagram.redirect_uri(args.redirect),
+        }))
+        return 0
+
     if args.ig_cmd == "connect":
-        conn = instagram.connect(args.app_id, args.app_secret)
-        print(f"Connected as @{conn['username']} (user {conn['user_id']}).")
+        try:
+            conn = instagram.connect(
+                args.app_id, args.app_secret,
+                open_browser=not args.code,
+                code=args.code,
+                redirect=args.redirect,
+            )
+        except instagram.IgError as err:
+            print(json.dumps({"ok": False, "error": str(err)}))
+            return 1
+        print(json.dumps({
+            "ok": True,
+            "username": conn.get("username"),
+            "user_id": conn.get("user_id"),
+        }))
         return 0
 
     # App-facing commands: exactly one JSON line on stdout (the shell's
@@ -520,9 +546,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ig = sub.add_parser("ig", help="Instagram feedback loop (your own Meta app)")
     ig_sub = p_ig.add_subparsers(dest="ig_cmd", required=True)
+    p_authurl = ig_sub.add_parser("auth-url", help="print the authorization URL to open (JSON)")
+    p_authurl.add_argument("--app-id", required=True)
+    p_authurl.add_argument("--redirect", default=None, help="redirect URI registered in your Meta app")
     p_connect = ig_sub.add_parser("connect", help="OAuth against your own Meta app")
     p_connect.add_argument("--app-id", required=True)
     p_connect.add_argument("--app-secret", required=True)
+    p_connect.add_argument(
+        "--code", default=None,
+        help="authorization code (or the whole redirected URL) pasted back from the browser",
+    )
+    p_connect.add_argument("--redirect", default=None, help="redirect URI registered in your Meta app")
     ig_sub.add_parser("sync", help="one sync pass: media + thumbnails + insights ladder + auto-fit (JSON)")
     ig_sub.add_parser("overview", help="everything the Loop screen renders (JSON)")
     ig_sub.add_parser("media", help="list your recent Reels to link against")

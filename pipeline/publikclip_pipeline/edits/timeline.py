@@ -57,6 +57,7 @@ class ClipEdit:
     caption_preset: str | None = None
     camera_mode: str | None = None
     gameplay_amount: float | None = None  # None = inherit the job's setting
+    letterbox_fill: str | None = None     # 'black' | 'blur'; None = inherit
     # Publishing copy. `title` is the one the user picked; `title_variants`
     # keeps the alternatives so they can be compared (and A/B tested later)
     # without paying for regeneration.
@@ -93,6 +94,7 @@ class ClipEdit:
             caption_preset=data.get("caption_preset"),
             camera_mode=data.get("camera_mode"),
             gameplay_amount=data.get("gameplay_amount"),
+            letterbox_fill=data.get("letterbox_fill"),
             title=str(data.get("title", "")),
             title_variants=list(data.get("title_variants", [])),
             description=str(data.get("description", "")),

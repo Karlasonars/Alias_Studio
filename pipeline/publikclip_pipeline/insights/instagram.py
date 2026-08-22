@@ -127,29 +127,89 @@ def _wait_for_callback(state: str, timeout_sec: float = 300.0) -> CallbackResult
     return result
 
 
-def redirect_uri() -> str:
-    return f"http://localhost:{CALLBACK_PORT}/callback"
+DEFAULT_REDIRECT_URI = f"https://localhost:{CALLBACK_PORT}/callback"
 
 
-def connect(app_id: str, app_secret: str, open_browser: bool = True) -> dict:
-    """Full OAuth dance against the user's own app. Blocks until the browser
-    round-trip completes. Returns + persists the connection."""
-    state = pysecrets.token_urlsafe(16)
+def redirect_uri(override: str | None = None) -> str:
+    """The redirect URI registered in the user's own Meta app.
+
+    Configurable, and defaulting to https, because Meta's App Dashboard
+    rejects `http://localhost/...` for Business Login ("Error saving redirect
+    URIs") — and its accepted set is theirs to change, not ours to hardcode.
+    Whatever the dashboard accepts goes here, character for character: Meta
+    requires an exact match, and the dashboard is known to append a trailing
+    slash of its own.
+    """
+    if override and override.strip():
+        return override.strip()
+    stored = str((load_connection() or {}).get("redirect_uri") or "").strip()
+    return stored or DEFAULT_REDIRECT_URI
+
+
+def auth_url(app_id: str, state: str, redirect: str | None = None) -> str:
+    """The URL the user opens to authorize. Exposed separately so the manual
+    flow can show it without also starting a callback server."""
     params = {
         "client_id": app_id.strip(),
-        "redirect_uri": redirect_uri(),
+        "redirect_uri": redirect_uri(redirect),
         "scope": SCOPES,
         "response_type": "code",
         "state": state,
         "enable_fb_login": "0",
         "force_authentication": "0",
     }
-    url = AUTH_URL + "?" + urllib.parse.urlencode(params)
-    if open_browser:
-        webbrowser.open(url)
-    result = _wait_for_callback(state)
-    if not result.code:
-        raise IgError(result.error or "Authorization failed.")
+    return AUTH_URL + "?" + urllib.parse.urlencode(params)
+
+
+def extract_code(pasted: str) -> str:
+    """Pull the authorization code out of whatever the user pasted.
+
+    An https redirect cannot reach our plain-http callback server, so the
+    browser lands on an error page — but the address bar still carries
+    ?code=... . People paste the whole URL, just the code, or the code with
+    Instagram's trailing '#_', so accept all three.
+    """
+    text = (pasted or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    if "code=" in text:
+        query = urllib.parse.urlparse(text).query or text.split("?", 1)[-1]
+        values = urllib.parse.parse_qs(query).get("code")
+        if values:
+            text = values[0]
+    return text.split("#")[0].strip()
+
+
+def connect(
+    app_id: str,
+    app_secret: str,
+    open_browser: bool = True,
+    code: str | None = None,
+    redirect: str | None = None,
+) -> dict:
+    """Full OAuth dance against the user's own app. Returns + persists the
+    connection.
+
+    Two paths, because the callback server only works when the registered
+    redirect is plain http — which Meta no longer accepts for new apps:
+      - `code` given: the user authorized in their browser and pasted the
+        code (or the whole redirected URL) back. No server, no waiting.
+      - otherwise: open the browser and catch the redirect locally.
+    """
+    used_redirect = redirect_uri(redirect)
+    if code:
+        auth_code = extract_code(code)
+        if not auth_code:
+            raise IgError("No authorization code found in what was pasted.")
+    else:
+        state = pysecrets.token_urlsafe(16)
+        url = auth_url(app_id, state, used_redirect)
+        if open_browser:
+            webbrowser.open(url)
+        result = _wait_for_callback(state)
+        if not result.code:
+            raise IgError(result.error or "Authorization failed.")
+        auth_code = result.code
 
     res = httpx.post(
         TOKEN_URL,
@@ -157,8 +217,8 @@ def connect(app_id: str, app_secret: str, open_browser: bool = True) -> dict:
             "client_id": app_id.strip(),
             "client_secret": app_secret.strip(),
             "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri(),
-            "code": result.code,
+            "redirect_uri": used_redirect,
+            "code": auth_code,
         },
         timeout=HTTP_TIMEOUT,
     )
@@ -187,6 +247,9 @@ def connect(app_id: str, app_secret: str, open_browser: bool = True) -> dict:
 
     connection = {
         "app_id": app_id.strip(),
+        # Remembered so a later reconnect/refresh reuses the exact URI this
+        # token was issued against — Meta matches it character for character.
+        "redirect_uri": used_redirect,
         "username": me.get("username"),
         "user_id": me.get("user_id") or me.get("id"),
         "access_token": long_lived["access_token"],
