@@ -52,6 +52,10 @@ export default function Review({ results, onBack, onRestyle }: Props) {
   const currentPreset = results.render?.caption_preset ?? 'classic'
   const currentCameraMode = results.camera?.camera_settings?.speaker_change ?? 'cut'
   const currentGameplayAmount = results.camera?.camera_settings?.gameplay_amount ?? 0
+  // A restyle cannot reproduce trimmed bounds or dead-space cuts, so those
+  // clips keep the file the editor made. Say so on the clip rather than
+  // letting it look like the restyle silently skipped them.
+  const keptFromEditor = new Set(results.render?.kept_from_editor ?? [])
   const [restylePreset, setRestylePreset] = useState(currentPreset)
   const [restyleCamera, setRestyleCamera] = useState(currentCameraMode)
   const [restyleGameplay, setRestyleGameplay] = useState(currentGameplayAmount)
@@ -286,6 +290,12 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               confidence: {pair.clip.confidence} · captions: {results.render?.caption_preset} ·{' '}
               {pair.out.words} words · {pair.out.event_tags} event tags
             </p>
+            {keptFromEditor.has(pair.out.clip) && (
+              <p className="audit-fine mono kept-note">
+                your edited version — this clip's custom bounds and cuts are kept, so a
+                restyle here leaves it untouched. Change it in the editor.
+              </p>
+            )}
           </aside>
         </div>
       )}

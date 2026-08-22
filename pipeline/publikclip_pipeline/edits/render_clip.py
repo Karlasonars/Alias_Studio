@@ -9,6 +9,7 @@ only when bounds or camera mode differ from what the run produced.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -118,15 +119,31 @@ def _camera_needs_redirect(job_dir: Path, clip_idx: int, edit: ClipEdit, score_c
     camera = None
     if edit.camera_mode:
         camera = camera or _load_stage(job_dir, "camera")
-        run_mode = (camera.get("camera_settings") or {}).get("speaker_change", "cut")
-        if edit.camera_mode != run_mode:
+        if edit.camera_mode != _run_framing(camera, clip_idx)["speaker_change"]:
             return True
     if edit.gameplay_amount is not None:
         camera = camera or _load_stage(job_dir, "camera")
-        run_amount = (camera.get("camera_settings") or {}).get("gameplay_amount", 0.0)
+        run_amount = _run_framing(camera, clip_idx)["gameplay_amount"]
         if abs(edit.gameplay_amount - run_amount) > 1e-6:
             return True
     return False
+
+
+def _run_framing(camera: dict, clip_idx: int) -> dict:
+    """The framing the cached trajectory for this clip was actually built
+    with: the job's camera settings, unless the camera stage already baked a
+    per-clip override in. Comparing against the job dial alone would re-direct
+    (minutes of ASD) to arrive at the trajectory already on disk."""
+    settings = camera.get("camera_settings") or {}
+    baked = (camera.get("clip_framing") or {}).get(str(clip_idx)) or {}
+    return {
+        "speaker_change": baked.get("camera_mode") or settings.get("speaker_change", "cut"),
+        "gameplay_amount": float(
+            baked.get("gameplay_amount")
+            if baked.get("gameplay_amount") is not None
+            else settings.get("gameplay_amount", 0.0)
+        ),
+    }
 
 
 def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: dict, settings: config.Settings, emit) -> dict:
@@ -157,6 +174,11 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
         cam_settings.speaker_change = edit.camera_mode
     if edit.gameplay_amount is not None:
         cam_settings.gameplay_amount = edit.gameplay_amount
+    # Hand the director the WHOLE settings object, not just the camera group:
+    # it reads settings.retention for the punch-in envelope, and a bare
+    # CameraSettings made it silently fall back to the retention defaults —
+    # which is exactly how an editor render drifted from the stage render.
+    clip_settings = dataclasses.replace(settings, camera=cam_settings)
 
     src_w, src_h = int(ingest["probe"]["width"]), int(ingest["probe"]["height"])
     analysis = asd_mod.analyze_clip(
@@ -166,7 +188,7 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
     traj = director.build_trajectory(
         analysis, clip_turns, events["timeline"],
         np.asarray(curves["dynamics"], dtype=float), float(curves["grid_sec"]),
-        edit.start, edit.end, src_w, src_h, cam_settings,
+        edit.start, edit.end, src_w, src_h, clip_settings,
     )
     return {
         "fps": traj.fps,
@@ -383,7 +405,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     # keep render.json in sync so the review UI reflects the new file
     render_ckpt_path = job_dir / "render.json"
     if render_ckpt_path.exists():
-        ckpt = json.loads(render_ckpt_path.read_text())
+        ckpt = json.loads(render_ckpt_path.read_text(encoding="utf-8"))
         outputs = ckpt["data"].get("outputs", [])
         for i, o in enumerate(outputs):
             if o["clip"] == clip_idx:
@@ -392,6 +414,6 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         else:
             outputs.append(entry)
         tmp = render_ckpt_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(ckpt))
+        tmp.write_text(json.dumps(ckpt), encoding="utf-8")
         tmp.replace(render_ckpt_path)
     return entry

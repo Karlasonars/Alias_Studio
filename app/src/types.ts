@@ -177,7 +177,14 @@ export interface JobResults {
     probe: { duration_sec: number; width: number; height: number }
   } | null
   score: { clips: Clip[]; llm_mode: string; model: string; scored_count: number } | null
-  render: { outputs: RenderOutput[]; emoji_ok: boolean; caption_preset: string } | null
+  render: {
+    outputs: RenderOutput[]
+    emoji_ok: boolean
+    caption_preset: string
+    // Clips a restyle deliberately left alone: their editor version has cuts
+    // or bounds the whole-job render cannot reproduce.
+    kept_from_editor?: number[]
+  } | null
   events: { counts: Record<string, number>; timeline: unknown[]; arousal_source: string } | null
   candidates: { count: number; effective_weights: Record<string, number>; heatmap_present: boolean } | null
   camera: {

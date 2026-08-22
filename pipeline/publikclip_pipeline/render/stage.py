@@ -21,6 +21,74 @@ def _caption_style_fingerprint(ctx: StageContext) -> dict:
     return preset.__dict__.copy()
 
 
+def _load_clip_edits(job_dir: Path) -> dict:
+    """Raw per-clip edits, or {} when the editor was never opened. Read as
+    plain JSON rather than through edits.store so this stage stays free of a
+    dependency on the editing package."""
+    path = job_dir / "clip_edits.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _previous_outputs(job_dir: Path) -> dict:
+    """Last render's output entries keyed by clip index, so a clip this stage
+    must not overwrite can be carried forward instead of vanishing."""
+    path = job_dir / "render.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")).get("data", {})
+        return {str(o["clip"]): o for o in data.get("outputs", []) if Path(o["path"]).exists()}
+    except (json.JSONDecodeError, OSError, KeyError, TypeError):
+        return {}
+
+
+def _has_structural_edits(edit: dict, clip: dict) -> bool:
+    """Whether this clip was reshaped in a way this stage cannot reproduce.
+
+    Bounds, dead-space removal and overlays all need the edit path's
+    trim/concat/overlay graph. Style-only differences are applied here
+    instead, so this deliberately does NOT count them.
+    """
+    if not edit:
+        return False
+    if edit.get("remove_dead_space") or edit.get("overlays"):
+        return True
+    try:
+        return (
+            abs(float(edit["start"]) - float(clip["start"])) > 0.05
+            or abs(float(edit["end"]) - float(clip["end"])) > 0.05
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _clip_edits_fingerprint(job_dir: Path) -> dict:
+    """Only the parts of each clip's edit that change its render, so opening
+    the editor (which writes defaults) doesn't invalidate every render."""
+    out: dict[str, dict] = {}
+    for key, edit in _load_clip_edits(job_dir).items():
+        if not isinstance(edit, dict):
+            continue
+        relevant = {
+            k: edit.get(k)
+            for k in (
+                "start", "end", "caption_preset", "caption_overrides",
+                "lufs_target", "true_peak_db", "letterbox_fill",
+                "remove_dead_space", "disabled_cuts",
+            )
+            if edit.get(k) not in (None, {}, [])
+        }
+        if relevant:
+            out[key] = relevant
+    return out
+
+
 def _audio_fingerprint(ctx: StageContext) -> dict:
     return {"lufs": ctx.settings.lufs_target, "true_peak": ctx.settings.true_peak_db}
 
@@ -52,6 +120,11 @@ class RenderStage(Stage):
         if data.get("audio") != _audio_fingerprint(ctx):
             return False  # loudness targets are baked in by loudnorm
         if data.get("encoder") != _encoder_fingerprint(ctx):
+            return False
+        # A clip edited in the editor renders differently from the job's
+        # settings, so editing one must re-run this stage — otherwise the
+        # edit is only visible until the next restyle overwrites it.
+        if (data.get("clip_edits") or {}) != _clip_edits_fingerprint(ctx.job_dir):
             return False
         return all(Path(c["path"]).exists() for c in data.get("outputs", []))
 
@@ -93,10 +166,36 @@ class RenderStage(Stage):
         preset = ctx.settings.caption_preset
         outputs = []
         clips = score["clips"]
+
+        # Per-clip edits are the user's most specific intent for a clip, and
+        # this path used to ignore them completely — so a job-level restyle
+        # silently re-rendered a hand-tuned clip at the job's settings,
+        # discarding its framing, its caption tweaks, and (worst) its trimmed
+        # bounds. Style overrides are applied below; structural edits (bounds,
+        # dead-space cuts, overlays) need the edit path's trim/concat graph,
+        # which this stage does not build, so those clips keep the render the
+        # editor already produced and are reported rather than overwritten.
+        clip_edits = _load_clip_edits(ctx.job_dir)
+        previous = _previous_outputs(ctx.job_dir)
+        kept_from_editor: list[int] = []
+
         for i, clip in enumerate(clips):
             traj_path = camera["trajectories"].get(str(i))
             if not traj_path or not Path(traj_path).exists():
                 continue
+            edit = clip_edits.get(str(i)) or {}
+
+            # A clip the editor reshaped cannot be reproduced here; re-rendering
+            # it from the job settings would throw that work away.
+            if _has_structural_edits(edit, clip) and str(i) in previous:
+                outputs.append(previous[str(i)])
+                kept_from_editor.append(i)
+                ctx.emit(
+                    i / max(1, len(clips)),
+                    f"Clip {i + 1} keeps its editor version (custom bounds/cuts)",
+                )
+                continue
+
             trajectory = json.loads(Path(traj_path).read_text())
             start, end = clip["start"], clip["end"]
             ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
@@ -123,11 +222,24 @@ class RenderStage(Stage):
                 for e in timeline
                 if e["end"] > start and e["start"] < end and e["type"] != "pause"
             ]
+            # Style overrides this stage CAN honour, so a restyle doesn't
+            # silently undo them. (The framing dial is baked into the
+            # trajectory by the camera stage, so a per-clip gameplay_amount is
+            # handled there, not here.)
+            clip_preset = edit.get("caption_preset") or preset
+            clip_caption_overrides = {
+                **ctx.settings.captions.overrides,
+                **(edit.get("caption_overrides") or {}),
+            }
+            clip_lufs = edit.get("lufs_target")
+            clip_peak = edit.get("true_peak_db")
+            clip_fill = edit.get("letterbox_fill") or ctx.settings.camera.letterbox_fill
+
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
                 ass_mod.build_ass(
-                    words, clip_events, preset_name=preset, emoji_ok=emoji_ok,
-                    overrides=ctx.settings.captions.overrides,
+                    words, clip_events, preset_name=clip_preset, emoji_ok=emoji_ok,
+                    overrides=clip_caption_overrides,
                 )
             )
 
@@ -136,11 +248,11 @@ class RenderStage(Stage):
                 renderer.render_clip(
                     media, out_path, start, end, trajectory,
                     ass_path if captions_ok else None, ass_mod.FONTS_DIR,
-                    lufs=ctx.settings.lufs_target,
-                    true_peak=ctx.settings.true_peak_db,
+                    lufs=clip_lufs if clip_lufs is not None else ctx.settings.lufs_target,
+                    true_peak=clip_peak if clip_peak is not None else ctx.settings.true_peak_db,
                     src_w=src_w, src_h=src_h,
                     hardware_encode=ctx.settings.performance.hardware_encode,
-                    letterbox_fill=ctx.settings.camera.letterbox_fill,
+                    letterbox_fill=clip_fill,
                 )
             except RuntimeError as err:
                 raise StageError(str(err)) from err
@@ -167,6 +279,7 @@ class RenderStage(Stage):
             raise StageError("No clips were rendered.")
         return {
             "outputs": outputs,
+            "kept_from_editor": kept_from_editor,
             "emoji_ok": emoji_ok,
             "captions_burned": captions_ok,
             "caption_preset": preset,
@@ -174,4 +287,5 @@ class RenderStage(Stage):
             "caption_style": _caption_style_fingerprint(ctx),
             "audio": _audio_fingerprint(ctx),
             "encoder": _encoder_fingerprint(ctx),
+            "clip_edits": _clip_edits_fingerprint(ctx.job_dir),
         }

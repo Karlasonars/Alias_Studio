@@ -887,6 +887,10 @@ body {
 .music-alt { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 
 .audit-fine { margin-top: 28px; font-size: 10px; color: var(--faint); }
+/* A clip a restyle deliberately left alone — amber so it reads as a
+   deliberate state, not an error. */
+.kept-note { margin-top: 10px; color: var(--amber); line-height: 1.5;
+  border-left: 2px solid var(--amber); padding-left: 8px; }
 
 /* scrollbars in the bay spirit */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
