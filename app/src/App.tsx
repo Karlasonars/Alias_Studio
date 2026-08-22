@@ -1,14 +1,42 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { JobResults, JobSummary, PipelineEvent, SetupState } from './types'
+import type { JobResults, JobSummary, LogLine, PipelineEvent, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
 import Loop from './components/Loop'
+import Settings from './components/Settings'
+import ThemeSwitcher from './components/ThemeSwitcher'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings'
+
+const LOG_LIMIT = 2000
+
+// One readable line per pipeline-event, for the raw console feed — this is
+// deliberately separate from `stages` (which keeps only the latest message
+// per stage, for the progress bars). Returns null for events with nothing
+// worth showing verbatim.
+function formatLogLine(payload: PipelineEvent): string | null {
+  switch (payload.event) {
+    case 'job':
+      return `job ${payload.job_id ?? '?'} started`
+    case 'progress': {
+      const stage = (payload.stage ?? '?').toUpperCase()
+      const pct = typeof payload.fraction === 'number' && payload.fraction >= 0
+        ? ` (${Math.round(payload.fraction * 100)}%)`
+        : ''
+      return `[${stage}]${pct} ${payload.message ?? ''}`.trimEnd()
+    }
+    case 'result':
+      return payload.ok ? 'job finished' : `job failed: ${payload.error ?? 'unknown error'}`
+    case 'exited':
+      return `pipeline exited unexpectedly (code ${payload.code ?? '?'})`
+    default:
+      return null
+  }
+}
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
@@ -19,9 +47,26 @@ export default function App() {
   const [stages, setStages] = useState<Record<string, { fraction: number; message: string }>>({})
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
+  const [log, setLog] = useState<LogLine[]>([])
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
+  const logIdRef = useRef(0)
   activeJobRef.current = activeJob
+
+  const appendLog = useCallback((payload: PipelineEvent) => {
+    const text = formatLogLine(payload)
+    if (!text) return
+    setLog((prev) => {
+      const line: LogLine = {
+        id: ++logIdRef.current,
+        time: new Date().toLocaleTimeString([], { hour12: false }),
+        text
+      }
+      const next = prev.length >= LOG_LIMIT ? prev.slice(prev.length - LOG_LIMIT + 1) : prev.slice()
+      next.push(line)
+      return next
+    })
+  }, [])
 
   const refreshJobs = useCallback(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
@@ -53,6 +98,7 @@ export default function App() {
   useEffect(() => {
     let disposed = false
     listen<PipelineEvent>('pipeline-event', ({ payload }) => {
+      appendLog(payload)
       if (payload.event === 'job' && payload.job_id) {
         setActiveJob(payload.job_id)
         setResults(null)
@@ -77,7 +123,11 @@ export default function App() {
         }
       } else if (payload.event === 'exited') {
         setRunning(false)
-        setRunError('The pipeline exited unexpectedly. Resume the job to continue from its last checkpoint.')
+        const detail = payload.stderr?.trim()
+        setRunError(
+          'The pipeline exited unexpectedly. Resume the job to continue from its last checkpoint.' +
+            (detail ? `\n\n${detail}` : '')
+        )
       }
     }).then((un) => {
       if (disposed) un()
@@ -87,16 +137,17 @@ export default function App() {
       disposed = true
       unlistenRef.current?.()
     }
-  }, [refreshJobs])
+  }, [refreshJobs, appendLog])
 
   const startRun = useCallback(
-    async (source: string, llm: string, captions: string) => {
+    async (source: string, llm: string, captions: string, gameplayAmount: number) => {
       setRunning(true)
+      setLog([])
       setRunError(null)
       setStages({})
       setResults(null)
       setActiveJob(null)
-      await api.runJob(source, llm, captions)
+      await api.runJob(source, llm, captions, gameplayAmount)
     },
     []
   )
@@ -108,10 +159,12 @@ export default function App() {
     if (r.render?.outputs?.length) setView('review')
   }, [])
 
-  if (view === 'boot') return <div className="boot" />
+  let content: ReactElement
 
-  if (view === 'onboarding' && setup) {
-    return (
+  if (view === 'boot') {
+    content = <div className="boot" />
+  } else if (view === 'onboarding' && setup) {
+    content = (
       <Onboarding
         onDone={() => {
           api.markOnboarded()
@@ -120,48 +173,57 @@ export default function App() {
         }}
       />
     )
-  }
-
-  if (view === 'loop') {
-    return <Loop onBack={() => setView('studio')} />
-  }
-
-  if (view === 'review' && results) {
-    return (
+  } else if (view === 'loop') {
+    content = <Loop onBack={() => setView('studio')} />
+  } else if (view === 'settings') {
+    content = <Settings onBack={() => setView('studio')} />
+  } else if (view === 'review' && results) {
+    content = (
       <Review
         results={results}
         onBack={() => {
           setView('studio')
           refreshJobs()
         }}
-        onRestyle={(captions, camera) => {
+        onRestyle={(captions, camera, gameplayAmount) => {
           setRunning(true)
           setRunError(null)
           setStages({})
+          setLog([])
           setActiveJob(results.job_id)
           setView('studio')
-          api.resumeJob(results.job_id, undefined, captions, camera)
+          api.resumeJob(results.job_id, undefined, captions, camera, gameplayAmount)
+        }}
+      />
+    )
+  } else {
+    content = (
+      <Studio
+        jobs={jobs}
+        running={running}
+        stages={stages}
+        error={runError}
+        log={log}
+        onRun={startRun}
+        onOpenLoop={() => setView('loop')}
+        onOpenSettings={() => setView('settings')}
+        onOpenJob={openJob}
+        onResume={(id, llm) => {
+          setRunning(true)
+          setRunError(null)
+          setStages({})
+          setLog([])
+          setActiveJob(id)
+          api.resumeJob(id, llm)
         }}
       />
     )
   }
 
   return (
-    <Studio
-      jobs={jobs}
-      running={running}
-      stages={stages}
-      error={runError}
-      onRun={startRun}
-      onOpenLoop={() => setView('loop')}
-      onOpenJob={openJob}
-      onResume={(id, llm) => {
-        setRunning(true)
-        setRunError(null)
-        setStages({})
-        setActiveJob(id)
-        api.resumeJob(id, llm)
-      }}
-    />
+    <>
+      {content}
+      {view !== 'boot' && <ThemeSwitcher />}
+    </>
   )
 }

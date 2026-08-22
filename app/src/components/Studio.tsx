@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import type { JobSummary } from '../types'
+import { useEffect, useRef, useState } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import type { JobSummary, LogLine } from '../types'
 import KeyModal from './KeyModal'
 
 const STAGE_ORDER = [
@@ -24,17 +25,27 @@ interface Props {
   running: boolean
   stages: Record<string, { fraction: number; message: string }>
   error: string | null
-  onRun: (source: string, llm: string, captions: string) => void
+  log: LogLine[]
+  onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
   onOpenLoop: () => void
+  onOpenSettings: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, log, onRun, onOpenLoop, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
+  const [gameplayAmount, setGameplayAmount] = useState(0)
   const [showKey, setShowKey] = useState(false)
+  const consoleRef = useRef<HTMLDivElement>(null)
+  const showConsole = running || log.length > 0
+
+  useEffect(() => {
+    const el = consoleRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [log])
 
   return (
     <div className="studio">
@@ -42,7 +53,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
       {showKey && <KeyModal onClose={() => setShowKey(false)} />}
       <aside className="rail">
         <header className="rail-brand">
-          <span className="rail-logo">publikclip</span>
+          <span className="rail-logo">Publikclip extra</span>
           <span className="rail-sub">the clipper that shows its work</span>
         </header>
         <div className="rail-jobs">
@@ -69,86 +80,146 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
           </button>
+          <button className="btn-ghost" onClick={onOpenSettings}>
+            ⚙ settings
+          </button>
         </footer>
       </aside>
 
       <main className="stage-area">
-        <section className="input-block">
-          <h1 className="input-heading">
-            FEED IT<span className="amber"> AN HOUR.</span>
-          </h1>
-          <div className="input-row">
-            <input
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && source.trim() && !running && onRun(source.trim(), llm, captions)}
-              placeholder="YouTube URL or a path to a video file"
-              disabled={running}
-            />
-            <button
-              className="btn-primary"
-              onClick={() => onRun(source.trim(), llm, captions)}
-              disabled={running || !source.trim()}
-            >
-              {running ? 'WORKING' : 'CUT IT'}
-            </button>
-          </div>
-          <div className="run-options">
-            <div className="opt-group">
-              <span className="opt-label">brain</span>
-              {['gemini', 'ollama'].map((mode) => (
+        <div className="stage-main">
+          <section className="input-block">
+            <h1 className="input-heading">
+              FEED IT<span className="amber"> AN HOUR.</span>
+            </h1>
+            {/* Attribution, not decoration: this build is a modified
+                publikclip, and publikclip is AGPL-3.0 — saying where it
+                came from is both honest and part of the licence. */}
+            <p className="brand-credit">
+              Publikclip extra is based on{' '}
+              <button
+                className="brand-credit-link"
+                onClick={() =>
+                  openUrl('https://github.com/Blueturboguy07/publikclip').catch(() => {})
+                }
+                title="github.com/Blueturboguy07/publikclip"
+              >
+                publikclip
+              </button>
+              , an open-source (AGPL-3.0) project on GitHub.
+            </p>
+            <div className="input-row">
+              <input
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  source.trim() &&
+                  !running &&
+                  onRun(source.trim(), llm, captions, gameplayAmount)
+                }
+                placeholder="YouTube URL or a path to a video file"
+                disabled={running}
+              />
+              <button
+                className="btn-primary"
+                onClick={() => onRun(source.trim(), llm, captions, gameplayAmount)}
+                disabled={running || !source.trim()}
+              >
+                {running ? 'WORKING' : 'CUT IT'}
+              </button>
+            </div>
+            <div className="run-options">
+              <div className="opt-group">
+                <span className="opt-label">brain</span>
+                {['gemini', 'ollama'].map((mode) => (
+                  <button
+                    key={mode}
+                    className={`opt ${llm === mode ? 'opt-on' : ''}`}
+                    onClick={() => setLlm(mode)}
+                    disabled={running}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              <div className="opt-group">
+                <span className="opt-label">captions</span>
+                {CAPTION_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    className={`opt ${captions === preset ? 'opt-on' : ''}`}
+                    onClick={() => setCaptions(preset)}
+                    disabled={running}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+              <div className="opt-group">
+                <span className="opt-label">framing</span>
                 <button
-                  key={mode}
-                  className={`opt ${llm === mode ? 'opt-on' : ''}`}
-                  onClick={() => setLlm(mode)}
+                  className={`opt ${gameplayAmount === 0 ? 'opt-on' : ''}`}
+                  onClick={() => setGameplayAmount(0)}
                   disabled={running}
                 >
-                  {mode}
+                  podcast
                 </button>
-              ))}
-            </div>
-            <div className="opt-group">
-              <span className="opt-label">captions</span>
-              {CAPTION_PRESETS.map((preset) => (
                 <button
-                  key={preset}
-                  className={`opt ${captions === preset ? 'opt-on' : ''}`}
-                  onClick={() => setCaptions(preset)}
+                  className={`opt ${gameplayAmount === 1 ? 'opt-on' : ''}`}
+                  onClick={() => setGameplayAmount(1)}
                   disabled={running}
                 >
-                  {preset}
+                  gameplay
                 </button>
-              ))}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {(running || Object.keys(stages).length > 0) && (
-          <section className="deck">
-            {STAGE_ORDER.filter((s) => stages[s] || running).map((name, i) => {
-              const st = stages[name]
-              const state = !st ? 'idle' : st.fraction >= 1 ? 'done' : 'live'
-              return (
-                <div className={`deck-row ${state}`} key={name} style={{ animationDelay: `${i * 40}ms` }}>
-                  <span className="deck-name mono">{STAGE_LABELS[name] ?? name.toUpperCase()}</span>
-                  <div className="deck-bar">
-                    <div
-                      className={`deck-fill ${st && st.fraction < 0 ? 'indeterminate' : ''}`}
-                      style={st && st.fraction >= 0 ? { width: `${Math.min(100, st.fraction * 100)}%` } : undefined}
-                    />
+          {(running || Object.keys(stages).length > 0) && (
+            <section className="deck">
+              {STAGE_ORDER.filter((s) => stages[s] || running).map((name, i) => {
+                const st = stages[name]
+                const state = !st ? 'idle' : st.fraction >= 1 ? 'done' : 'live'
+                return (
+                  <div className={`deck-row ${state}`} key={name} style={{ animationDelay: `${i * 40}ms` }}>
+                    <span className="deck-name mono">{STAGE_LABELS[name] ?? name.toUpperCase()}</span>
+                    <div className="deck-bar">
+                      <div
+                        className={`deck-fill ${st && st.fraction < 0 ? 'indeterminate' : ''}`}
+                        style={st && st.fraction >= 0 ? { width: `${Math.min(100, st.fraction * 100)}%` } : undefined}
+                      />
+                    </div>
+                    <span className="deck-msg">{st?.message ?? ''}</span>
                   </div>
-                  <span className="deck-msg">{st?.message ?? ''}</span>
-                </div>
-              )
-            })}
-          </section>
-        )}
+                )
+              })}
+            </section>
+          )}
 
-        {error && (
-          <section className="error-block">
-            <span className="led led-err" />
-            {error}
-          </section>
+          {error && (
+            <section className="error-block">
+              <span className="led led-err" />
+              {error}
+            </section>
+          )}
+        </div>
+
+        {showConsole && (
+          <aside className="console">
+            <div className="console-head">
+              <span className="led led-on" />
+              <span className="console-title mono">LIVE FEED</span>
+            </div>
+            <div className="console-body mono" ref={consoleRef}>
+              {log.length === 0 && <p className="console-empty">waiting for the pipeline to say something…</p>}
+              {log.map((line) => (
+                <p key={line.id} className="console-line">
+                  <span className="console-time">{line.time}</span> {line.text}
+                </p>
+              ))}
+            </div>
+          </aside>
         )}
       </main>
     </div>

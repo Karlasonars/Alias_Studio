@@ -19,7 +19,7 @@ const CAMERA_MODES: [string, string][] = [
 interface Props {
   results: JobResults
   onBack: () => void
-  onRestyle: (captions: string, camera: string) => void
+  onRestyle: (captions: string, camera: string, gameplayAmount: number) => void
 }
 
 const RULE_LABELS: Record<string, string> = {
@@ -50,11 +50,17 @@ export default function Review({ results, onBack, onRestyle }: Props) {
   const [selected, setSelected] = useState(0)
   const [exported, setExported] = useState<Record<number, string>>({})
   const currentPreset = results.render?.caption_preset ?? 'classic'
+  const currentCameraMode = results.camera?.camera_settings?.speaker_change ?? 'cut'
+  const currentGameplayAmount = results.camera?.camera_settings?.gameplay_amount ?? 0
   const [restylePreset, setRestylePreset] = useState(currentPreset)
-  const [restyleCamera, setRestyleCamera] = useState('cut')
+  const [restyleCamera, setRestyleCamera] = useState(currentCameraMode)
+  const [restyleGameplay, setRestyleGameplay] = useState(currentGameplayAmount)
   const [editing, setEditing] = useState<number | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const styleChanged = restylePreset !== currentPreset || restyleCamera !== 'cut'
+  const styleChanged =
+    restylePreset !== currentPreset ||
+    restyleCamera !== currentCameraMode ||
+    Math.abs(restyleGameplay - currentGameplayAmount) > 0.001
 
   const pair = useMemo(() => {
     const out = outputs[selected]
@@ -126,10 +132,24 @@ export default function Review({ results, onBack, onRestyle }: Props) {
             {mode}
           </button>
         ))}
+        <span className="opt-label" style={{ marginLeft: 18 }}>
+          framing
+        </span>
+        <span className="slider-end">podcast</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={restyleGameplay}
+          onChange={(e) => setRestyleGameplay(Number(e.target.value))}
+          className="framing-slider"
+        />
+        <span className="slider-end">gameplay</span>
         <button
           className="btn-primary restyle-go"
           disabled={!styleChanged}
-          onClick={() => onRestyle(restylePreset, restyleCamera)}
+          onClick={() => onRestyle(restylePreset, restyleCamera, restyleGameplay)}
           title="re-renders only the changed stages — scores and cuts stay"
         >
           RESTYLE + RE-RENDER

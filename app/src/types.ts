@@ -6,7 +6,119 @@ export interface PipelineEvent {
   job_id?: string
   ok?: boolean
   error?: string
+  stderr?: string
   [key: string]: unknown
+}
+
+export interface LogLine {
+  id: number
+  time: string
+  text: string
+}
+
+/* ---------- copywriting ---------- */
+
+export interface TitleVariant {
+  text: string
+  style: string
+  why: string
+  grounded_in: string
+  chars: number
+  rejected_because?: string
+}
+
+export interface TitlesResult {
+  ok: boolean
+  error?: string
+  titles: TitleVariant[]
+  rejected: TitleVariant[]
+}
+
+export interface DescriptionResult {
+  ok: boolean
+  error?: string
+  /** the caption body, without hashtags */
+  description: string
+  hashtags: string[]
+  /** description + hashtags, ready to paste — what the copy button uses */
+  full: string
+  grounded_in: string
+  /** what the filter changed after the model answered (trimmed, emoji removed…) */
+  warnings: string[]
+  chars: number
+}
+
+export interface HookCandidate {
+  start: number
+  hook_type: string
+  strength: number
+  why: string
+  risk: string
+}
+
+export interface HookResult {
+  ok: boolean
+  error?: string
+  candidates: HookCandidate[]
+  text_hook: string
+  current_start: number
+  current_strength: number | null
+  improves?: boolean
+  note?: string
+}
+
+/* ---------- settings ---------- */
+
+export interface SettingsField {
+  key: string
+  label: string
+  type: 'number' | 'bool' | 'select' | 'color' | 'text' | 'multiselect'
+  help: string
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+  options?: { value: string; label: string }[]
+  options_from?: 'presets' | 'fonts'
+}
+
+export interface SettingsMatrix {
+  key: string
+  label: string
+  help: string
+  columns: string[]
+  column_help: Record<string, string>
+  min: number
+  max: number
+  step: number
+}
+
+export interface SettingsGroup {
+  key: string
+  label: string
+  help: string
+  cost: 'cheap' | 'moderate' | 'high'
+  cost_note: string
+  fields: SettingsField[]
+  matrix?: SettingsMatrix
+}
+
+export type CaptionPreset = Record<string, string | number | boolean>
+
+export interface SettingsPayload {
+  ok: boolean
+  error?: string
+  defaults: Record<string, unknown>
+  factory: Record<string, unknown>
+  schema: {
+    groups: SettingsGroup[]
+    caption_fields: SettingsField[]
+    fonts: string[]
+    builtin_presets: Record<string, CaptionPreset>
+  }
+  presets: Record<string, CaptionPreset>
+  preset_names: string[]
+  edited_presets: string[]
 }
 
 export interface Adjustment {
@@ -68,6 +180,19 @@ export interface JobResults {
   render: { outputs: RenderOutput[]; emoji_ok: boolean; caption_preset: string } | null
   events: { counts: Record<string, number>; timeline: unknown[]; arousal_source: string } | null
   candidates: { count: number; effective_weights: Record<string, number>; heatmap_present: boolean } | null
+  camera: {
+    trajectories: Record<string, string>
+    stats: { clip: number; tracks: number; switch_cuts: number; shot_cuts: number; punches: number }[]
+    camera_settings: {
+      speaker_change: string
+      pan_duration_s: number
+      deadzone_frac: number
+      punch_in: boolean
+      punch_in_sensitivity: number
+      zoom_lock_per_scene: boolean
+      gameplay_amount: number
+    }
+  } | null
 }
 
 export interface JobSummary {

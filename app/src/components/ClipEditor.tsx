@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { api } from '../api'
+import type { DescriptionResult, HookResult, TitlesResult } from '../types'
 
 /**
  * The per-clip timeline editor. One horizontal timeline over a ±45s context
@@ -20,9 +21,47 @@ interface OverlayItem {
 interface EditState {
   start: number; end: number
   caption_preset: string | null; camera_mode: string | null
+  gameplay_amount: number | null
+  title: string
+  title_variants: { text: string; style: string; why: string; chars: number }[]
+  description: string
+  description_meta: Record<string, unknown>
   remove_dead_space: boolean; disabled_cuts: number[]
   overlays: OverlayItem[]
+  // Per-clip overrides of the re-render-cost settings. Partial patches:
+  // anything absent inherits the job's value.
+  pacing: Record<string, number>
+  caption_overrides: Record<string, string | number | boolean>
+  lufs_target: number | null
+  true_peak_db: number | null
 }
+
+/** The re-render-cost knobs, surfaced here so a clip can be tuned where the
+ *  result is visible instead of in the global settings panel. Ranges and help
+ *  text mirror settings_schema.py; kept short deliberately — this is the
+ *  "while I'm looking at the clip" subset, not the whole panel. */
+const PACING_FIELDS: { key: string; label: string; min: number; max: number; step: number; help: string }[] = [
+  { key: 'min_cut_gap', label: 'shortest silence to cut', min: 0.1, max: 5, step: 0.05,
+    help: 'Silences shorter than this are always kept. Lower = tighter edit.' },
+  { key: 'breath_pad', label: 'breathing room', min: 0, max: 1, step: 0.05,
+    help: "Kept on each side of a cut so it doesn't clip the start of words." },
+  { key: 'event_protect_s', label: 'protect around reactions', min: 0, max: 6, step: 0.1,
+    help: 'Pauses this close to laughter are comedic timing and never trimmed.' },
+  { key: 'natural_pause_max', label: 'natural pause limit', min: 0, max: 4, step: 0.1,
+    help: 'Post-sentence pauses up to this long read as normal cadence.' }
+]
+
+const CAPTION_QUICK: { key: string; label: string; type: 'number' | 'color' | 'bool'; min?: number; max?: number; step?: number; help: string }[] = [
+  { key: 'size', label: 'font size', type: 'number', min: 20, max: 200, step: 2,
+    help: 'Cap height in a 1080x1920 frame.' },
+  { key: 'margin_v', label: 'distance from bottom', type: 'number', min: 0, max: 1400, step: 10,
+    help: 'Keep clear of platform UI — and of the letterbox bar at high gameplay framing.' },
+  { key: 'max_words', label: 'words per caption', type: 'number', min: 1, max: 12, step: 1,
+    help: 'Fewer words = faster turnover, more urgent feel.' },
+  { key: 'active', label: 'active word', type: 'color', help: 'The karaoke highlight colour.' },
+  { key: 'primary', label: 'word colour', type: 'color', help: 'Base colour of inactive words.' },
+  { key: 'uppercase', label: 'uppercase', type: 'bool', help: 'Force capitals.' }
+]
 interface EditContext {
   ok: boolean
   window: { start: number; end: number }
@@ -36,6 +75,11 @@ interface EditContext {
   events: { type: string; start: number; end: number }[]
   auto_cuts: Cut[]
   run_caption_preset: string
+  // The job's values behind the per-clip overrides, so the editor can show
+  // what "inherit" currently resolves to instead of a blank control.
+  pacing: Record<string, number>
+  caption_style: Record<string, string | number | boolean>
+  audio: { lufs_target: number; true_peak_db: number }
 }
 
 const PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
@@ -58,10 +102,16 @@ interface Props {
 export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Props) {
   const [ctx, setCtx] = useState<EditContext | null>(null)
   const [edit, setEdit] = useState<EditState | null>(null)
+  const [showTuning, setShowTuning] = useState(false)
   const [rendering, setRendering] = useState(false)
   const [renderMsg, setRenderMsg] = useState('')
   const [suggesting, setSuggesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [titles, setTitles] = useState<TitlesResult | null>(null)
+  const [hook, setHook] = useState<HookResult | null>(null)
+  const [description, setDescription] = useState<DescriptionResult | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [copyBusy, setCopyBusy] = useState<'titles' | 'description' | 'hook' | null>(null)
   const [selectedOverlay, setSelectedOverlay] = useState<string | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ kind: string; id?: string; edge?: 'l' | 'r' } | null>(null)
@@ -357,6 +407,13 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
   }
 
   const activeCuts = ctx.auto_cuts
+  // How many re-render settings this clip overrides, so the collapsed bar can
+  // say "you changed things in here" without being opened.
+  const tunedCount =
+    Object.keys(edit.pacing ?? {}).length +
+    Object.keys(edit.caption_overrides ?? {}).length +
+    (edit.lufs_target !== null && edit.lufs_target !== undefined ? 1 : 0) +
+    (edit.true_peak_db !== null && edit.true_peak_db !== undefined ? 1 : 0)
 
   return (
     <div className="editor-shell">
@@ -455,6 +512,24 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
             {c}
           </button>
         ))}
+        <span className="opt-label" style={{ marginLeft: 14 }}>framing</span>
+        <span className="slider-end">podcast</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={edit.gameplay_amount ?? 0}
+          onChange={(e) => setEdit({ ...edit, gameplay_amount: Number(e.target.value) })}
+          onMouseUp={(e) =>
+            persist({ ...edit, gameplay_amount: Number((e.target as HTMLInputElement).value) })
+          }
+          onTouchEnd={(e) =>
+            persist({ ...edit, gameplay_amount: Number((e.target as HTMLInputElement).value) })
+          }
+          className="framing-slider"
+        />
+        <span className="slider-end">gameplay</span>
         <button
           className={`opt ${edit.remove_dead_space ? 'opt-on' : ''}`}
           style={{ marginLeft: 14 }}
@@ -462,6 +537,391 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
         >
           ✂ remove dead space
         </button>
+      </div>
+
+      {/* Its own bar rather than another pill in the row above: these are the
+          knobs people actually hunt for, and a small toggle lost among the
+          preset buttons is the same as not shipping them. */}
+      <button
+        className={`editor-tune-bar ${showTuning ? 'editor-tune-bar-on' : ''}`}
+        onClick={() => setShowTuning((v) => !v)}
+      >
+        <span className="editor-tune-caret mono">{showTuning ? '▾' : '▸'}</span>
+        <span className="editor-tune-title">Fine-tune this clip</span>
+        <span className="editor-tune-sub mono">
+          dead space · subtitle size, colours &amp; position · loudness
+        </span>
+        {tunedCount > 0 && <span className="settings-badge mono">{tunedCount}</span>}
+        <span className="editor-tune-cost mono">re-render only</span>
+      </button>
+
+      {showTuning && (
+        <div className="editor-tuning">
+          <p className="editor-tuning-note mono">
+            per-clip overrides · cost: re-render only · blank = inherit the job
+          </p>
+
+          <div className="editor-tuning-cols">
+            <section>
+              <h4 className="editor-tuning-h">Dead space</h4>
+              {PACING_FIELDS.map((f) => {
+                const active = edit.pacing?.[f.key]
+                const shown = active ?? ctx.pacing?.[f.key] ?? 0
+                return (
+                  <div className="tune-row" key={f.key}>
+                    <label className="tune-label" title={f.help}>
+                      {f.label}
+                      {active !== undefined && <span className="set-dot" />}
+                    </label>
+                    <input
+                      type="range" min={f.min} max={f.max} step={f.step} value={shown}
+                      onChange={(e) =>
+                        setEdit({ ...edit, pacing: { ...edit.pacing, [f.key]: Number(e.target.value) } })
+                      }
+                      onMouseUp={(e) =>
+                        persist({
+                          ...edit,
+                          pacing: { ...edit.pacing, [f.key]: Number((e.target as HTMLInputElement).value) }
+                        })
+                      }
+                      className="framing-slider tune-slider"
+                    />
+                    <span className="tune-val mono">{Number(shown).toFixed(2)}s</span>
+                    {active !== undefined && (
+                      <button
+                        className="btn-ghost tune-reset"
+                        title="inherit the job's value"
+                        onClick={() => {
+                          const next = { ...edit.pacing }
+                          delete next[f.key]
+                          persist({ ...edit, pacing: next })
+                        }}
+                      >
+                        ↺
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {!edit.remove_dead_space && (
+                <p className="tune-hint">
+                  Turn on “remove dead space” to apply these.
+                </p>
+              )}
+            </section>
+
+            <section>
+              <h4 className="editor-tuning-h">Subtitles</h4>
+              {CAPTION_QUICK.map((f) => {
+                const active = edit.caption_overrides?.[f.key]
+                const base = ctx.caption_style?.[f.key]
+                const shown = active ?? base
+                const set = (v: string | number | boolean) =>
+                  persist({ ...edit, caption_overrides: { ...edit.caption_overrides, [f.key]: v } })
+                return (
+                  <div className="tune-row" key={f.key}>
+                    <label className="tune-label" title={f.help}>
+                      {f.label}
+                      {active !== undefined && <span className="set-dot" />}
+                    </label>
+                    {f.type === 'number' && (
+                      <>
+                        <input
+                          type="range" min={f.min} max={f.max} step={f.step}
+                          value={Number(shown ?? 0)}
+                          onChange={(e) =>
+                            setEdit({
+                              ...edit,
+                              caption_overrides: {
+                                ...edit.caption_overrides,
+                                [f.key]: Number(e.target.value)
+                              }
+                            })
+                          }
+                          onMouseUp={(e) => set(Number((e.target as HTMLInputElement).value))}
+                          className="framing-slider tune-slider"
+                        />
+                        <span className="tune-val mono">{Number(shown ?? 0)}</span>
+                      </>
+                    )}
+                    {f.type === 'color' && (
+                      <input
+                        type="color"
+                        value={String(shown ?? '#FFFFFF')}
+                        onChange={(e) => set(e.target.value.toUpperCase())}
+                        className="tune-color"
+                      />
+                    )}
+                    {f.type === 'bool' && (
+                      <button className={`opt ${shown ? 'opt-on' : ''}`} onClick={() => set(!shown)}>
+                        {shown ? 'on' : 'off'}
+                      </button>
+                    )}
+                    {active !== undefined && (
+                      <button
+                        className="btn-ghost tune-reset"
+                        title="inherit the job's value"
+                        onClick={() => {
+                          const next = { ...edit.caption_overrides }
+                          delete next[f.key]
+                          persist({ ...edit, caption_overrides: next })
+                        }}
+                      >
+                        ↺
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </section>
+
+            <section>
+              <h4 className="editor-tuning-h">Audio</h4>
+              {([
+                ['lufs_target', 'loudness', -30, -8, 0.5, 'LUFS'],
+                ['true_peak_db', 'peak ceiling', -6, 0, 0.1, 'dB']
+              ] as const).map(([key, label, min, max, step, unit]) => {
+                const active = edit[key]
+                const shown = active ?? ctx.audio?.[key] ?? 0
+                return (
+                  <div className="tune-row" key={key}>
+                    <label className="tune-label">
+                      {label}
+                      {active !== null && active !== undefined && <span className="set-dot" />}
+                    </label>
+                    <input
+                      type="range" min={min} max={max} step={step} value={shown}
+                      onChange={(e) => setEdit({ ...edit, [key]: Number(e.target.value) })}
+                      onMouseUp={(e) =>
+                        persist({ ...edit, [key]: Number((e.target as HTMLInputElement).value) })
+                      }
+                      className="framing-slider tune-slider"
+                    />
+                    <span className="tune-val mono">
+                      {Number(shown).toFixed(1)} {unit}
+                    </span>
+                    {active !== null && active !== undefined && (
+                      <button
+                        className="btn-ghost tune-reset"
+                        onClick={() => persist({ ...edit, [key]: null })}
+                        title="inherit the job's value"
+                      >
+                        ↺
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </section>
+          </div>
+        </div>
+      )}
+
+      {/* copy: titles + hook. Both are on-demand AI calls, so nothing here
+          runs until asked — and neither touches the render. */}
+      <div className="copy-block">
+        <div className="copy-col">
+          <div className="copy-head">
+            <span className="opt-label">titles</span>
+            <button
+              className="btn-secondary copy-go"
+              disabled={copyBusy !== null}
+              onClick={async () => {
+                setCopyBusy('titles')
+                setError(null)
+                try {
+                  const res = await api.clipTitles(jobId, clipIndex)
+                  if (res.ok) setTitles(res)
+                  else setError(res.error ?? 'title generation failed')
+                } catch (err) {
+                  setError(String(err))
+                } finally {
+                  setCopyBusy(null)
+                }
+              }}
+            >
+              {copyBusy === 'titles' ? 'writing…' : titles ? 'regenerate' : 'generate'}
+            </button>
+          </div>
+
+          {edit.title && (
+            <p className="copy-chosen">
+              <span className="mono copy-chosen-tag">chosen</span> {edit.title}
+            </p>
+          )}
+
+          {titles?.titles.map((t, i) => (
+            <button
+              key={i}
+              className={`copy-title ${edit.title === t.text ? 'copy-title-on' : ''}`}
+              onClick={() => persist({ ...edit, title: t.text })}
+              title={t.why}
+            >
+              <span className="copy-title-text">{t.text}</span>
+              <span className="copy-title-meta mono">
+                {t.style} · {t.chars}
+              </span>
+            </button>
+          ))}
+          {titles && titles.titles.length === 0 && (
+            <p className="copy-empty">
+              every variant was rejected by your title rules — loosen the length
+              limits or allow questions/numbers in Settings
+            </p>
+          )}
+          {titles && titles.rejected.length > 0 && (
+            <p className="copy-empty mono">
+              {titles.rejected.length} rejected ({titles.rejected[0].rejected_because})
+            </p>
+          )}
+        </div>
+
+        <div className="copy-col">
+          <div className="copy-head">
+            <span className="opt-label">description</span>
+            <button
+              className="btn-secondary copy-go"
+              disabled={copyBusy !== null}
+              onClick={async () => {
+                setCopyBusy('description')
+                setError(null)
+                try {
+                  const res = await api.clipDescription(jobId, clipIndex)
+                  if (res.ok) {
+                    setDescription(res)
+                    // `full` is what gets pasted, so that's what we keep on
+                    // the clip — the parts stay in `description` for display.
+                    persist({ ...edit, description: res.full })
+                  } else setError(res.error ?? 'description generation failed')
+                } catch (err) {
+                  setError(String(err))
+                } finally {
+                  setCopyBusy(null)
+                }
+              }}
+            >
+              {copyBusy === 'description'
+                ? 'writing…'
+                : edit.description
+                  ? 'regenerate'
+                  : 'generate'}
+            </button>
+          </div>
+
+          {edit.description ? (
+            <>
+              <textarea
+                className="copy-desc mono"
+                value={edit.description}
+                spellCheck={false}
+                onChange={(e) => setEdit({ ...edit, description: e.target.value })}
+                onBlur={() => persist(edit)}
+              />
+              <div className="copy-desc-foot">
+                <button
+                  className="btn-secondary copy-copy"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(edit.description)
+                      setCopied(true)
+                      window.setTimeout(() => setCopied(false), 1600)
+                    } catch {
+                      setError('could not reach the clipboard')
+                    }
+                  }}
+                >
+                  {copied ? 'COPIED ✓' : '⧉ COPY'}
+                </button>
+                <span className="copy-desc-meta mono">
+                  {edit.description.length} chars
+                  {description?.hashtags?.length
+                    ? ` · ${description.hashtags.length} hashtags`
+                    : ''}
+                </span>
+              </div>
+              {description?.warnings?.length ? (
+                <p className="copy-empty mono">{description.warnings.join(' · ')}</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="copy-empty">
+              the caption pasted under the video — longer than the title, and
+              carrying the context and searchable words it had no room for
+            </p>
+          )}
+        </div>
+
+        <div className="copy-col">
+          <div className="copy-head">
+            <span className="opt-label">hook</span>
+            <button
+              className="btn-secondary copy-go"
+              disabled={copyBusy !== null}
+              onClick={async () => {
+                setCopyBusy('hook')
+                setError(null)
+                try {
+                  const res = await api.clipHook(jobId, clipIndex)
+                  if (res.ok) setHook(res)
+                  else setError(res.error ?? 'hook analysis failed')
+                } catch (err) {
+                  setError(String(err))
+                } finally {
+                  setCopyBusy(null)
+                }
+              }}
+            >
+              {copyBusy === 'hook' ? 'analysing…' : hook ? 're-analyse' : 'analyse opening'}
+            </button>
+          </div>
+
+          {hook?.note && <p className="copy-empty">{hook.note}</p>}
+          {hook && !hook.note && (
+            <p className="copy-verdict">
+              {hook.improves ? (
+                <>a stronger opening is available</>
+              ) : (
+                <>your current opening is the strongest one found</>
+              )}
+              {hook.current_strength !== null && (
+                <span className="mono"> · now {hook.current_strength}/10</span>
+              )}
+            </p>
+          )}
+
+          {hook?.candidates.map((c, i) => {
+            const isCurrent = Math.abs(c.start - hook.current_start) < 0.25
+            return (
+              <div key={i} className={`copy-hook ${isCurrent ? 'copy-hook-now' : ''}`}>
+                <div className="copy-hook-top">
+                  <span className="mono copy-hook-score">{c.strength}</span>
+                  <span className="copy-hook-type mono">{c.hook_type.replace(/_/g, ' ')}</span>
+                  {isCurrent ? (
+                    <span className="copy-hook-now-tag mono">current</span>
+                  ) : (
+                    <button
+                      className="opt copy-hook-use"
+                      onClick={() => persist({ ...edit, start: c.start })}
+                      title={`move the clip start to ${c.start.toFixed(2)}s`}
+                    >
+                      use
+                    </button>
+                  )}
+                </div>
+                <p className="copy-hook-why">{c.why}</p>
+                {c.risk && c.risk.toLowerCase() !== 'none' && (
+                  <p className="copy-hook-risk">risk: {c.risk}</p>
+                )}
+              </div>
+            )
+          })}
+
+          {hook?.text_hook && (
+            <p className="copy-texthook">
+              <span className="mono copy-chosen-tag">on-screen</span> “{hook.text_hook}”
+            </p>
+          )}
+        </div>
       </div>
 
       {/* timeline */}

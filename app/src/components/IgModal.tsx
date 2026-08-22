@@ -72,7 +72,7 @@ export default function IgModal({ onClose }: Props) {
           <>
             <p className="ig-intro">
               Optional. Connect your Instagram through <em>your own</em> Meta app and
-              publikclip calibrates its virality score against how your clips actually
+              Publikclip extra calibrates its virality score against how your clips actually
               perform. Skip it and everything still works — you just keep the
               uncalibrated score. ~10 minutes, once.
             </p>

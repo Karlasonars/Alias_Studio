@@ -29,9 +29,19 @@ fn dirs_home() -> PathBuf {
 /// Command that never flashes a console window on Windows (CREATE_NO_WINDOW).
 /// Every pipeline/tool spawn goes through this — a GUI app popping cmd.exe
 /// windows for each sidecar call reads as malware to most people.
+///
+/// Also forces Python's UTF-8 mode (PEP 540): without it, `open()`/
+/// `Path.write_text()` calls in the pipeline that don't pass an explicit
+/// `encoding=` fall back to the OS locale encoding — cp1252 on a typical
+/// Windows install, not UTF-8. Any non-ASCII character written that way
+/// (an "±" in a scoring rubric string, in this case) becomes an invalid
+/// byte sequence on disk that Rust's own strict UTF-8 file reads then
+/// silently fail on, dropping that whole checkpoint as null with no error
+/// surfaced anywhere. uv/curl and friends ignore the extra env var.
 fn quiet_command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
+    cmd.env("PYTHONUTF8", "1");
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -87,7 +97,13 @@ fn pipeline_invocation() -> (String, Vec<String>) {
 }
 
 #[tauri::command]
-fn run_job(app: AppHandle, source: String, llm: Option<String>, captions: Option<String>) -> Result<(), String> {
+fn run_job(
+    app: AppHandle,
+    source: String,
+    llm: Option<String>,
+    captions: Option<String>,
+    gameplay_amount: Option<f64>,
+) -> Result<(), String> {
     let (program, base_args) = pipeline_invocation();
     std::thread::spawn(move || {
         let mut args = base_args.clone();
@@ -102,6 +118,10 @@ fn run_job(app: AppHandle, source: String, llm: Option<String>, captions: Option
             args.push("--captions".to_string());
             args.push(preset);
         }
+        if let Some(g) = gameplay_amount {
+            args.push("--gameplay-amount".to_string());
+            args.push(g.to_string());
+        }
         stream_pipeline(&app, &program, &args);
     });
     Ok(())
@@ -114,6 +134,7 @@ fn resume_job(
     llm: Option<String>,
     captions: Option<String>,
     camera: Option<String>,
+    gameplay_amount: Option<f64>,
 ) -> Result<(), String> {
     let (program, base_args) = pipeline_invocation();
     std::thread::spawn(move || {
@@ -133,6 +154,10 @@ fn resume_job(
             args.push("--camera".to_string());
             args.push(cam);
         }
+        if let Some(g) = gameplay_amount {
+            args.push("--gameplay-amount".to_string());
+            args.push(g.to_string());
+        }
         stream_pipeline(&app, &program, &args);
     });
     Ok(())
@@ -142,7 +167,7 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
     let child = quiet_command(program)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn();
     let mut child = match child {
         Ok(c) => c,
@@ -154,6 +179,23 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
             return;
         }
     };
+    // Keep the tail of stderr around so a non-zero exit can report *why* —
+    // the sidecar's traceback lands here, not in the JSONL stream on stdout.
+    let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_thread = child.stderr.take().map(|stderr| {
+        let tail = stderr_tail.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let mut buf = tail.lock().unwrap();
+                buf.push_str(&line);
+                buf.push('\n');
+                let excess = buf.len().saturating_sub(4000);
+                if excess > 0 {
+                    buf.replace_range(0..excess, "");
+                }
+            }
+        })
+    });
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Ok(value) = serde_json::from_str::<Value>(&line) {
@@ -161,9 +203,17 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
             }
         }
     }
-    if let Ok(status) = child.wait() {
+    let status = child.wait();
+    if let Some(t) = stderr_thread {
+        let _ = t.join();
+    }
+    if let Ok(status) = status {
         if !status.success() {
-            let _ = app.emit("pipeline-event", json!({"event": "exited", "code": status.code()}));
+            let detail = stderr_tail.lock().unwrap().trim().to_string();
+            let _ = app.emit(
+                "pipeline-event",
+                json!({"event": "exited", "code": status.code(), "stderr": detail}),
+            );
         }
     }
 }
@@ -294,6 +344,31 @@ async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
         Some(v) => Ok(v),
         None => Err(format!(
             "edit tool produced no JSON: {}",
+            String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()
+        )),
+    }
+}
+
+/// Settings panel bridge: `publikclip settings <verb> [...]` → one JSON blob.
+/// Same shape as edit_tool (the pipeline owns the schema and validation; the
+/// panel just renders whatever it is handed).
+#[tauri::command]
+async fn settings_tool(args: Vec<String>) -> Result<Value, String> {
+    let (program, base_args) = pipeline_invocation();
+    let mut full = base_args;
+    full.push("settings".to_string());
+    full.extend(args);
+    let out = quiet_command(&program)
+        .args(&full)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Library import warnings can precede the payload, so take the last JSON line.
+    let line = stdout.lines().rev().find(|l| l.trim_start().starts_with('{'));
+    match line.and_then(|l| serde_json::from_str::<Value>(l).ok()) {
+        Some(v) => Ok(v),
+        None => Err(format!(
+            "settings tool produced no JSON: {}",
             String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()
         )),
     }
@@ -454,6 +529,7 @@ fn main() {
             ig_connect,
             ig_tool,
             edit_tool,
+            settings_tool,
             run_edit_render,
             save_clip_edits,
             save_pexels_key,
