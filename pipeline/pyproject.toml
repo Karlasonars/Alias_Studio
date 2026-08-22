@@ -15,6 +15,11 @@ dependencies = [
     "scikit-learn>=1.5",
     "scipy>=1.14",
     "speechbrain>=1.0",
+    # Pinned to what whisperx 3.8.6 asks for, but named explicitly so the
+    # CUDA index below can target them (uv sources apply to declared deps).
+    "torch~=2.8.0",
+    "torchaudio~=2.8.0",
+    "torchvision~=0.23.0",
     "torchlibrosa>=0.1.0",
     "whisperx==3.8.6",
 ]
@@ -26,6 +31,26 @@ publikclip = "publikclip_pipeline.cli:main"
 dev = [
     "pytest>=8",
 ]
+
+# PyPI serves CPU-only torch wheels on Windows; the CUDA builds live on
+# PyTorch's own index. This has to live in the project (not a one-off
+# `uv pip install`) because the desktop app launches the pipeline through
+# `uv run`, which re-syncs against this file on every launch — a side-loaded
+# CUDA build gets silently replaced by the CPU one and the GPU sits idle.
+#
+# Scoped to Windows: there are no cu128 wheels for macOS, where the CPU
+# build is the only option anyway. Everything downstream degrades safely —
+# hardware.py treats "no CUDA" as a fallback, never an error — so a machine
+# without an NVIDIA GPU just runs on the CPU with this installed.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 
 [build-system]
 requires = ["hatchling"]

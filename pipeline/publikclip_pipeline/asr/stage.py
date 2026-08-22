@@ -54,10 +54,21 @@ class AsrStage(Stage):
         import torch  # deferred: heavy import
         import whisperx
 
-        device = "cpu"  # ctranslate2 has no MPS backend; int8 CPU is the local path
+        from .. import hardware
+
+        # ctranslate2 has no Metal backend, so macOS stays on int8 CPU — but
+        # on a CUDA box this is the difference between ~1x and ~15x realtime,
+        # and it used to be hardcoded to CPU for everyone. Falls back to the
+        # old path automatically when the CUDA runtime isn't usable.
+        device, compute_type = hardware.whisper_device()
+        threads = hardware.cpu_threads()
+        align_device = hardware.torch_device()
+        if device != "cpu":
+            ctx.emit(-1, f"Using GPU ({hardware.gpu_name()}) for transcription…")
         t0 = time.monotonic()
         model = whisperx.load_model(
-            ASR_MODEL, device, compute_type=COMPUTE_TYPE, vad_method="silero"
+            ASR_MODEL, device, compute_type=compute_type,
+            vad_method="silero", threads=threads,
         )
         audio = whisperx.load_audio(str(audio_path))
         duration = float(len(audio)) / 16000.0
@@ -74,15 +85,22 @@ class AsrStage(Stage):
 
         ctx.emit(-1, "Aligning words…")
         t1 = time.monotonic()
-        align_model, align_meta = whisperx.load_align_model(language_code=language, device=device)
+        # Alignment is a torch model, so it follows the torch device rather
+        # than the ctranslate2 one — they can legitimately differ (CUDA
+        # torch missing while ctranslate2's CUDA runtime is present).
+        align_model, align_meta = whisperx.load_align_model(
+            language_code=language, device=align_device
+        )
         aligned = whisperx.align(
-            result["segments"], align_model, align_meta, audio, device,
+            result["segments"], align_model, align_meta, audio, align_device,
             return_char_alignments=False,
         )
         align_secs = time.monotonic() - t1
         del align_model
         gc.collect()
-        if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        if align_device == "cuda":
+            torch.cuda.empty_cache()
+        elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
         segments = []
@@ -116,7 +134,9 @@ class AsrStage(Stage):
         return {
             "language": language,
             "model": ASR_MODEL,
-            "compute_type": COMPUTE_TYPE,
+            "compute_type": compute_type,
+            "device": device,
+            "align_device": align_device,
             "segments": segments,
             "word_count": word_count,
             "benchmark": {

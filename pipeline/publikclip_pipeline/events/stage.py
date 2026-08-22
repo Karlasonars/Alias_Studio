@@ -66,7 +66,9 @@ class EventsStage(Stage):
         from ..vendor.panns import models as panns_models
         from . import dsp, panns_channel, post
 
-        device = torch.device("cpu")
+        from .. import hardware
+
+        device = torch.device(hardware.torch_device())
         bench: dict[str, float] = {}
         events: list[dict] = []
 

@@ -66,7 +66,9 @@ class FaceDetector:
     def __init__(self, model_path: str):
         import onnxruntime as ort
 
-        self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        from .. import hardware
+
+        self.session = ort.InferenceSession(model_path, providers=hardware.onnx_providers())
 
     def detect(self, rgb: np.ndarray, confidence: float = DEFAULT_CONFIDENCE) -> list[FaceBox]:
         """rgb: (MODEL_H, MODEL_W, 3) uint8. Returns normalized (0..1) boxes."""

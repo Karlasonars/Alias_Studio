@@ -174,10 +174,13 @@ class AsdModel:
     def __init__(self, frontend_path: str, backend_path: str):
         import onnxruntime as ort
 
+        from .. import hardware
+
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
-        self.frontend = ort.InferenceSession(frontend_path, opts, providers=["CPUExecutionProvider"])
-        self.backend = ort.InferenceSession(backend_path, opts, providers=["CPUExecutionProvider"])
+        providers = hardware.onnx_providers()
+        self.frontend = ort.InferenceSession(frontend_path, opts, providers=providers)
+        self.backend = ort.InferenceSession(backend_path, opts, providers=providers)
 
     def score_track(self, crops: list[np.ndarray], mfcc: np.ndarray | None, track_start: int) -> list[float]:
         frames = len(crops)

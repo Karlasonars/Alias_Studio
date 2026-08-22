@@ -30,7 +30,9 @@ class DiarizeStage(Stage):
 
         ctx.emit(-1, "Loading speaker model…")
         ckpt = registry.ensure(specs.CAMPPLUS, lambda f, m: ctx.emit(f * 0.2, m))
-        device = torch.device("cpu")
+        from .. import hardware
+
+        device = torch.device(hardware.torch_device())
         model = campplus.load_model(str(ckpt), device)
 
         import librosa
