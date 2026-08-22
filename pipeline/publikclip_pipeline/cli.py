@@ -98,10 +98,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
             settings.camera.speaker_change = args.camera
         if args.gameplay_amount is not None:
             settings.camera.gameplay_amount = args.gameplay_amount
-        new_json = json.dumps(settings.to_json())
-        with queue._connect() as conn:  # noqa: SLF001 — CLI is a queue friend
-            conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (new_json, job.id))
-        job = queue.get_job(args.job_id)
+        # Updates the DB row AND the job-dir snapshot; the clip editor reads
+        # the latter, so writing only one leaves the job disagreeing with
+        # itself about its own settings.
+        job = queue.update_settings(job.id, json.dumps(settings.to_json()))
     return _execute(job, args.jsonl)
 
 

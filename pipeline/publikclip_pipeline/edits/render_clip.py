@@ -319,7 +319,11 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     cmd_path = out_dir / f"clip_{clip_idx:02d}.cmd"
     cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n")
     scale_pad = ",".join(
-        renderer.scale_pad_vf(trajectory.get("content_w", 0), trajectory.get("content_h", 0))
+        renderer.scale_pad_vf(
+            trajectory.get("content_w", 0),
+            trajectory.get("content_h", 0),
+            settings.camera.letterbox_fill,
+        )
     )
     vchain = (
         f"[vc]sendcmd=f={renderer._q(cmd_path)},"  # noqa: SLF001

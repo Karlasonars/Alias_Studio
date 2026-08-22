@@ -78,6 +78,33 @@ def test_clip_edit_round_trips_every_field():
     assert ClipEdit.from_json(edit.to_json()).to_json() == edit.to_json()
 
 
+def test_settings_update_reaches_both_stores():
+    """A job holds its settings twice: the DB row (read by run_stages) and
+    <job_dir>/settings.json (read by the per-clip edit path). The bug this
+    guards: restyle updated only the DB, so clips re-rendered with the new
+    settings while the clip editor still showed — and re-rendered with — the
+    old ones, silently reverting any clip touched afterwards."""
+    settings = config.Settings()
+    job = queue.create_job("file", "x.mp4", json.dumps(settings.to_json()))
+
+    settings.camera.gameplay_amount = 1.0
+    settings.caption_preset = "beast"
+    updated = queue.update_settings(job.id, json.dumps(settings.to_json()))
+
+    # the DB row
+    assert updated is not None
+    from_db = config.Settings.from_json(json.loads(updated.settings_json))
+    assert from_db.camera.gameplay_amount == 1.0
+    assert from_db.caption_preset == "beast"
+
+    # the job-dir snapshot the clip editor actually reads
+    on_disk = config.Settings.from_json(
+        json.loads((job.dir / "settings.json").read_text(encoding="utf-8"))
+    )
+    assert on_disk.camera.gameplay_amount == 1.0
+    assert on_disk.caption_preset == "beast"
+
+
 def test_every_settings_group_is_read_by_the_pipeline():
     """Guards the bug this test was written after: PacingSettings was fully
     plumbed — dataclass, JSON, UI schema, a passing unit test of the function

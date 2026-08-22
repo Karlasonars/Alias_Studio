@@ -30,6 +30,9 @@ OUT_W = 1080
 OUT_H = 1920
 X264_CRF = 19
 VT_BITRATE = "10M"
+# Blur strength for the letterbox fill. High enough that the background reads
+# as texture rather than a second, confusing copy of the shot.
+BLUR_SIGMA = 22
 
 _vt_checked: bool | None = None
 
@@ -187,23 +190,63 @@ def hardware_encoder_name(hardware: bool = True) -> str:
     return ""
 
 
-def scale_pad_vf(content_w: float, content_h: float) -> list[str]:
-    """Scale-to-width + center-pad-to-height -vf fragment for a crop window
-    whose aspect ratio doesn't match 9:16 (the gameplay end of the framing
-    dial — see camera.director._resolve_content_box). Degenerates to the
-    original single scale (no pad, no new filter) whenever content is
-    already 9:16-or-narrower, so gameplay_amount=0 has zero rendering
-    regression."""
-    if content_w and content_h:
-        scaled_h = content_h * (OUT_W / content_w)
-        scaled_h = max(2, int(round(scaled_h / 2)) * 2)  # even, for x264/NVENC
-        if scaled_h < OUT_H:
-            pad_y = (OUT_H - scaled_h) // 2
-            return [
-                f"scale={OUT_W}:{scaled_h}:flags=lanczos",
-                f"pad={OUT_W}:{OUT_H}:0:{pad_y}:color=black",
-            ]
-    return [f"scale={OUT_W}:{OUT_H}:flags=lanczos"]
+def letterbox_geometry(content_w: float, content_h: float) -> tuple[int, int] | None:
+    """(scaled_h, pad_y) when this crop needs bars, else None.
+
+    One place for the arithmetic so the black-bar and blurred-bar paths can
+    never disagree about where the image sits.
+    """
+    if not (content_w and content_h):
+        return None
+    scaled_h = content_h * (OUT_W / content_w)
+    scaled_h = max(2, int(round(scaled_h / 2)) * 2)  # even, for x264/NVENC
+    if scaled_h >= OUT_H:
+        return None
+    return scaled_h, (OUT_H - scaled_h) // 2
+
+
+def scale_pad_vf(content_w: float, content_h: float, fill: str = "black") -> list[str]:
+    """Scale-to-width + fill-to-height -vf fragment for a crop window whose
+    aspect ratio doesn't match 9:16 (the gameplay end of the framing dial —
+    see camera.director._resolve_content_box).
+
+    `fill` chooses what occupies the bars: "black", or "blur" for a
+    zoomed, blurred copy of the same frame. Blur costs a second scale plus a
+    gaussian per frame, which is why it is opt-in rather than the default.
+
+    Degenerates to the original single scale (no bars, no extra filters)
+    whenever the content already fills the canvas, so gameplay_amount=0 has
+    zero rendering regression either way.
+    """
+    geometry = letterbox_geometry(content_w, content_h)
+    if geometry is None:
+        return [f"scale={OUT_W}:{OUT_H}:flags=lanczos"]
+    scaled_h, pad_y = geometry
+
+    if fill != "blur":
+        return [
+            f"scale={OUT_W}:{scaled_h}:flags=lanczos",
+            f"pad={OUT_W}:{OUT_H}:0:{pad_y}:color=black",
+        ]
+
+    # The background is the SAME frame blown up to cover the canvas and
+    # blurred, so the bars carry the shot's own colour and motion instead of
+    # two dead black slabs. force_original_aspect_ratio=increase + crop is
+    # what makes it cover rather than letterbox a second time.
+    #
+    # Returned as ONE element with internal ';' on purpose: both callers join
+    # this list with ',' into a single filtergraph, and ',' chains filters
+    # while ';' separates labelled chains. Splitting these across list
+    # elements would produce ",[lb_bg]scale..." — a syntax error. The labels
+    # are prefixed lb_ so they cannot collide with the per-clip edit graph's
+    # own [vc]/[vb]/[ov*] labels.
+    return [
+        f"split=2[lb_a][lb_b]"
+        f";[lb_a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase"
+        f",crop={OUT_W}:{OUT_H},gblur=sigma={BLUR_SIGMA}[lb_bg]"
+        f";[lb_b]scale={OUT_W}:{scaled_h}:flags=lanczos[lb_fg]"
+        f";[lb_bg][lb_fg]overlay=0:{pad_y}"
+    ]
 
 
 def render_clip(
@@ -220,6 +263,7 @@ def render_clip(
     src_h: int = 1080,
     timeout: float = 1800.0,
     hardware_encode: bool = False,
+    letterbox_fill: str = "black",
 ) -> None:
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
@@ -234,7 +278,9 @@ def render_clip(
     vf_parts = [
         f"sendcmd=f={_q(cmd_path)}",
         f"crop@c=w={w0}:h={h0}:x={x0}:y={y0}",
-        *scale_pad_vf(trajectory.get("content_w", 0), trajectory.get("content_h", 0)),
+        *scale_pad_vf(
+            trajectory.get("content_w", 0), trajectory.get("content_h", 0), letterbox_fill
+        ),
         "setsar=1",
     ]
     if ass_path is not None:

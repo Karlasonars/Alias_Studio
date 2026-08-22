@@ -104,6 +104,25 @@ def create_job(source_type: str, source: str, settings_json: str) -> Job:
     return job
 
 
+def update_settings(job_id: str, settings_json: str) -> Job | None:
+    """Change a job's settings in BOTH places that hold them.
+
+    A job's settings live in the DB row (what run_stages reads) and in
+    <job_dir>/settings.json (what the per-clip edit path reads). Writing only
+    one of them splits the job's own state: a restyle would re-render the
+    clips correctly from the DB while the clip editor kept showing — and
+    re-rendering with — the pre-restyle values, silently undoing the restyle
+    for any clip touched afterwards. Both, or neither.
+    """
+    with _connect() as conn:
+        conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (settings_json, job_id))
+    job = get_job(job_id)
+    if job is not None:
+        job.dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(job.dir / "settings.json", json.loads(settings_json))
+    return job
+
+
 def get_job(job_id: str) -> Job | None:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

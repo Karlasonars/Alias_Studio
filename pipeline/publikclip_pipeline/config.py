@@ -212,6 +212,9 @@ class CameraSettings:
     # 0.0 = tight 9:16 face crop. 1.0 = full source frame, letterboxed — for
     # gameplay/facecam content where the tight crop shows only the face.
     gameplay_amount: float = 0.0
+    # What fills the letterbox bars once the crop stops filling the canvas:
+    # 'black', or 'blur' for a zoomed, blurred copy of the same frame.
+    letterbox_fill: str = "black"
 
 
 # ---------------------------------------------------------------------------

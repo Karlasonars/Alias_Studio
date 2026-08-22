@@ -42,6 +42,37 @@ def test_scale_pad_vf_pads_full_frame_source():
     assert parts[1] == f"pad={renderer.OUT_W}:{renderer.OUT_H}:0:656:color=black"
 
 
+def test_blur_fill_produces_one_joinable_fragment():
+    """Both callers join this list with ',' into one filtergraph. ',' chains
+    filters while ';' separates labelled chains, so the blur variant has to
+    arrive as a single element with its own internal ';' — split across
+    elements it would join to ',[lb_a]scale...' and fail to parse."""
+    parts = renderer.scale_pad_vf(1920, 1080, "blur")
+    assert len(parts) == 1
+    assert parts[0].count(";") == 3
+    assert not parts[0].startswith(",") and not parts[0].endswith(";")
+
+
+def test_blur_fill_covers_the_canvas_and_places_the_image_identically():
+    black = renderer.scale_pad_vf(1920, 1080, "black")
+    blur = renderer.scale_pad_vf(1920, 1080, "blur")[0]
+    _, pad_y = renderer.letterbox_geometry(1920, 1080)
+    # the sharp image lands at the same offset in both paths
+    assert f":0:{pad_y}:color=black" in black[1]
+    assert f"overlay=0:{pad_y}" in blur
+    # and the background genuinely covers rather than letterboxing twice
+    assert "force_original_aspect_ratio=increase" in blur
+    assert f"crop={renderer.OUT_W}:{renderer.OUT_H}" in blur
+
+
+def test_blur_fill_is_a_noop_when_nothing_is_letterboxed():
+    """At the podcast end the crop fills the canvas, so asking for blur must
+    not add a blur pass nobody can see."""
+    assert renderer.scale_pad_vf(1080 * 9 / 16, 1080, "blur") == [
+        f"scale={renderer.OUT_W}:{renderer.OUT_H}:flags=lanczos"
+    ]
+
+
 def test_scale_pad_vf_pad_is_zoom_invariant():
     # Punch-in zoom shrinks w/h by the same factor — the pad must be
     # unaffected, since aspect ratio (and thus scaled_h) never changes.

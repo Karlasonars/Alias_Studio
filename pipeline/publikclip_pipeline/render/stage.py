@@ -140,6 +140,7 @@ class RenderStage(Stage):
                     true_peak=ctx.settings.true_peak_db,
                     src_w=src_w, src_h=src_h,
                     hardware_encode=ctx.settings.performance.hardware_encode,
+                    letterbox_fill=ctx.settings.camera.letterbox_fill,
                 )
             except RuntimeError as err:
                 raise StageError(str(err)) from err

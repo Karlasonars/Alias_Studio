@@ -168,6 +168,12 @@ GROUPS: list[dict[str, Any]] = [
         "fields": [
             {"key": "camera.gameplay_amount", "label": "Framing: podcast to gameplay", "type": "number", "min": 0, "max": 1, "step": 0.01,
              "help": "0 = tight crop that follows the speaker's face. 1 = the whole source frame, letterboxed. Use the high end for gameplay with a facecam, where a tight crop shows only the face and none of the game."},
+            {"key": "camera.letterbox_fill", "label": "Letterbox bars", "type": "select",
+             "options": [
+                 {"value": "black", "label": "Black"},
+                 {"value": "blur", "label": "Blurred video"},
+             ],
+             "help": "What fills the bars once the framing dial is wide enough to stop the crop filling the frame. Blurred repeats the same frame zoomed and blurred behind the image, so the bars carry the shot's colour instead of sitting dead — it costs an extra scale and a blur per frame."},
             {"key": "camera.speaker_change", "label": "On speaker change", "type": "select",
              "options": [
                  {"value": "cut", "label": "Hard cut"},
