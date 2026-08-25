@@ -1,0 +1,61 @@
+# Lint config for the pipeline.
+#
+# DELIBERATELY NARROW TO START. The selected rules catch bugs, not style. On an
+# 11,000-line codebase a broad rule set produces hundreds of findings, and the
+# only way to get green is one enormous reformat commit — which is exactly the
+# diff noise CLAUDE.md §9 forbids, and which would bury the first real agent PR.
+#
+# The style rules are listed and commented out below. Turn them on ONE AT A TIME,
+# each in its own commit that changes nothing else. Until then this file's job is
+# to catch the mistakes that actually break things.
+#
+# Run:  uv run ruff check .
+# Fix:  uv run ruff check --fix .
+
+line-length = 100
+target-version = "py312"
+
+# Vendored upstream code is not ours to restyle. See CLAUDE.md §6.
+extend-exclude = ["publikclip_pipeline/vendor"]
+
+[lint]
+select = [
+    "F",    # pyflakes — undefined names, unused imports, f-strings with no
+            #   placeholders. Real bugs, and an agent's most common slip when it
+            #   moves code between files.
+    "B",    # bugbear — mutable default arguments, loop-variable capture in
+            #   closures, `except` that swallows everything.
+    "RUF",  # ruff's own checks — including mutable dataclass defaults, which
+            #   matters here: config.py and timeline.py are almost entirely
+            #   dataclasses.
+    "T20",  # no stray print() — the pipeline talks over JSONL; a print()
+            #   corrupts the stream the Rust layer parses.
+]
+
+ignore = [
+    "B008",  # function call in default arg — argparse patterns rely on it
+]
+
+# --- Turn these on later, one commit each -------------------------------------
+# "E",    # pycodestyle — whitespace and spacing. Big first diff.
+# "I",    # import sorting. Big first diff, zero behaviour change.
+# "UP",   # pyupgrade — this project is 3.12-only, so these are safe wins.
+# "SIM",  # simplifiable constructs. Read each one; some hurt readability in
+#         #   the stage code, where the long form documents the branch.
+# "PTH",  # prefer pathlib. The codebase already does, mostly.
+# "TID",  # tidy imports.
+# ------------------------------------------------------------------------------
+
+[lint.per-file-ignores]
+# Tests read like prose and reach into internals on purpose.
+"tests/*" = ["E402", "F401", "T20"]
+# The CLI is one big argparse surface; its shape is dictated by argparse.
+"publikclip_pipeline/cli.py" = ["B008", "T20"]
+
+[lint.isort]
+known-first-party = ["publikclip_pipeline"]
+
+[format]
+# Not wired into CI yet. Running `ruff format` across the tree is a one-commit
+# decision that should be made deliberately, not discovered in a PR diff.
+quote-style = "double"
