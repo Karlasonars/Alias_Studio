@@ -1,0 +1,46 @@
+# Normalise line endings so a diff shows changes, not platform.
+#
+# Before this file existed, `git status` on a Windows checkout reported 82
+# modified files with 26,550 added and 26,550 deleted lines — none of them a
+# real change. That makes `git diff` useless, `git blame` useless, and every
+# pull request unreadable.
+#
+# Apply once, in a commit that does nothing else:
+#     git add --renormalize .
+#     git commit -m "repo: normalise line endings (.gitattributes)"
+
+* text=auto eol=lf
+
+# Windows-only scripts that must keep CRLF to run.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binaries — never touch these.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.svg   text
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.onnx  binary
+*.pth   binary
+*.tar   binary
+*.bin   binary
+*.npy   binary
+*.mp4   binary
+*.wav   binary
+*.mkv   binary
+*.webm  binary
+*.dmg   binary
+*.exe   binary
+
+# Lockfiles: text, but never worth a review comment.
+uv.lock           text linguist-generated=true
+package-lock.json text linguist-generated=true
+Cargo.lock        text linguist-generated=true
