@@ -35,33 +35,36 @@ widening it silently.
 These are unblocked, take hours not days, and every later task is easier because of
 them. Do them in this order.
 
-### T-01 · E16-F07 — Line endings                              [P0, immediate]
+### T-01 · E16-F07 — Line endings                              [DONE 2026-08-25]
 
 ```
-Blocked by  nothing
-Touches     .gitattributes (new), then a renormalise commit across the tree
-Do not      change any file content in the same commit
+Merged      95f493d  repo: add .gitattributes
 Proves it   guards.yml "No CRLF in tracked text files"
 ```
 
-`git status` currently reports 82 modified files with 26,550 added and 26,550 deleted
-lines, none of them real. Until this is fixed every diff you produce is unreadable,
-which means nobody can review your work.
+Done before the first agent started. Recorded here because the reasoning was
+corrected along the way, and the correction is worth knowing.
 
-Two commits, in this order:
+**What was claimed:** 82 modified files, 26,550 phantom lines, "the repository is
+unreadable". **What was true:** `git ls-files --eol` reports 112 tracked text files
+with LF in the index and **zero** with CRLF. The stored content was always clean.
 
-```bash
-git add .gitattributes && git commit -m "repo: add .gitattributes"
-git add --renormalize . && git commit -m "repo: normalise line endings"
+The real problem was the missing *declaration*: with no `.gitattributes` and no
+`core.autocrlf`, a Windows working tree ends up CRLF while the index stays LF, so the
+same checkout reads clean on Windows and as 82 modified files from Linux. Ambiguity,
+not damage. `git add --renormalize .` touched exactly one file.
+
+**Why it is still in this plan:** the ambiguity would have surfaced as noise in
+someone's PR eventually, and five minutes of work removed it permanently. But the
+severity was wrong, and a plan that never records its own corrections stops being
+worth reading.
+
+### T-02 · Guard tests and lint                        [PARTLY DONE 2026-08-25]
+
 ```
-
-The second commit touches ~82 files and must contain **nothing else**. This is the one
-time a mass-rewrite commit is correct; §9 of `CLAUDE.md` forbids it every other time.
-
-### T-02 · Guard tests and lint                                 [P0, immediate]
-
-```
-Blocked by  T-01
+Merged      d9e8e72  CLAUDE.md, AGENT-WORKPLAN.md, test_house_rules.py, ruff.toml
+Remaining   .github/workflows/guards.yml (new), pull_request: trigger in windows.yml
+Blocked by  nothing
 Touches     pipeline/tests/test_house_rules.py, pipeline/ruff.toml,
             .github/workflows/guards.yml, .github/workflows/windows.yml
 Do not      touch any production source to make the guards pass

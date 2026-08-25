@@ -1,6 +1,6 @@
 # Publikclip — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.4 · **Datums:** 2026-08-22 · **Statuss:** Pārpozicionēts uz vērtības maksimizēšanu; gatavs v0.9 apjoma apstiprināšanai
+**Versija:** 1.5 · **Datums:** 2026-08-25 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -660,7 +660,7 @@ Statusa kolonna: ✅ apstiprināts kodā · ⚠️ nopietnāks nekā domāts · 
 | E4 | **`api.ts` noteikums jau pārkāpts** | 6 tieši `invoke()` izsaukumi ārpus `api.ts`: `ClipEditor.tsx:373,378,382,387` (`save_clip_edits`, `run_edit_render`), `KeyModal.tsx:26,49` (`save_pexels_key`, `save_gemini_key`) | `P1` | [TD2](#313-tehniskais-parāds-kas-jāatrisina-pa-ceļam) |
 | E5 | **Diviem valodām ir rakstīšanas tiesības uz `clip_edits.json`** | `edits/store.py` dokstrings: *"The app writes this file directly (Rust fs) and the pipeline reads it at render-clip time"*. Python puses `save()` ir atomāra; Rust puses rakstīšana nav pārbaudīta, un abas var rakstīt vienlaikus | `P1` | [T10](#312-nepieciešamās-izmaiņas) |
 | E6 | **Tikai 1 no 6 modeļiem ir sha256-piesaistīts** | `models/specs.py` satur 6 `ModelSpec(...)` un vienu `sha256=`. Pārējie pieci tiek pieņemti bez verifikācijas — tieši tā klusā nogriešanas kļūda, ko `5d0c447` labo PANNs gadījumā | `P1` | [E1-F04](#e1--uzstādīšana-un-pirmā-palaišana) |
-| E7 | **Nav `.gitattributes`; CRLF padara repozitoriju nelasāmu** | `git status` rāda 82 modificētus failus; `git diff --numstat` summa: **26 550 pievienotas / 26 550 dzēstas** rindas. Nav nevienas reālas izmaiņas — tikai rindu beigas. Tas padara `git diff` bezjēdzīgu un katru pull request nelasāmu | `P0` | [E16-F07](#e16--izplatīšana-licences-un-kopiena) |
+| E7 | **Nav `.gitattributes` — rindu beigas ir platformatkarīgas** | *Koriģēts v1.5 pēc tiešas pārbaudes.* Repozitorija **saturs vienmēr ir bijis LF**: 112 izsekotu teksta failu indeksā, nulle ar CRLF. Trūka **deklarācijas**: bez `.gitattributes` un bez `core.autocrlf` Windows darba koks nonāk CRLF, kamēr indekss paliek LF, tāpēc viens un tas pats checkout vienā platformā izskatās tīrs, bet citā — 82 modificēti faili ar 26 550 viltus rindām. Nav repozitorija defekts; ir divdomība, kas maksā tikai tad, kad diffi jāpārskata pa vienam | `P1` | [E16-F07](#e16--izplatīšana-licences-un-kopiena) |
 
 ### 6.3. Kopsavilkums
 
@@ -669,6 +669,8 @@ Statusa kolonna: ✅ apstiprināts kodā · ⚠️ nopietnāks nekā domāts · 
 Pēc izlaišanas plāna ([37.3](#373-izsekojamība-nepilnība--prasība--versija)) aktīvās sadalās: **13 pirms beta**, **8 pirms v1.0**, **3 v1.1**, **5 v1.2**, **1 nekavējoties** (E7 repozitorija higiēna), **1 pastāvīga**.
 
 **Trīs secinājumi pēc pirmkoda audita un v1.3 dizaina precizējuma:**
+
+> **v1.5 piezīme par audita ticamību.** Nepilnība E7 tika pārbaudīta tieši un izrādījās pārspīlēta ([E16-F07](#e16--izplatīšana-licences-un-kopiena)). Tas ir atgādinājums, ka arī pirmkoda audits var kļūdīties, kad tas nolasa simptomu (82 modificēti faili) un pieņem cēloni. Katrs `⚠️` un `P0` šajā tabulā ir vērts vienu tiešu pārbaudi, pirms uz tā balsta darbu.
 
 **1. Kodols ir labāks, nekā dokuments pieņēma; malas ir sliktākas.** Konveijers, 223 testi, Windows CI ar reālu instalēšanas pārbaudi un iestatījumu shēma ar izmaksu modeli ir nopietns darbs. Bet divas `P0` problēmas, kuras specifikācija nepiemin — **nav darba atcelšanas** un **34 faila operācijas bez UTF-8** — ir tādas, kuras beta lietotājs atradīs pirmajā stundā.
 
@@ -1904,14 +1906,20 @@ Mērķi 60 minūšu 1080p avotam:
 
 **E16-F07 · Repozitorija higiēna: rindu beigas** · `P0` · izstrāde
 
-> **Jauna prasība v1.2** (nepilnība E7). `git status` uzrāda **82 modificētus failus**; `git diff --numstat` summa ir **26 550 pievienotas / 26 550 dzēstas rindas**, un neviena no tām nav reāla izmaiņa — tikai CRLF pret LF. Praktiskās sekas: `git diff` ir bezjēdzīgs, `git blame` ir bezjēdzīgs, un katrs pull request izskatās pēc pilnas pārrakstīšanas. Bezmaksas projektam, kas cer uz kopienas ieguldījumu ([2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts)), tas ir tiešs šķērslis.
+> **Jauna prasība v1.2, koriģēta v1.5** (nepilnība E7).
+>
+> **Sākotnējais apgalvojums bija pārspīlēts.** v1.2 un v1.3 apgalvoja, ka CRLF "padara repozitoriju nelasāmu". Tieša pārbaude to atspēkoja: `git ls-files --eol` rāda **112 teksta failus ar LF indeksā un nevienu ar CRLF**. Krātuves saturs vienmēr ir bijis tīrs.
+>
+> Reālā problēma ir mazāka un citāda: bez `.gitattributes` un bez `core.autocrlf` **darba koks** uz Windows nonāk CRLF, kamēr indekss paliek LF. Tāpēc tas pats checkout uz Windows izskatās tīrs, bet nolasīts no Linux — 82 modificēti faili. Tā ir divdomība, ne bojājums, un tā maksā tikai tad, kad diffi jāpārskata pa vienam — kas tieši tagad sākas.
+>
+> **Prioritāte tāpēc `P1`, ne `P0`.** Izpildīšana joprojām aizņem piecas minūtes un noņem veselu neskaidrību klasi.
 
 *Pieņemšanas kritēriji:*
 - `.gitattributes` fails saknē ar `* text=auto eol=lf` un tiešiem noteikumiem binārajiem tipiem (`*.png`, `*.onnx`, `*.pth`, `*.ttf`, `*.ico`, `*.icns` → `binary`).
-- Vienreizēja normalizācija (`git add --renormalize .`) atsevišķā commit, kas neko citu nemaina, ar skaidru ziņojumu.
-- Pēc normalizācijas `git status` uz tīras darba kopijas ir tukšs gan Windows, gan macOS, gan Linux.
-- CI pārbaude, kas krīt, ja kāds fails ienāk ar CRLF.
-- `vendor/` koks tiek normalizēts kopā ar pārējo, bet commit ziņojums to nosauc — augšupējais kods paliek saturiski neskarts.
+- Vienreizēja normalizācija (`git add --renormalize .`). Praksē tā skāra **vienu failu** (`captions/fonts/OFL-Anton.txt`), jo pārējais indekss jau bija LF — tāpēc atsevišķs commit nebija vajadzīgs un tas iekļauts kopā ar `.gitattributes`.
+- Pēc tam `git status` uz tīras darba kopijas ir tukšs gan Windows, gan macOS, gan Linux.
+- CI pārbaude, kas krīt, ja kāds fails ienāk ar CRLF (`guards.yml`).
+- `vendor/` koks tiek normalizēts kopā ar pārējo — augšupējais kods paliek saturiski neskarts.
 
 ---
 
@@ -3323,7 +3331,7 @@ Kopā **104 numurētas prasības** 17 epikās, plus 18 ne-funkcionālās ([32](#
 | **E4 `api.ts` noteikums pārkāpts** | TD2 | v1.0 |
 | **E5 divi rakstītāji uz `clip_edits.json`** | T10-B | v1.0 |
 | **E6 5 no 6 modeļiem bez sha256** | E1-F04 | v0.9 |
-| **E7 nav `.gitattributes`** | E16-F07 | nekavējoties |
+| E7 nav `.gitattributes` | E16-F07 | **IZDARĪTS** 2026-08-25 (commit `95f493d`); prioritāte koriģēta `P0` → `P1` |
 
 ### 37.4. Lēmumu žurnāls
 
@@ -3344,7 +3352,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 | D-11 | Koda parakstīšana saglabā `P0`, bet iegūst dokumentētu atkāpšanās ceļu | Bezmaksas projekts nedrīkst bloķēt izlaišanu uz izdevumu, kuram nav budžeta. macOS notarizācija ir prioritāra pār Windows sertifikātu. |
 | D-12 | Nepilnību saraksts pārrakstīts pret pirmkodu; A5 atcelta | Pirmkoda audits (2026-08-22) atrada, ka 5 no 26 apgalvojumiem bija pārspīlēti vai nepareizi, un 7 reālas problēmas nebija reģistrētas. Plānošana uz nepareizas bāzes ir sliktāka par plānošanas trūkumu. |
 | D-13 | Esošie 5 subtitru preseti netiek mainīti, tikai papildināti | Preseta maiņa invalidē renderi katram, kas to lieto. Jauni preseti ir aditīvi. |
-| D-14 | `.gitattributes` ir "nekavējoties", nevis v0.9 | Katra diena bez tā rada vēl vienu commit ar 26 000 viltus rindu izmaiņu. Tas nav izlaišanas jautājums, tas ir higiēnas jautājums, un tas maksā piecas minūtes. |
+| D-14 | `.gitattributes` ir "nekavējoties", nevis v0.9 | Higiēnas, ne izlaišanas jautājums, un maksā piecas minūtes. *Koriģēts v1.5: pamatojums bija pārspīlēts — indekss jau bija LF, tāpēc runa ir par platformu divdomību, ne par 26 000 viltus rindām katrā commit. Lēmums paliek; iemesls ir vājāks.* |
 | **D-16** | **Produkta mērķis ir maksimizēt klipu vērtību pa divām svirām — atlase un iepakojums; mēra veiktspējas rādītājus, ne naudu; vērtības cilpa pārceļas uz v1.1** | Īpašnieka lēmums (2026-08-22). Produkts ir operatoriem, kuri zina, ko dara; viņu problēma nav "kā izgriezt klipus", bet "cik vērtības no ierakstītās stundas". Sekas: jauna vīzija ([2.1](#21-vīzijas-formulējums)), jauna 4. īpašība ([2.3](#23-ceturtā-īpašība-ko-šis-dokuments-pievieno)), jauna [2.7](#27-vērtības-cilpa), jauna epika [E17](#e17--iepakojuma-eksperimenti), [E11](#e11--vērtības-cilpa-un-kalibrācija) paplašināta un pacelta uz v1.1 `P0`, jauna [E4-F09](#e4--momentu-atlase-un-analīze), nomainīta ziemeļzvaigzne ([33.1](#331-ziemeļzvaigzne)), pārkārtots ceļvedis, jauni riski R16–R19. Nauda noraidīta kā mērs: atkarīga no nišas un līgumiem, prasa manuālu ievadi; noturība nāk no API un ir salīdzināma. |
 | **D-15** | **Gemini atslēgas vai Ollama prasība paliek pirmajā ekrānā; nav "bez AI" režīma; P4 persona atcelta** | Īpašnieka lēmums (2026-08-22). Vārti nav berze, ko labot — tie ir līgums: vērtējums bez LLM nav vērts auditēšanu, un tas ir pretrunā ar produkta 2. īpašību. Degradēts trešais ceļš būtu uzturēšanas parāds bez ieņēmumiem ([R15](#352-tehniskie-riski)) apmaiņā pret lietotājiem, kuri spriež par produktu pēc tā sliktākās versijas. Abi ceļi ir bezmaksas, tāpēc tā nav maksas siena. Sekas: nepilnības A3 un E1 atceltas, [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) pārrakstīta no vārtu noņemšanas uz to izmaksu samazināšanu, P4 izņemts no mērķauditorijas ([4.2](#42-ieejas-slieksnis-ir-dizaina-izvēle)). |
 
@@ -3365,7 +3373,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 
 ## Dokumenta beigas
 
-**Versija 1.4 · 2026-08-22**
+**Versija 1.5 · 2026-08-25**
 
 Šis dokuments ir dzīvs. Katra prasība, kas tiek realizēta, tiek atzīmēta; katra, kas atkrīt, tiek marķēta `ATCELTS` ar iemeslu, saglabājot ID. Lēmumu žurnāls ([37.4](#374-lēmumu-žurnāls)) tiek papildināts, nevis pārrakstīts.
 
@@ -3375,6 +3383,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.5 | 2026-08-25 | **Nepilnība E7 koriģēta pēc tiešas pārbaudes** — indekss vienmēr bijis LF (112 failu, 0 CRLF); problēma bija platformu divdomība, ne bojāts repozitorijs. `P0` → `P1`, izdarīts commit `95f493d`. Pievienota piezīme par audita ticamību [6.3](#63-kopsavilkums). Repozitorijā pievienoti `CLAUDE.md`, `AGENT-WORKPLAN.md`, `test_house_rules.py`, `ruff.toml`. |
 | 1.4 | 2026-08-22 | **Pārpozicionēšana uz vērtības maksimizēšanu** (D-16). Jauna vīzija, jauna 4. īpašība ("katrs lēmums tiek pārbaudīts pret rezultātu"), jauna [2.7](#27-vērtības-cilpa) vērtības cilpa, jauna [Plaisa E](#32-kur-ir-plaisa), jauna epika [E17](#e17--iepakojuma-eksperimenti) (6 prasības), [E11](#e11--vērtības-cilpa-un-kalibrācija) pārdēvēta un paplašināta (+2 prasības, F02/F03 → `P0`), jauna [E4-F09](#e4--momentu-atlase-un-analīze), [E10-F03](#e10--eksports-un-publicēšana) → `P0`. Nomainīta ziemeļzvaigzne uz noturības svērtu izvadi uz avota stundu; pārkārtots ceļvedis (v1.1 = cilpa, v1.2 = satura kvalitāte); jauni riski R16–R19 ar definētu atmešanas slieksni. |
 | 1.3 | 2026-08-22 | **Ieejas slieksnis apstiprināts kā dizains** (D-15). Pievienota [4.2](#42-ieejas-slieksnis-ir-dizaina-izvēle); P4 persona atcelta; [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) pārrakstīta no "vārtu noņemšanas" uz "vārtiem, kas ved cauri"; nepilnības A3 un E1 atceltas, pievienota A3b (Ollama ceļš neved cauri); [33.2](#332-aktivācija) sadalīta vārtu un produkta metrikās; R14 pārformulēts kā pieņemts risks. |
 | 1.2 | 2026-08-22 | **Revīzija pret pirmkodu** (commit `5369f34`). Pievienota [6.0](#60-audita-metodika-un-ticamība) (audita metodika), [Kategorija E](#kategorija-e--jaunatklātās-problēmas-nav-specifikācijā) ar 7 jaunām nepilnībām, [E2-F07](#e2--bibliotēka-projekti-un-darba-rinda) (atcelšana), [E16-F07](#e16--izplatīšana-licences-un-kopiena) (`.gitattributes`), D-12…D-14, 4 jauni testi, TD6–TD7. Koriģēti: [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana), [E1-F04](#e1--uzstādīšana-un-pirmā-palaišana), [E1-F06](#e1--uzstādīšana-un-pirmā-palaišana) (`P0`→`P1`), [E7-F02](#e7--subtitri-stils-un-zīmola-komplekti), [E9-F01](#e9--teksti-un-metadati), [E12-F01](#e12--iestatījumi-un-profili), [E12-F05](#e12--iestatījumi-un-profili), [E16-F01](#e16--izplatīšana-licences-un-kopiena), [E16-F04](#e16--izplatīšana-licences-un-kopiena), [T2](#312-nepieciešamās-izmaiņas), [T10](#312-nepieciešamās-izmaiņas), TD1–TD5. Nepilnība A5 atcelta kā nepareiza. |
