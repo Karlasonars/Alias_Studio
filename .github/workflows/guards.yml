@@ -1,0 +1,77 @@
+# The fast gate. Runs on every pull request, finishes in a few minutes, and is
+# the thing that tells an agent it broke a house rule before a human has to read
+# the diff.
+#
+# The heavy end-to-end check (full suite on Windows, NSIS installer, silent
+# install, launch the installed app) lives in windows.yml. That one is the
+# release gate; this one is the review gate.
+#
+# See CLAUDE.md §5 for what each guard protects and why it exists.
+name: guards
+
+on:
+  pull_request:
+  push:
+    branches: [main, win-port]
+  workflow_dispatch:
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: pipeline/uv.lock
+
+      # test_render.py has a @pytest.mark.slow case that resolves ffmpeg the way
+      # the product does. Without a system ffmpeg it would fetch a static build
+      # mid-test — slow, and one more network dependency in the review gate.
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Resolve the pipeline env
+        working-directory: pipeline
+        run: uv sync
+
+      - name: Lint
+        working-directory: pipeline
+        run: uv run ruff check .
+
+      # Run the house rules on their own first. When this job fails, the first
+      # thing the author needs to know is whether it was an invariant or an
+      # ordinary test, and burying it in a 240-test run hides that.
+      - name: House rules
+        working-directory: pipeline
+        run: uv run pytest -q tests/test_house_rules.py
+
+      - name: Full pipeline test suite
+        working-directory: pipeline
+        run: uv run pytest -q
+
+      # A CRLF file makes every later diff unreadable, which is what
+      # .gitattributes exists to prevent — so it is worth failing on.
+      - name: No CRLF in tracked text files
+        run: |
+          bad=$(git ls-files --eol | grep -E '^i/crlf|^i/mixed' || true)
+          if [ -n "$bad" ]; then
+            echo "Tracked files with CRLF or mixed line endings:"
+            echo "$bad"
+            echo "Fix: git add --renormalize . (see .gitattributes)"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Frontend typecheck
+        working-directory: app
+        run: |
+          npm ci
+          npx tsc --noEmit
