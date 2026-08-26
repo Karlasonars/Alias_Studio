@@ -104,7 +104,7 @@ the other stages in the same pass: `asr` and `diarize` have no `artifacts_ok`
 override at all, which may be correct (neither reads a user-facing setting) but is
 undocumented either way.
 
-### T-22 · The settings-group guard cannot see new groups  [P1, found 2026-08-26]
+### T-22 · The settings-group guard cannot see new groups  [DONE 2026-08-26]
 
 ```
 Blocked by  nothing
@@ -129,7 +129,7 @@ hardcoded tuple so it cannot drift again.
 `settings_schema.CAPTION_FIELDS` is 15 more user-facing fields outside that loop. They
 all carry `help` today, but nothing checks that they keep doing so. Extend the test.
 
-### T-23 · `SPECIFICATION.md` has drifted from the code     [P1, found 2026-08-26]
+### T-23 · `SPECIFICATION.md` has drifted from the code  [DONE 2026-08-26]
 
 ```
 Blocked by  nothing
@@ -155,7 +155,7 @@ tell an agent to read it. Specifically wrong today:
 Until this lands, `CLAUDE.md` §1 carries a precedence note. That is a patch over the
 problem, not the fix.
 
-### T-24 · `_load_clip_edits` does not survive an undecodable file  [P1, found 2026-08-26]
+### T-24 · `_load_clip_edits` does not survive an undecodable file  [DONE 2026-08-26]
 
 ```
 Blocked by  nothing
@@ -178,6 +178,32 @@ codepage crashes the render fingerprint rather than degrading (CLAUDE.md §5.9).
 it already had its encoding — so the sweep neither introduced the hazard nor was
 required to fix it. T-06 widened the same handler at the five sites its own change
 made reachable and deliberately left this one; see that PR's "did not do".
+
+### T-25 · Two loose ends from the audit-cleanup batch     [P2, found 2026-08-26]
+
+```
+Blocked by  nothing
+Touches     pipeline/publikclip_pipeline/render/stage.py (_previous_outputs),
+            pipeline/tests/test_house_rules.py (the help threshold)
+Proves it   a test for the first; the second is a one-line decision
+```
+
+Two things T-24 and T-22 surfaced and correctly left alone.
+
+**`_previous_outputs` (`render/stage.py:50`)** carries T-24's exact hazard: reads
+`render.json` as UTF-8, catches `(JSONDecodeError, OSError, KeyError, TypeError)` but
+not `UnicodeDecodeError`. It is reachable only from `run()`, never from
+`artifacts_ok`, so it is a different failure from T-24's — and by §5.9's
+adjacent/consequential test it was adjacent, which is why it is here and not in that
+commit. Correct call; still worth fixing.
+
+**The help-text guard exists twice, at two thresholds.**
+`test_settings.py::test_every_schema_field_has_help_text` requires `len(help) >= 20`
+and covers `GROUPS` plus `CAPTION_FIELDS`. `test_house_rules.py`'s copy requires only
+non-empty. The duplication earns its place — `-k house_rules` deselects the other
+file — but two thresholds for one rule will eventually disagree. Raise the
+house-rules copy to match, or delete it and accept that the guard only runs in the
+full suite. Decide, do not leave both.
 
 ### T-03 · Split `ClipEditor.tsx`                               [P1, before E6]
 
