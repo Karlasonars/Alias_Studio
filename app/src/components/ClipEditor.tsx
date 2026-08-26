@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { api } from '../api'
-import type { DescriptionResult, HookResult, TitlesResult } from '../types'
+import type {
+  Cut,
+  DescriptionResult,
+  EditContext,
+  EditState,
+  HookResult,
+  TitlesResult
+} from '../types'
 
 /**
  * The per-clip timeline editor. One horizontal timeline over a ±45s context
@@ -10,32 +16,6 @@ import type { DescriptionResult, HookResult, TitlesResult } from '../types'
  * click-to-toggle dead-space cuts, and an overlay track with drag/resize/
  * delete + opt-in animation per item. RE-RENDER CLIP applies everything.
  */
-
-interface Word { word: string; start: number; end: number; speaker?: number }
-interface Cut { start: number; end: number; kept: boolean; reason: string }
-interface OverlayItem {
-  id: string; query: string; source: string; image_path: string
-  start: number; end: number; x: number; y: number; scale: number
-  animation: string; phrase: string
-}
-interface EditState {
-  start: number; end: number
-  caption_preset: string | null; camera_mode: string | null
-  gameplay_amount: number | null
-  title: string
-  title_variants: { text: string; style: string; why: string; chars: number }[]
-  description: string
-  description_meta: Record<string, unknown>
-  remove_dead_space: boolean; disabled_cuts: number[]
-  overlays: OverlayItem[]
-  // Per-clip overrides of the re-render-cost settings. Partial patches:
-  // anything absent inherits the job's value.
-  pacing: Record<string, number>
-  caption_overrides: Record<string, string | number | boolean>
-  lufs_target: number | null
-  true_peak_db: number | null
-  letterbox_fill: string | null
-}
 
 /** The re-render-cost knobs, surfaced here so a clip can be tuned where the
  *  result is visible instead of in the global settings panel. Ranges and help
@@ -63,27 +43,6 @@ const CAPTION_QUICK: { key: string; label: string; type: 'number' | 'color' | 'b
   { key: 'primary', label: 'word colour', type: 'color', help: 'Base colour of inactive words.' },
   { key: 'uppercase', label: 'uppercase', type: 'bool', help: 'Force capitals.' }
 ]
-interface EditContext {
-  ok: boolean
-  window: { start: number; end: number }
-  media_path: string
-  probe: { width: number; height: number }
-  trajectory: { fps: number; frames: number[][] } | null
-  edit: EditState
-  words: Word[]
-  rms: number[]
-  rms_grid: number
-  events: { type: string; start: number; end: number }[]
-  auto_cuts: Cut[]
-  run_caption_preset: string
-  // The job's values behind the per-clip overrides, so the editor can show
-  // what "inherit" currently resolves to instead of a blank control.
-  pacing: Record<string, number>
-  caption_style: Record<string, string | number | boolean>
-  audio: { lufs_target: number; true_peak_db: number }
-  letterbox_fill: string
-}
-
 const PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
 const CAMERAS = ['cut', 'pan', 'locked']
 const ANIMS = ['none', 'pop', 'ping']
@@ -133,7 +92,7 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
   const seekPending = useRef<number | null>(null)
 
   const reload = useCallback(() => {
-    invoke<EditContext>('edit_tool', { args: ['context', jobId, String(clipIndex)] })
+    api.editContext(jobId, clipIndex)
       .then((c) => {
         setCtx(c)
         setEdit(c.edit)
@@ -370,27 +329,25 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
 
   async function persist(next: EditState) {
     setEdit(next)
-    await invoke('save_clip_edits', { jobId, edits: { [String(clipIndex)]: next } })
+    await api.saveClipEdits(jobId, clipIndex, next)
   }
 
   async function doRender() {
     if (!edit) return
-    await invoke('save_clip_edits', { jobId, edits: { [String(clipIndex)]: edit } })
+    await api.saveClipEdits(jobId, clipIndex, edit)
     setRendering(true)
     setRenderMsg('starting…')
     setError(null)
-    await invoke('run_edit_render', { jobId, clip: clipIndex })
+    await api.runEditRender(jobId, clipIndex)
   }
 
   async function doSuggest(prefer: string) {
     if (!edit) return
-    await invoke('save_clip_edits', { jobId, edits: { [String(clipIndex)]: edit } })
+    await api.saveClipEdits(jobId, clipIndex, edit)
     setSuggesting(true)
     setError(null)
     try {
-      const res = await invoke<{ ok: boolean; edit?: EditState; error?: string }>('edit_tool', {
-        args: ['suggest-visuals', jobId, String(clipIndex), '--prefer', prefer]
-      })
+      const res = await api.suggestVisuals(jobId, clipIndex, prefer)
       if (res.ok && res.edit) setEdit(res.edit)
       else setError(res.error ?? 'no visuals found')
     } catch (e) {
