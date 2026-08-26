@@ -1,11 +1,15 @@
 # Publikclip Extra — Specification
 
 Everything a new developer needs to understand this project and work on it
-without prior briefing. Written against commit `3dc43c1` (2026-08-22).
+without prior briefing. Written against commit `3dc43c1` (2026-08-22); §5, §15
+and §17 re-verified against the code on 2026-08-26 (T-23), after T-06, T-21,
+T-22 and T-24.
 
 Companion documents: [README.md](README.md) is the user-facing pitch;
-[VENDORED-LICENSES.md](VENDORED-LICENSES.md) covers third-party code; this
-file is the engineering reference.
+[VENDORED-LICENSES.md](VENDORED-LICENSES.md) covers third-party code;
+[CLAUDE.md](CLAUDE.md) is the working rules and **wins on any conflict with
+this file**; this file is the engineering reference for how the built thing
+works.
 
 ---
 
@@ -140,7 +144,7 @@ publikclip/
 │   │   ├── models/               weight registry + specs
 │   │   ├── music/                music brief generation
 │   │   └── vendor/               vendored third-party code (~1 400 lines)
-│   └── tests/                    244 tests
+│   └── tests/                    275 tests
 │
 └── app/                          the desktop shell
     ├── package.json
@@ -376,7 +380,7 @@ Every stage writes its result to `<job_dir>/<stage>.json`:
 ```
 
 On the next run, `run_stages()`
-([jobs/queue.py:295](pipeline/publikclip_pipeline/jobs/queue.py#L295)) asks
+([jobs/queue.py:296](pipeline/publikclip_pipeline/jobs/queue.py#L296)) asks
 each stage `artifacts_ok(ctx, data)`: *given the current settings, is this
 cached result still correct?*
 
@@ -393,21 +397,49 @@ recompute an upstream stage while a downstream stage served output derived
 from the *old* upstream data — new candidate windows with stale scores, or a
 re-directed camera whose trajectories never reach a cached render.
 
-**3. A missing fingerprint key means "unchanged", not "stale".**
+**3. A missing fingerprint key is compared against the factory default.**
 Checkpoints written before a setting existed lack its key. Comparing the
 missing key against the current value would throw away an hour of
 transcription because someone added an unrelated toggle.
-`fingerprint_ok(stored, current, factory)` compares a missing key against the
-**factory default** instead: untouched settings survive, genuinely changed
-ones re-run. Simple boolean fingerprints use `(data.get(key) or {}) != …` for
-the same reason.
+`fingerprint_ok(stored, current, factory)` treats a missing key as the
+factory value: untouched settings survive, genuinely changed ones re-run.
+"Missing means unchanged" is the wrong summary — it is unchanged only while
+the current value is still the default.
+
+Note the shape of `fingerprint_ok` itself: `stored=None` returns `False`
+immediately, so a checkpoint with *no* fingerprint key at all re-runs. When a
+fingerprint is added to a stage that never had one, every checkpoint on disk
+is in exactly that position, which is why those call sites pass
+`data.get(key) or {}` — an empty dict routes each missing key to the factory
+comparison rather than failing the whole check. `camera`'s `clip_framing` and
+`events`' `settings_used` both do this.
 
 ### What each stage currently fingerprints
 
-| Stage | Invalidated by |
-|---|---|
-| `camera` | `camera_settings`, `retention_settings`, `clip_framing` |
-| `render` | `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` |
+All eight, because a two-row version of this table is how a shipped setting
+once stayed dead for a release: the stages absent from it looked like stages
+that did not need one.
+
+| Stage | `artifacts_ok` asks | Rule 3? |
+|---|---|---|
+| `ingest` | media + `audio16k.wav` exist; `source_hash` still matches | n/a |
+| `asr` | **no override** — reads zero settings, so nothing can invalidate it | n/a |
+| `diarize` | **no override** — same | n/a |
+| `events` | `curves.json` exists, then `fingerprint_ok` on `laughter_specialist` | yes |
+| `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
+| `scoring` | strict `==` on `settings_used` (weights + word gate) | no |
+| `camera` | strict `!=` on `camera_settings` and `retention_settings`, plus `clip_framing` | no |
+| `render` | six strict comparisons: `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` | no |
+
+**`fingerprint_ok` has two callers** — `candidates` and `events`. Everything
+else compares strictly, so rule 3 does *not* hold for `scoring`, `camera` or
+`render`: adding a field to `CameraSettings` or to the scoring settings
+invalidates every existing checkpoint for that stage. That is a known gap, not
+a design intent.
+
+`camera`'s `clip_framing` is the only fingerprint that reaches outside
+`Settings` — it reads `clip_edits.json` off disk, so a per-clip framing
+override invalidates the trajectory even when no job-level setting moved.
 
 `caption_style` resolves the preset through the same layers the renderer uses
 (built-in → saved edits → job overrides), so editing a *saved preset* — not
@@ -416,6 +448,10 @@ just a job override — also invalidates the render.
 Each fingerprint deliberately covers **only** what that stage reads. A title
 edit must not force a re-encode; a caption tweak must not re-run the expensive
 camera pass.
+
+The tests for this section are `tests/test_clip_edit_sync.py` (26) and, for
+rule 2 specifically, `test_queue.py:test_a_rerun_stage_invalidates_every_stage_after_it`.
+`tests/test_house_rules.py` does **not** cover the checkpoint contract.
 
 ---
 
@@ -909,27 +945,39 @@ cd pipeline
 uv run pytest -q
 ```
 
-**244 tests**, no video or model I/O in the default run.
+**275 tests**, ~20 s. No *source* media and no model weights — but the
+default run does shell out to ffmpeg, so it needs one on `PATH`.
 
 | File | Tests | Covers |
 |---|---|---|
 | `test_settings.py` | 42 | the settings tree, schema, snapshotting, anti-drift |
-| `test_clip_edit_sync.py` | 23 | editor ⇄ analyzer agreement |
+| `test_insights_sync.py` | 33 | Instagram sync, matching, metric ladder |
+| `test_clip_edit_sync.py` | 26 | editor ⇄ analyzer agreement, render/camera fingerprints |
 | `test_copywriting.py` | 21 | title/hook generation and constraint enforcement |
 | `test_descriptions.py` | 20 | description assembly, hashtags, platform limits |
-| `test_insights_sync.py` | 19 | Instagram sync, matching, metric ladder |
+| `test_instagram_auth.py` | 19 | redirect URIs, code extraction |
+| `test_house_rules.py` | 19 | the invariants in §17, as tests that fail |
+| `test_queue.py` | 16 | checkpoints, the invalidation cascade, the events fingerprint |
 | `test_director.py` | 15 | framing dial, crop geometry, smoothing |
 | `test_performance.py` | 15 | hardware detection, fast scene detect |
 | `test_render.py` | 14 | filtergraph construction, letterbox, verification |
 | `test_rubric.py` | 13 | scoring rubric, corroboration discount |
-| `test_instagram_auth.py` | 12 | redirect URIs, code extraction |
 | `test_events_post.py` | 9 | DCASE post-processing, cross-model merge |
 | `test_timeline_edits.py` | 8 | keep-ranges, time remapping |
-| `test_queue.py` | 7 | checkpoints, invalidation cascade |
 | `test_cluster.py` | 5 | speaker clustering |
 
-`test_render.py` has a `@pytest.mark.slow` case that resolves ffmpeg the way
-the product does. `PUBLIKCLIP_FFMPEG` points the suite at a specific binary.
+`test_render.py:test_render_smoke` encodes a 20-second synthetic `testsrc2`
+clip and burns captions into it, resolving ffmpeg the way the product does.
+It carries `@pytest.mark.slow`, but **that marker is not registered and
+nothing deselects it**, so it runs on every `pytest -q` — the mark currently
+does nothing but emit a warning. With no ffmpeg on `PATH` the resolver
+downloads a static build mid-test, which is why `guards.yml` installs ffmpeg
+before running the suite. `PUBLIKCLIP_FFMPEG` points the suite at a specific
+binary.
+
+Synthetic fixtures like this one are the sanctioned way to verify a render
+change. The rule against real runs (§14) is about *source* media and model
+weights, not about ffmpeg.
 
 ### The test that exists because of a specific failure
 
@@ -945,6 +993,19 @@ broken.
 
 **When you add a settings group, this test is what tells you that you wired
 it.** It is crude, and that is the point.
+
+That claim was false for most of this codebase's life, and the reason is worth
+keeping. `config.py` has `from __future__ import annotations`, so the field
+type is the *string* `"PacingSettings"` and `dataclasses.is_dataclass()` on a
+string is always `False`. The discovery half never fired; only a hardcoded
+ten-name tuple was ever checked, and a newly added group — the precise case
+the test exists for — was invisible to it. Fixed in T-22 with
+`typing.get_type_hints`, which resolves the strings and now finds eleven
+groups. The sentence above is true again; it was not before.
+
+The general lesson, which §17 repeats: **every guard in this repository is
+narrower than the rule it is named after.** Read the test before trusting the
+heading.
 
 ---
 
@@ -1003,9 +1064,12 @@ module; follow the file you are in.
 document the failure a piece of code prevents. Preserve that when editing near
 them.
 
-**UTF-8 explicitly, everywhere.** Every `read_text`/`write_text` on a
-checkpoint or settings file passes `encoding="utf-8"`. A `±` in a score once
-corrupted `score.json` under cp1252 and Rust's read failed silently.
+**UTF-8 explicitly, everywhere.** Every `read_text`/`write_text` in the
+package passes `encoding="utf-8"` — not just on checkpoints and settings
+files. A `±` in a score once corrupted `score.json` under cp1252 and Rust's
+read failed silently. `test_house_rules.py` pins the violation count at 0
+(T-06), so a new one fails the suite. The guard does not see `open()`, which
+is narrower than the rule as stated here.
 
 **Probe, do not trust.** Encoder availability, caption support in ffmpeg,
 emoji support in fonts — all probed at runtime.
@@ -1019,7 +1083,18 @@ halves are individually correct.
 
 **A new per-clip or per-job setting touches four places:** the dataclass, the
 consumer, the stage fingerprint, and the UI. The fingerprint is the one people
-forget, and forgetting it makes the setting silently do nothing.
+forget, and forgetting it makes the setting silently do nothing — because
+places 1, 2 and 4 all produce visible behaviour the first time you run the
+app, while 3 only misbehaves on the *second* run of a job that already exists.
+
+For a `ClipEdit` field there is a **fifth** place: the classification list in
+`test_house_rules.py`, which fails until the field is declared either
+fingerprinted or render-irrelevant. That is expected work, not a sign the
+architecture is being bent.
+
+A field on `config.Settings` has **no** such guard — places 3 and 4 are
+unchecked for job-level settings, so they need the discipline rather than the
+test. `CLAUDE.md` §5.1 carries the current procedure.
 
 ---
 

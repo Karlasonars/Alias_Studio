@@ -21,11 +21,11 @@ quietly does nothing.
 | `VENDORED-LICENSES.md` | Third-party code. Authoritative — read before adding a dependency. |
 | This file | The rules that apply to every task. |
 
-**Precedence: this file wins.** `SPECIFICATION.md` is descriptive and has drifted —
-its §5 still shows the two-row fingerprint table, states rule 3 as universal, claims
-244 tests, and asserts in bold that the settings-group test catches an unwired group
-(it cannot — T-22). Read it for architecture and intent; where it disagrees with §4
-or §5 here, this file is correct. T-23 tracks bringing it back into line.
+**Precedence: this file wins.** `SPECIFICATION.md` is descriptive — it says how the
+built thing works; this file says what you must not break. T-23 brought its §5, §15
+and §17 back into line, so they agree today. They will drift again, because one
+changes when the code changes and the other when a rule is learned: where they
+disagree, this file is correct, and the disagreement is a bug worth reporting.
 
 Your task will name a requirement ID. That ID is the contract: implement exactly it,
 nothing adjacent.
