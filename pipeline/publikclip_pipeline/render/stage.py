@@ -31,7 +31,19 @@ def _load_clip_edits(job_dir: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # UnicodeDecodeError is neither of the other two, and this read has
+        # always been explicitly utf-8 — so a clip_edits.json an older build
+        # wrote under the Windows ANSI codepage raised straight through
+        # _clip_edits_fingerprint into artifacts_ok, crashing the render
+        # fingerprint instead of answering it (§5.9).
+        #
+        # {} is the right degradation, not just the convenient one: run()
+        # reads through this same function, so a job whose edits are
+        # unreadable renders from job settings either way. A cached answer
+        # therefore matches what re-running would actually produce, and a
+        # clip that DID have edits still re-renders, because the stored
+        # fingerprint no longer matches the empty one.
         return {}
 
 

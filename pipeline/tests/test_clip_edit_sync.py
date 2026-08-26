@@ -213,6 +213,49 @@ def test_corrupt_edits_file_reads_as_no_edits(tmp_path):
     assert render_stage._load_clip_edits(tmp_path) == {}
 
 
+def test_undecodable_edits_file_does_not_crash_the_render_fingerprint(tmp_path, ctx):
+    """T-24. The render stage keeps its own reader of clip_edits.json, and its
+    handler caught only (JSONDecodeError, OSError) while the read was already
+    explicitly utf-8 — so a file an older build wrote under the Windows ANSI
+    codepage raised through _clip_edits_fingerprint into artifacts_ok and took
+    the render down instead of invalidating it.
+
+    Asserting on artifacts_ok rather than the loader, because raising there is
+    what the failure actually was."""
+    mp4 = tmp_path / "clip_00.mp4"
+    mp4.write_bytes(b"x")
+    # cp1252 curly quotes; a lone 0x93 is not valid UTF-8.
+    (tmp_path / "clip_edits.json").write_bytes(b'{"0": {"title": "\x93hi\x94"}}')
+    data = {
+        "outputs": [{"clip": 0, "path": str(mp4)}],
+        "caption_preset": ctx.settings.caption_preset,
+        "camera_settings": ctx.settings.camera.__dict__,
+        "caption_style": render_stage._caption_style_fingerprint(ctx),
+        "audio": render_stage._audio_fingerprint(ctx),
+        "encoder": render_stage._encoder_fingerprint(ctx),
+        "clip_edits": {},
+    }
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+
+
+def test_undecodable_edits_file_still_invalidates_a_clip_that_had_edits(tmp_path, ctx):
+    """The other half: degrading to {} must not silently keep a render that was
+    built from edits we can no longer read."""
+    mp4 = tmp_path / "clip_00.mp4"
+    mp4.write_bytes(b"x")
+    (tmp_path / "clip_edits.json").write_bytes(b'{"0": {"title": "\x93hi\x94"}}')
+    data = {
+        "outputs": [{"clip": 0, "path": str(mp4)}],
+        "caption_preset": ctx.settings.caption_preset,
+        "camera_settings": ctx.settings.camera.__dict__,
+        "caption_style": render_stage._caption_style_fingerprint(ctx),
+        "audio": render_stage._audio_fingerprint(ctx),
+        "encoder": render_stage._encoder_fingerprint(ctx),
+        "clip_edits": {"0": {"caption_preset": "bold"}},
+    }
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+
+
 def test_undecodable_edits_file_reads_as_no_edits(tmp_path):
     """A clip_edits.json written by an older build under the Windows ANSI
     codepage is not valid UTF-8. Once the read became explicitly utf-8 it
