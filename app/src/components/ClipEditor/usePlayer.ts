@@ -19,7 +19,10 @@ export function usePlayer(
   const stageRef = useRef<HTMLDivElement>(null)        // the 9:16 output frame
   const playheadRef = useRef<HTMLDivElement>(null)     // moved via rAF, no re-render
   const [playing, setPlaying] = useState(false)
-  const [timeLabel, setTimeLabel] = useState('')
+  // Written every frame like the playhead, not held as state: as state it
+  // re-rendered the whole editor ~10x/s during playback, and after the split
+  // that cascade would hit every child instead of one component.
+  const timeLabelRef = useRef<HTMLSpanElement>(null)
   const cutsRef = useRef<Cut[]>([])
   const seekPending = useRef<number | null>(null)
 
@@ -89,7 +92,9 @@ export function usePlayer(
           v.style.transform = `translate(${-cx * s}px, ${-cy * s}px)`
           void cw
         }
-        setTimeLabel(`${fmt(t)} / out ${fmt(e.end)}`)
+        if (timeLabelRef.current) {
+          timeLabelRef.current.textContent = `${fmt(t)} / out ${fmt(e.end)}`
+        }
         if (!v.paused) {
           // skip active dead-space cuts during preview playback
           if (e.remove_dead_space) {
@@ -143,5 +148,5 @@ export function usePlayer(
     return () => window.removeEventListener('keydown', onKey)
   }, [togglePlay])
 
-  return { videoRef, stageRef, playheadRef, playing, timeLabel, seekTo, togglePlay }
+  return { videoRef, stageRef, playheadRef, timeLabelRef, playing, seekTo, togglePlay }
 }

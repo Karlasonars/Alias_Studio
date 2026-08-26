@@ -6,7 +6,7 @@ interface Props {
   ctx: EditContext
   edit: EditState
   playing: boolean
-  timeLabel: string
+  timeLabelRef: RefObject<HTMLSpanElement | null>
   videoRef: RefObject<HTMLVideoElement | null>
   stageRef: RefObject<HTMLDivElement | null>
   monitorDragRef: RefObject<{ id: string; el: HTMLImageElement } | null>
@@ -20,7 +20,7 @@ interface Props {
  *  The video element is positioned imperatively by usePlayer's rAF loop;
  *  this component owns none of the player state. */
 export default function Monitor({
-  ctx, edit, playing, timeLabel, videoRef, stageRef, monitorDragRef,
+  ctx, edit, playing, timeLabelRef, videoRef, stageRef, monitorDragRef,
   selectedOverlay, setSelectedOverlay, togglePlay, seekTo
 }: Props) {
   return (
@@ -78,7 +78,10 @@ export default function Monitor({
         <button className="play-btn" onClick={togglePlay}>
           {playing ? '❚❚' : '▶'}
         </button>
-        <span className="mono play-time">{timeLabel}</span>
+        {/* React no longer owns this node's content: usePlayer's rAF loop
+            writes it every frame, exactly like the playhead. Rendering a
+            value here would fight the loop — do not move it back into JSX. */}
+        <span className="mono play-time" ref={timeLabelRef} />
         <span className="mono play-hint">space = play/pause · drag handles to scrub · click timeline to seek</span>
       </div>
     </div>

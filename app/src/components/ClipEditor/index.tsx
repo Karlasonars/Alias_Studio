@@ -75,7 +75,7 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
     [win, span]
   )
 
-  const { videoRef, stageRef, playheadRef, playing, timeLabel, seekTo, togglePlay } =
+  const { videoRef, stageRef, playheadRef, timeLabelRef, playing, seekTo, togglePlay } =
     usePlayer(ctx, ctxRef, editRef, win, span)
 
   useEffect(() => {
@@ -189,7 +189,7 @@ export default function ClipEditor({ jobId, clipIndex, onClose, onRendered }: Pr
         ctx={ctx}
         edit={edit}
         playing={playing}
-        timeLabel={timeLabel}
+        timeLabelRef={timeLabelRef}
         videoRef={videoRef}
         stageRef={stageRef}
         monitorDragRef={monitorDragRef}
