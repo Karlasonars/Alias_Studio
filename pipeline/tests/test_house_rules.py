@@ -264,10 +264,13 @@ def test_no_invoke_outside_api_ts() -> None:
 # Model integrity — a truncated weight file must not be used
 # --------------------------------------------------------------------------
 
-#: Ratchet. Only the PANNs checkpoint is pinned today, and it is pinned because
-#: a 514 MB truncated response came back from a URL whose correct file is
-#: ~312 MB. The other five are exposed to exactly that failure.
-UNPINNED_MODELS_BASELINE = 5
+#: All six specs are pinned as of T-05, each against a hash the publisher
+#: records (HF lfs.oid for campplus; GitHub blob-SHA identity for the four
+#: raw files; Zenodo's oc-checksum for PANNs). At 0 this is no longer a
+#: ratchet but a plain rule: a new ModelSpec without a sha256 fails the
+#: suite. An unverified weight fails as a wrong answer, not as an error —
+#: do not add one.
+UNPINNED_MODELS_BASELINE = 0
 
 
 def _unpinned_models() -> list[str]:
