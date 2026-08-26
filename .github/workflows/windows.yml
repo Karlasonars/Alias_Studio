@@ -58,7 +58,7 @@ jobs:
         working-directory: app
         run: |
           npm ci
-          npx tauri build --bundles nsis
+          npx tauri build
 
       - name: Install silently and launch the installed app
         shell: pwsh
