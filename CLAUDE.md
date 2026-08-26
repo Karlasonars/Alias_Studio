@@ -56,7 +56,7 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   insights/calibration.py  (908) LARGEST FILE. Instagram feedback + calibration
   models/specs.py    (82)  weight registry
   vendor/                  DO NOT EDIT — see §6
-  tests/                   263 tests, 15 files
+  tests/                   272 tests, 15 files
 
 app/src/                          React frontend — ~5,300 lines
   App.tsx           (229)  view router: boot|onboarding|studio|review|loop|settings
@@ -82,7 +82,7 @@ exist. If the database and the disk disagree, the disk wins.
 # Python pipeline
 cd pipeline
 uv sync
-uv run pytest -q                    # 263 tests, ~50 s. Needs ffmpeg on PATH:
+uv run pytest -q                    # 272 tests, ~50 s. Needs ffmpeg on PATH:
                                     # test_render_smoke encodes a synthetic clip.
 uv run pytest -q -k house_rules     # the §5 guards — but NOT test_settings.py,
                                     # which holds the §5.2 guard. Before a PR,
@@ -154,9 +154,9 @@ is how a shipped setting ended up dead:
 | Stage | `artifacts_ok` | Rule 3 holds? |
 |---|---|---|
 | `ingest` | files exist + source hash | n/a |
-| `asr` | **no override** — cached forever once written | n/a |
-| `diarize` | **no override** — cached forever once written | n/a |
-| `events` | `curves.json` exists — **no settings fingerprint at all** | **no** |
+| `asr` | no override — **correct: reads zero settings** | n/a |
+| `diarize` | no override — **correct: reads zero settings** | n/a |
+| `events` | `curves.json` exists + `fingerprint_ok` on `laughter_specialist` | yes |
 | `candidates` | `fingerprint_ok(...)` — the only caller | yes |
 | `scoring` | strict `==` on `settings_used` | no |
 | `camera` | two strict `!=` on `__dict__` (`camera`, `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
@@ -164,11 +164,15 @@ is how a shipped setting ended up dead:
 
 Two live consequences, both worth knowing before you touch any of this:
 
-- **`Settings.laughter_specialist` is a shipped UI toggle that does nothing on a
-  re-run.** It is consumed at `events/stage.py:81`, but `events.artifacts_ok` only
-  checks that `curves.json` exists. Turn it on for a job that has already run and
-  the setting is inert, forever, silently. This violates §5.2 and is tracked as
-  T-21 in `AGENT-WORKPLAN.md`.
+- **`Settings.laughter_specialist` was a shipped UI toggle that did nothing on a
+  re-run** — `events.artifacts_ok` only checked that `curves.json` existed. Fixed in
+  T-21 (`7f3d7da`), and worth reading as the worked example of this whole section:
+  the fix had to use `fingerprint_ok`'s `or {}` form, because no events checkpoint
+  ever written carries the new key and `fingerprint_ok(None, …)` is False — so the
+  naive fix for rule 1 would have re-run the PANNs pass on every job already on
+  disk and cascaded into four stages. Fixing rule 1 by breaking rule 3.
+- **`ingest`, `asr` and `diarize` read zero settings** (verified by grep, not
+  assumed), so having no fingerprint is correct there rather than an oversight.
 - **Adding any field to `CameraSettings` or the scoring settings invalidates every
   existing checkpoint**, because those stages compare `__dict__` strictly. That is
   precisely the "throw away an hour of work over an unrelated toggle" failure rule 3
@@ -178,7 +182,9 @@ Each fingerprint covers **only** what that stage reads. A title edit must not fo
 re-encode; a caption tweak must not re-run the expensive camera pass.
 
 **The tests for this section are in `pipeline/tests/test_clip_edit_sync.py`** (23
-tests: fingerprint invalidation, structural edits, cache survival). Nothing in §5's
+tests: fingerprint invalidation, structural edits, cache survival) and, for rule 2
+specifically, `test_queue.py:test_a_rerun_stage_invalidates_every_stage_after_it` —
+added in T-21, because the rule the whole cascade depends on had no direct test. Nothing in §5's
 guard file covers the checkpoint contract. If you change a fingerprint, that is the
 file that will tell you whether you were right.
 
@@ -264,16 +270,12 @@ Every `read_text` / `write_text` passes `encoding="utf-8"`. A `±` in a score on
 corrupted `score.json` under cp1252 and Rust's read failed silently.
 
 `PYTHONUTF8=1` in `quiet_command` masks this in the desktop app but **not** in CLI use.
-39 call sites currently violate this.
 
-**The baseline is a two-sided pin, not a one-way ratchet.** There are two tests:
-`test_no_text_io_without_encoding` asserts `<=` and `test_encoding_baseline_is_not_stale`
-asserts `==`. The suite goes red the moment you fix one call site without lowering the
-constant. Practical consequence: **a partial sweep is not possible** — every commit
-that fixes a violation must lower the baseline in the same commit, and a task that
-incidentally fixes one site drags the constant edit into its diff. That is deliberate
-(a baseline nobody lowers stops protecting anything), but it is the opposite of what
-"ratchet" implies.
+**The baseline is 0 (T-06, `e817164`), which makes this a plain rule rather than a
+ratchet.** Two tests hold it there: `test_no_text_io_without_encoding` asserts `<=`
+and `test_encoding_baseline_is_not_stale` asserts `==`. At 0 they agree, and any new
+violation fails both. There is no baseline left to lower and none to raise — if you
+find yourself editing that constant, you are adding a violation, not managing debt.
 
 **The guard covers `read_text` / `write_text` only.** `open()` is invisible to it —
 `events/panns_channel.py:64` is a text read with no encoding that the count does not
@@ -379,6 +381,11 @@ A task is done when **all** of these hold:
 - [ ] If you touched `app/`: `npx tsc --noEmit` is clean.
 - [ ] At least one new test **fails without your change**. Verify this by reverting
       your change and watching it fail; a test that passes both ways tests nothing.
+- [ ] Every attribute your test sets actually exists. `config.Settings` and its
+      groups are ordinary dataclasses, so `settings.curve.weights = …` on a field
+      that was never declared creates it silently and the assertion then passes
+      while testing nothing. Caught in T-21 before it shipped; it would not have
+      failed any guard.
 - [ ] If you added a setting: all four places from §5.1, in this commit.
 - [ ] If you added a `ClipEdit` field: classified in the fingerprint test.
 - [ ] Comments explain **why**, not what — document the failure the code prevents.
