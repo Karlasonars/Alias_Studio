@@ -78,10 +78,10 @@ T-02 as "partly done" after the work had landed, which — read literally, under
 file's own "do not start a task whose blockers are unmerged" rule — made all of
 Phase 1 unstartable. Stale status in a document that gates work is not cosmetic.
 
-### T-21 · `events` has no settings fingerprint          [P0, found 2026-08-26]
+### T-21 · `events` has no settings fingerprint               [DONE 2026-08-26]
 
 ```
-Blocked by  nothing
+Merged      7f3d7da  events: fingerprint the laughter specialist (PR #2)
 Touches     pipeline/publikclip_pipeline/events/stage.py
 Proves it   a new test: flipping laughter_specialist on a job with an existing
             events checkpoint must invalidate it
@@ -227,7 +227,7 @@ Watch out   the PANNs note in SPECIFICATION.md §11 — the ~312 MB file is the 
 Download each weight once, checksum it, pin it. Five of six specs are currently
 unverified against exactly the truncation failure the sixth was pinned for.
 
-### T-06 · T10-A — Encoding sweep                               [P0]
+### T-06 · T10-A — Encoding sweep                             [DONE 2026-08-26]
 
 ```
 Blocked by  nothing (T-02 is done)
