@@ -110,6 +110,15 @@ it. That is the intended way to verify a render change. Note that it is marked
 `@pytest.mark.slow` but the marker is **not registered**, so it runs on every
 `pytest -q` — the mark currently does nothing but emit a warning.
 
+**Rewriting files from a script on Windows: pass `newline="\n"`.**
+`Path.write_text(s, encoding="utf-8")` opens in text mode, so Python translates
+every `\n` to `\r\n` and a whole-file rewrite comes back CRLF. `.gitattributes`
+normalises on staging, so the commit is clean and the guard stays green — which is
+exactly why this is easy to miss: nothing fails, git just warns on every command and
+the working copy stops matching the index. Use
+`p.write_text(s, encoding="utf-8", newline="\n")`, or write bytes. Found in T-06,
+where a scripted sweep flipped 14 files and had to convert them back by hand.
+
 ---
 
 ## 4. The checkpoint contract — read this before touching any stage
@@ -312,6 +321,18 @@ sides read, add a `resolve_*()` for it — do not compute it twice.
 No CUDA is a fallback, never an error. A missing API, an unavailable encoder, an
 absent optional model — each degrades to a lesser result with a clear message. Nothing
 optional may become a hard requirement.
+
+**Adjacent versus consequential.** §8 tells you not to widen scope; this rule can
+still oblige you to touch a file your task did not name. The line is: *adjacent* work
+is what you could have done without your change, and it stays out. *Consequential*
+work is what your change makes necessary, and it is part of the change. When a fix
+turns a path that used to degrade into one that raises, restoring the degradation is
+not scope creep — it is finishing the fix. Shipping the regression with a note
+explaining it is worse than not shipping it. T-06 is the worked example: adding
+`encoding="utf-8"` to five reads made `UnicodeDecodeError` reachable where those
+handlers had only ever seen `JSONDecodeError` and `OSError`, so widening them was
+consequential; the identical hole in `render/stage.py`, which predated the sweep, was
+adjacent and became T-24.
 
 ### 5.10 Verify outputs
 

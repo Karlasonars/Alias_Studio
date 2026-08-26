@@ -155,6 +155,30 @@ tell an agent to read it. Specifically wrong today:
 Until this lands, `CLAUDE.md` §1 carries a precedence note. That is a patch over the
 problem, not the fix.
 
+### T-24 · `_load_clip_edits` does not survive an undecodable file  [P1, found 2026-08-26]
+
+```
+Blocked by  nothing
+Touches     pipeline/publikclip_pipeline/render/stage.py (the except at ~line 34)
+Proves it   a new test: a clip_edits.json holding invalid UTF-8 must make
+            render.artifacts_ok answer, not raise
+Watch out   this is the render fingerprint's read path. Degrading to {} means
+            "no per-clip edits", which invalidates nothing — check that is the
+            answer you want before copying edits/store.py's handler verbatim
+```
+
+`render/stage.py:_load_clip_edits` is the second reader of `clip_edits.json` — the
+render stage keeps its own copy so it does not depend on the editing package. It
+already passes `encoding="utf-8"` and it already catches only `(JSONDecodeError,
+OSError)`, so `UnicodeDecodeError` escapes it. It feeds `_clip_edits_fingerprint`,
+which feeds `render.artifacts_ok`: a file an older build wrote under the Windows ANSI
+codepage crashes the render fingerprint rather than degrading (CLAUDE.md §5.9).
+
+**This predates T-06 and was not caused by it.** That line was never one of the 39 —
+it already had its encoding — so the sweep neither introduced the hazard nor was
+required to fix it. T-06 widened the same handler at the five sites its own change
+made reachable and deliberately left this one; see that PR's "did not do".
+
 ### T-03 · Split `ClipEditor.tsx`                               [P1, before E6]
 
 ```
