@@ -230,12 +230,12 @@ def cmd_edit(args: argparse.Namespace) -> int:
         return 0
 
     if args.edit_cmd == "suggest-visuals":
-        score = json.loads((job_dir / "score.json").read_text())["data"]
+        score = json.loads((job_dir / "score.json").read_text(encoding="utf-8"))["data"]
         clip = score["clips"][args.clip]
         edit = store.edit_for_clip(job_dir, args.clip, clip)
         # plan against OUTPUT-time words = current bounds without dead-space
         # (suggestions land on the source-bounds timeline the UI shows)
-        diarize = json.loads((job_dir / "diarize.json").read_text())["data"]
+        diarize = json.loads((job_dir / "diarize.json").read_text(encoding="utf-8"))["data"]
         words = [
             {"word": w["word"], "start": w["start"] - edit.start, "end": w["end"] - edit.start}
             for seg in diarize["segments"]
@@ -263,11 +263,11 @@ def cmd_edit(args: argparse.Namespace) -> int:
         from .copywriting import titles as titles_mod
         from .scoring import llm as llm_mod
 
-        score = json.loads((job_dir / "score.json").read_text())["data"]
+        score = json.loads((job_dir / "score.json").read_text(encoding="utf-8"))["data"]
         clip = score["clips"][args.clip]
         edit = store.edit_for_clip(job_dir, args.clip, clip)
         settings = config.Settings.from_json(json.loads(job.settings_json))
-        diarize = json.loads((job_dir / "diarize.json").read_text())["data"]
+        diarize = json.loads((job_dir / "diarize.json").read_text(encoding="utf-8"))["data"]
         try:
             client = llm_mod.make_client(settings.llm_mode)
         except llm_mod.LlmError as err:

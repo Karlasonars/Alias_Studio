@@ -43,7 +43,12 @@ def _our_py_files() -> list[Path]:
 #: Ratchet. A `±` in a score once corrupted score.json under cp1252 and Rust's
 #: read failed silently. PYTHONUTF8=1 in quiet_command hides this in the desktop
 #: app but NOT in CLI use. Lower this number; never raise it.
-TEXT_IO_WITHOUT_ENCODING_BASELINE = 39
+#:
+#: Swept to zero in T-06. At zero the two tests below stop being a ratchet and
+#: become a plain rule: any new `read_text`/`write_text` without an encoding
+#: fails the suite. Note the guard still cannot see `open()` — see CLAUDE.md
+#: §5.3, which is the rule this number only partly enforces.
+TEXT_IO_WITHOUT_ENCODING_BASELINE = 0
 
 _TEXT_IO = re.compile(r"\.(read_text|write_text)\s*\(")
 

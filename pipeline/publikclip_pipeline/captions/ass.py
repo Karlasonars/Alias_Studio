@@ -399,7 +399,10 @@ def emoji_probe(fonts_dir: Path = FONTS_DIR) -> bool:
         results = []
         for text in ("", "😂"):
             ass_path = Path(tmp) / f"probe_{len(results)}.ass"
-            ass_path.write_text(
+            # The probe text is an emoji. Under the Windows ANSI codepage this
+            # write raises rather than producing the file the probe measures,
+            # so the encoding is what makes the answer mean anything.
+            probe_doc = (
                 "[Script Info]\nScriptType: v4.00+\nPlayResX: 192\nPlayResY: 108\n\n"
                 "[V4+ Styles]\n"
                 "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -411,6 +414,7 @@ def emoji_probe(fonts_dir: Path = FONTS_DIR) -> bool:
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Text\n"
                 f"Dialogue: 0,0:00:00.00,0:00:01.00,D,,0,0,0,{text}\n"
             )
+            ass_path.write_text(probe_doc, encoding="utf-8")
             out = Path(tmp) / f"probe_{len(results)}.png"
             proc = subprocess.run(
                 [

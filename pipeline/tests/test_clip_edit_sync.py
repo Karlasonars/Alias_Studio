@@ -16,6 +16,7 @@ import pytest
 
 from publikclip_pipeline import config
 from publikclip_pipeline.camera import stage as camera_stage
+from publikclip_pipeline.edits import store as edits_store
 from publikclip_pipeline.render import stage as render_stage
 
 
@@ -210,6 +211,17 @@ def test_missing_edits_file_reads_as_no_edits(tmp_path):
 def test_corrupt_edits_file_reads_as_no_edits(tmp_path):
     (tmp_path / "clip_edits.json").write_text("[]", encoding="utf-8")
     assert render_stage._load_clip_edits(tmp_path) == {}
+
+
+def test_undecodable_edits_file_reads_as_no_edits(tmp_path):
+    """A clip_edits.json written by an older build under the Windows ANSI
+    codepage is not valid UTF-8. Once the read became explicitly utf-8 it
+    raises UnicodeDecodeError — which is neither JSONDecodeError nor OSError,
+    so before the except was widened a single smart quote in a saved title
+    took the whole editor down instead of resetting one file."""
+    # 0x93/0x94 are cp1252 curly quotes and are not valid UTF-8 on their own.
+    (tmp_path / "clip_edits.json").write_bytes(b'{"0": {"title": "\x93hi\x94"}}')
+    assert edits_store.load(tmp_path) == {}
 
 
 # ---------------------------------------------------------------------------

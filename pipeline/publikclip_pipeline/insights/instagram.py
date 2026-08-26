@@ -69,15 +69,18 @@ def load_connection() -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # UnicodeDecodeError became reachable when the read became explicitly
+        # utf-8; an unreadable connection file must still read as "not
+        # connected" rather than taking the loop view down.
         return None
 
 
 def save_connection(data: dict) -> None:
     path = _store_path()
     config.ensure_home()
-    path.write_text(json.dumps(data, indent=1))
+    path.write_text(json.dumps(data, indent=1), encoding="utf-8")
     path.chmod(0o600)
 
 

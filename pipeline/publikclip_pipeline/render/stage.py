@@ -152,7 +152,7 @@ class RenderStage(Stage):
         src_w, src_h = int(probe["width"]), int(probe["height"])
         segments = diarize["segments"]
         timeline = events["timeline"]
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
         rms = curves["rms"]
         grid = float(curves["grid_sec"])
 
@@ -195,7 +195,7 @@ class RenderStage(Stage):
                 )
                 continue
 
-            trajectory = json.loads(Path(traj_path).read_text())
+            trajectory = json.loads(Path(traj_path).read_text(encoding="utf-8"))
             start, end = clip["start"], clip["end"]
             ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
 
@@ -235,12 +235,11 @@ class RenderStage(Stage):
             clip_fill = edit.get("letterbox_fill") or ctx.settings.camera.letterbox_fill
 
             ass_path = out_dir / f"clip_{i:02d}.ass"
-            ass_path.write_text(
-                ass_mod.build_ass(
-                    words, clip_events, preset_name=clip_preset, emoji_ok=emoji_ok,
-                    overrides=clip_caption_overrides,
-                )
+            ass_doc = ass_mod.build_ass(
+                words, clip_events, preset_name=clip_preset, emoji_ok=emoji_ok,
+                overrides=clip_caption_overrides,
             )
+            ass_path.write_text(ass_doc, encoding="utf-8")
 
             out_path = out_dir / f"clip_{i:02d}.mp4"
             try:
