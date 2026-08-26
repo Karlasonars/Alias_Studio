@@ -2,6 +2,8 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import type {
   CaptionPreset,
   DescriptionResult,
+  EditContext,
+  EditState,
   HookResult,
   JobResults,
   JobSummary,
@@ -50,6 +52,20 @@ export const api = {
     invoke<DescriptionResult>('edit_tool', { args: ['description', jobId, String(clip)] }),
   clipHook: (jobId: string, clip: number) =>
     invoke<HookResult>('edit_tool', { args: ['hook', jobId, String(clip)] }),
+
+  /* ---------- clip editor ---------- */
+  editContext: (jobId: string, clip: number) =>
+    invoke<EditContext>('edit_tool', { args: ['context', jobId, String(clip)] }),
+  // One wrapper, three intents at the call sites: persist(), and the
+  // pre-flight saves before render and before suggest-visuals.
+  saveClipEdits: (jobId: string, clip: number, edit: EditState) =>
+    invoke<void>('save_clip_edits', { jobId, edits: { [String(clip)]: edit } }),
+  runEditRender: (jobId: string, clip: number) =>
+    invoke<void>('run_edit_render', { jobId, clip }),
+  suggestVisuals: (jobId: string, clip: number, prefer: string) =>
+    invoke<{ ok: boolean; edit?: EditState; error?: string }>('edit_tool', {
+      args: ['suggest-visuals', jobId, String(clip), '--prefer', prefer]
+    }),
 
   /* ---------- settings ---------- */
   settingsGet: () => invoke<SettingsPayload>('settings_tool', { args: ['get'] }),

@@ -221,9 +221,9 @@ def test_framing_dial_clamps_out_of_range() -> None:
 # 5.4 — every invoke() lives in api.ts
 # --------------------------------------------------------------------------
 
-#: Ratchet. 12 calls predate the rule: ClipEditor.tsx (6), IgModal.tsx (3),
-#: KeyModal.tsx (3). Lower this; never raise it.
-INVOKE_OUTSIDE_API_BASELINE = 12
+#: Ratchet. 6 calls predate the rule: IgModal.tsx (3), KeyModal.tsx (3).
+#: ClipEditor's 6 moved into api.ts in T-03. Lower this; never raise it.
+INVOKE_OUTSIDE_API_BASELINE = 6
 
 _INVOKE = re.compile(r"\binvoke\s*<[^>]*>\s*\(|\binvoke\s*\(")
 

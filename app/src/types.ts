@@ -336,3 +336,51 @@ export interface SyncSummary {
   tombstoned?: number
   fit?: { applied: boolean; version?: number; reason?: string }
 }
+
+/* ---------- clip editor (edit_tool context / save_clip_edits) ---------- */
+
+export interface Word { word: string; start: number; end: number; speaker?: number }
+export interface Cut { start: number; end: number; kept: boolean; reason: string }
+export interface OverlayItem {
+  id: string; query: string; source: string; image_path: string
+  start: number; end: number; x: number; y: number; scale: number
+  animation: string; phrase: string
+}
+export interface EditState {
+  start: number; end: number
+  caption_preset: string | null; camera_mode: string | null
+  gameplay_amount: number | null
+  title: string
+  title_variants: { text: string; style: string; why: string; chars: number }[]
+  description: string
+  description_meta: Record<string, unknown>
+  remove_dead_space: boolean; disabled_cuts: number[]
+  overlays: OverlayItem[]
+  // Per-clip overrides of the re-render-cost settings. Partial patches:
+  // anything absent inherits the job's value.
+  pacing: Record<string, number>
+  caption_overrides: Record<string, string | number | boolean>
+  lufs_target: number | null
+  true_peak_db: number | null
+  letterbox_fill: string | null
+}
+export interface EditContext {
+  ok: boolean
+  window: { start: number; end: number }
+  media_path: string
+  probe: { width: number; height: number }
+  trajectory: { fps: number; frames: number[][] } | null
+  edit: EditState
+  words: Word[]
+  rms: number[]
+  rms_grid: number
+  events: { type: string; start: number; end: number }[]
+  auto_cuts: Cut[]
+  run_caption_preset: string
+  // The job's values behind the per-clip overrides, so the editor can show
+  // what "inherit" currently resolves to instead of a blank control.
+  pacing: Record<string, number>
+  caption_style: Record<string, string | number | boolean>
+  audio: { lufs_target: number; true_peak_db: number }
+  letterbox_fill: string
+}
