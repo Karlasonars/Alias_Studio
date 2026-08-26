@@ -29,7 +29,37 @@ Watch out   the invariant most likely to be broken here
 
 **"Touches" is a budget, not a suggestion.** If the change needs a file outside the
 list, that is a signal the task was scoped wrong — say so in the PR rather than
-widening it silently.
+widening it silently. It can also be wrong the other way: T-22's list named one test
+file and the task needed two. A budget that turns out too small is a finding, not a
+licence.
+
+---
+
+## Which model runs which task
+
+**Default: development on the stronger model, documentation on the cheaper one.**
+That split is easy to apply without thinking, which is most of its value — a rule you
+follow every time beats a sharper one you apply unevenly.
+
+**Three exceptions, all in the same direction.** These produce a document but the work
+is verification, and a literal reading of them can hurt someone:
+
+| Task | Why it is not a documentation task |
+|---|---|
+| T-05 | Pinning checksums looks like data entry. The PANNs note is a trap: the ~312 MB file is correct and the 514 MB response is the corrupt one. Pin the wrong hash and every user's download fails, and no test catches it — the guard checks that a sha256 *exists*, not that it is right |
+| T-17 | The privacy notice is an audit of every network call in the codebase. Miss one and the document lies about the product's central promise |
+| T-18 | AGPL compliance in the UI is legal, plus a screen. Half of it is code |
+
+**Spotting the next one.** Read the task's own `Proves it` line, then ask the question
+that matters: *would that proof catch a literal-but-wrong execution?*
+
+- `Proves it` names a test that would fail on a wrong answer → cheaper model is fine
+- `Proves it` says "read-and-compare", "manual", or names a check that only confirms
+  the *shape* of the answer → stronger model
+
+T-06 is the worked example of the second case. Its proof was a baseline dropping 39 →
+0, which a literal sweep would have satisfied — while turning a silently-wrong read
+into a crash in the user's clip editor. The number went to zero either way.
 
 ---
 
