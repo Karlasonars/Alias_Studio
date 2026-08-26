@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Publikclip extra",
+  "productName": "Alias Studio",
   "version": "0.1.0",
-  "identifier": "com.publikhq.publikclip",
+  "identifier": "com.publikhq.aliasstudio",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1430",

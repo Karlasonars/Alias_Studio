@@ -1027,7 +1027,7 @@ machine may carry that is 700+ MB and must never ride into the app.
 
 > **`tauri.conf.json` currently sets `bundle.targets` to `["dmg"]`.** On
 > Windows, `npx tauri build` therefore produces only
-> `src-tauri/target/release/publikclip-app.exe` — no NSIS installer. For local
+> `src-tauri/target/release/alias-studio-app.exe` — no NSIS installer. For local
 > use, copy that exe over the installed one (close the app first). To produce
 > a Windows installer, add `"nsis"` to the targets.
 
@@ -1037,7 +1037,7 @@ The installed app's `resources/pipeline/publikclip_pipeline` can be replaced
 with a directory junction to the repo:
 
 ```
-mklink /J "…\AppData\Local\publikclip\resources\pipeline\publikclip_pipeline" ^
+mklink /J "…\AppData\Local\Alias Studio\resources\pipeline\publikclip_pipeline" ^
           "…\publikclip\pipeline\publikclip_pipeline"
 ```
 

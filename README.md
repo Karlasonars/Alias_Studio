@@ -108,8 +108,8 @@ with C++** build tools, [Node](https://nodejs.org), git, and
 Then, in PowerShell:
 
 ```powershell
-git clone https://github.com/Karlasonars/Alias_clp.git
-cd Alias_clp\app
+git clone https://github.com/Karlasonars/Alias_Studio.git
+cd Alias_Studio\app
 npm.cmd install
 node_modules\.bin\tauri.cmd build --bundles nsis
 # run the installer it produces:

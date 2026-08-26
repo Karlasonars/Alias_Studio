@@ -1,5 +1,5 @@
 [package]
-name = "publikclip-app"
+name = "alias-studio-app"
 version = "0.1.0"
 description = "Alias Studio — long video in, scored vertical clips out"
 license = "AGPL-3.0-or-later"
