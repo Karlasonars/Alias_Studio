@@ -7,9 +7,12 @@ why*; this one says *next, and which files*.
 branch, one PR. Do not start a task whose blockers are unmerged.
 
 **Before every task:** read `CLAUDE.md`, then the section of `SPECIFICATION.md` that
-covers the stage you are touching, then the requirement in
-`PRODUCT-REQUIREMENTS.md`. Do not read the whole PRD — it is 78 pages and most of it
-is not your task.
+covers the stage you are touching, then the requirement in `PRODUCT-REQUIREMENTS.md`.
+Do not read the whole PRD — it is 78 pages and most of it is not your task.
+
+**`CLAUDE.md` wins on any conflict.** `SPECIFICATION.md` has drifted: its §5, §15 and
+§17 still carry the pre-correction fingerprint table, test counts and house rules.
+Read it for architecture and intent, not for current fact. T-23 fixes it.
 
 ---
 
@@ -59,23 +62,98 @@ someone's PR eventually, and five minutes of work removed it permanently. But th
 severity was wrong, and a plan that never records its own corrections stops being
 worth reading.
 
-### T-02 · Guard tests and lint                        [PARTLY DONE 2026-08-25]
+### T-02 · Guard tests and lint                               [DONE 2026-08-26]
 
 ```
 Merged      d9e8e72  CLAUDE.md, AGENT-WORKPLAN.md, test_house_rules.py, ruff.toml
-Remaining   .github/workflows/guards.yml (new), pull_request: trigger in windows.yml
-Blocked by  nothing
-Touches     pipeline/tests/test_house_rules.py, pipeline/ruff.toml,
-            .github/workflows/guards.yml, .github/workflows/windows.yml
-Do not      touch any production source to make the guards pass
-Proves it   guards.yml goes green on a pull request
+            152c32b  ci: run guards on pull requests
+            9604c9d  pipeline: enable ruff, and fix what it found
+Proves it   guards.yml green on a pull request
 ```
 
-Add `pull_request:` to `windows.yml`'s triggers — it currently runs only on push to
-`main`/`win-port`, so an agent's work is verified only *after* it is merged.
+Both workflows carry a `pull_request:` trigger and `ruff check` is clean.
 
-Fix whatever `ruff check` reports **in a separate commit** from adding the config, so
-the config commit stays readable.
+**Everything in Phase 1 is now unblocked.** An earlier revision of this file left
+T-02 as "partly done" after the work had landed, which — read literally, under this
+file's own "do not start a task whose blockers are unmerged" rule — made all of
+Phase 1 unstartable. Stale status in a document that gates work is not cosmetic.
+
+### T-21 · `events` has no settings fingerprint          [P0, found 2026-08-26]
+
+```
+Blocked by  nothing
+Touches     pipeline/publikclip_pipeline/events/stage.py
+Proves it   a new test: flipping laughter_specialist on a job with an existing
+            events checkpoint must invalidate it
+Watch out   Stage order is ingest → asr → diarize → events → candidates → scoring
+            → camera → render. events is upstream of FOUR stages, including
+            candidates — the only stage in the pipeline that calls fingerprint_ok,
+            so the one whose invalidation semantics differ from everything else in
+            the cascade. Invalidating correctly is right but expensive. Do not
+            widen the fingerprint beyond what the stage actually reads
+```
+
+`events.artifacts_ok` is `return (job_dir / "curves.json").exists()`. It reads
+`Settings.laughter_specialist` at line 81, and that setting is a shipped UI toggle
+(`settings_schema.py:380`). **Turning it on for a job that has already run does
+nothing, forever, silently.** That is a live violation of CLAUDE.md §5.2, and it is
+the exact failure the checkpoint contract exists to prevent.
+
+Found by the first agent during orientation, before it wrote a line of code. Check
+the other stages in the same pass: `asr` and `diarize` have no `artifacts_ok`
+override at all, which may be correct (neither reads a user-facing setting) but is
+undocumented either way.
+
+### T-22 · The settings-group guard cannot see new groups  [P1, found 2026-08-26]
+
+```
+Blocked by  nothing
+Touches     pipeline/tests/test_settings.py (the group list at ~line 129)
+Proves it   adding a new dataclass group to config.Settings and not reading it
+            makes the test fail
+```
+
+`config.py` has `from __future__ import annotations`, so `f.type` is the *string*
+`"CameraSettings"` and `dataclasses.is_dataclass(f.type)` is always `False`. Only the
+hardcoded ten-name tuple is ever checked. The test written to catch "a whole settings
+group silently does nothing" **cannot catch a newly added group** — the precise case
+it exists for.
+
+`descriptions` already sits outside that list. It happens to be read at `cli.py:309`,
+so there is no live bug — but that is luck, not the guard working.
+
+Fix: `typing.get_type_hints(config.Settings)` instead of `f.type`, and delete the
+hardcoded tuple so it cannot drift again.
+
+**Same pass, same shape:** `test_schema_fields_all_carry_help` iterates `GROUPS` only.
+`settings_schema.CAPTION_FIELDS` is 15 more user-facing fields outside that loop. They
+all carry `help` today, but nothing checks that they keep doing so. Extend the test.
+
+### T-23 · `SPECIFICATION.md` has drifted from the code     [P1, found 2026-08-26]
+
+```
+Blocked by  nothing
+Touches     SPECIFICATION.md §5, §15, §17
+Proves it   no automated test — this one is read-and-compare
+```
+
+`CLAUDE.md` §4 and §5 were corrected; their source document was not, and both files
+tell an agent to read it. Specifically wrong today:
+
+- **§5** — two-row fingerprint table (`camera`/`render` only), and rule 3 stated as
+  universal with no mention that `fingerprint_ok` has one caller.
+- **§15** — "244 tests, no video or model I/O in the default run". Both halves wrong:
+  263 tests, and `test_render_smoke` shells out to ffmpeg on every run. The per-file
+  table omits `test_house_rules.py` entirely; `test_insights_sync.py` is 33 not 19,
+  `test_instagram_auth.py` is 19 not 12.
+- **§15** closes in bold with "when you add a settings group, this test is what tells
+  you that you wired it" — the exact guarantee T-22 shows to be false.
+- **§17** — four places, no fifth; and scopes UTF-8 to "checkpoint or settings files"
+  where `CLAUDE.md` says every call and the guard scans every non-vendor `.py`.
+  Three scopes, three documents, one test.
+
+Until this lands, `CLAUDE.md` §1 carries a precedence note. That is a patch over the
+problem, not the fix.
 
 ### T-03 · Split `ClipEditor.tsx`                               [P1, before E6]
 
@@ -104,7 +182,7 @@ dependency order; follow it.
 ### T-04 · E16-F01 — Installer config parity                    [P0]
 
 ```
-Blocked by  T-02
+Blocked by  nothing (T-02 is done)
 Touches     app/src-tauri/tauri.conf.json, .github/workflows/windows.yml
 Proves it   a local `npx tauri build` produces the same artifacts CI does
 ```
@@ -115,7 +193,7 @@ carry both and drop the CI flag, so local and CI builds stop diverging.
 ### T-05 · E1-F04 — Pin model checksums                         [P0]
 
 ```
-Blocked by  T-02
+Blocked by  nothing (T-02 is done)
 Touches     pipeline/publikclip_pipeline/models/specs.py, models/registry.py
 Proves it   test_house_rules.py::test_model_specs_pin_a_sha256 baseline drops 5 → 0
 Watch out   the PANNs note in SPECIFICATION.md §11 — the ~312 MB file is the correct
@@ -128,14 +206,36 @@ unverified against exactly the truncation failure the sixth was pinned for.
 ### T-06 · T10-A — Encoding sweep                               [P0]
 
 ```
-Blocked by  T-02
-Touches     39 call sites across pipeline/publikclip_pipeline/ (not vendor/)
-            heaviest: edits/render_clip.py (8), edits/store.py (2), cli.py (4)
+Blocked by  nothing (T-02 is done)
+Touches     39 call sites across 14 files (not vendor/). Heaviest:
+            render_clip.py (10), scoring/llm.py (5), cli.py (4),
+            candidates/stage.py (3), render/stage.py (3)
 Do not      touch vendor/
-Proves it   TEXT_IO_WITHOUT_ENCODING_BASELINE drops 39 → 0
-Watch out   edits/store.py is the clip editor's state file. Both Python and Rust
-            write it (see E5 in the PRD) — fix the Python side here, note the Rust
-            side in the PR
+Proves it   test_encoding_baseline_is_not_stale — the `==` half. The `<=` test
+            is green before, during and after the sweep and proves nothing
+Watch out   Three things, all found while planning this task, none of them
+            mechanical:
+            1. Five of the 39 are multi-line calls whose opening line reads
+               `…write_text(`. The detector is per-line, so putting encoding=
+               on a continuation line leaves the violation counted. Do not touch
+               the regex. Two of the five cannot collapse to one line at all
+               (captions/ass.py:402 is an implicitly-concatenated string literal;
+               camera/stage.py:135 is a multi-line json.dumps). The technique is
+               HOIST THE PAYLOAD TO A LOCAL, then call on a single short line:
+                   payload = json.dumps({...})
+                   path.write_text(payload, encoding="utf-8")
+               This keeps lines under 100 chars. ruff.toml sets line-length = 100
+               but does not select "E", so E501 is inert today and would report
+               ~211 violations if enabled — do not add to that pile.
+            2. Adding encoding= to a READ is a behaviour change on Windows: a
+               file written by an older build under cp1252 currently decodes as
+               mojibake and afterwards raises UnicodeDecodeError. edits/store.py
+               catches (JSONDecodeError, OSError); UnicodeDecodeError is neither,
+               so a clip_edits.json with a smart quote goes from silently-wrong
+               to a hard crash. Widen that except.
+            3. captions/ass.py:402 and render/renderer.py:275 are the two sites
+               most likely to hold non-ASCII today (subtitles, sendcmd). Treat
+               them as the highest-value fixes in the task.
 ```
 
 Mechanical, low-risk, and it removes a whole class of silent corruption. Good first
@@ -144,7 +244,7 @@ real task for a new agent.
 ### T-07 · E2-F07 — Job cancellation                            [P0]
 
 ```
-Blocked by  T-02
+Blocked by  nothing (T-02 is done)
 Touches     app/src-tauri/src/main.rs (new cancel_job command), app/src/api.ts,
             app/src/components/Studio.tsx, pipeline/publikclip_pipeline/jobs/queue.py
             (a 'cancelled' status)
@@ -174,7 +274,7 @@ One job at a time; the GPU is a single resource. Parallelism is not in scope.
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
 ```
-Blocked by  T-02
+Blocked by  nothing (T-02 is done)
 Touches     app/src/components/Onboarding.tsx, app/src/api.ts,
             app/src-tauri/src/main.rs (Ollama install/pull helpers)
 Do not      remove the `disabled` condition on line 118 — the gate is deliberate

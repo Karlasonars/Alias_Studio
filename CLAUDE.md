@@ -15,11 +15,17 @@ quietly does nothing.
 
 | Document | Answers |
 |---|---|
-| `SPECIFICATION.md` | **How the built thing works today.** Architecture, the eight stages, the checkpoint contract. Read the relevant section before touching a stage. |
+| `SPECIFICATION.md` | **How the built thing works today.** Architecture, the eight stages, the checkpoint contract. Read the relevant section before touching a stage — but see the precedence note below. |
 | `PRODUCT-REQUIREMENTS.md` | **What it should become and why.** Requirement IDs (`E11-F03`), priorities, acceptance criteria. Written in Latvian. |
 | `AGENT-WORKPLAN.md` | **What to do next, in what order, and which files it touches.** Start here when picking up work. |
 | `VENDORED-LICENSES.md` | Third-party code. Authoritative — read before adding a dependency. |
 | This file | The rules that apply to every task. |
+
+**Precedence: this file wins.** `SPECIFICATION.md` is descriptive and has drifted —
+its §5 still shows the two-row fingerprint table, states rule 3 as universal, claims
+244 tests, and asserts in bold that the settings-group test catches an unwired group
+(it cannot — T-22). Read it for architecture and intent; where it disagrees with §4
+or §5 here, this file is correct. T-23 tracks bringing it back into line.
 
 Your task will name a requirement ID. That ID is the contract: implement exactly it,
 nothing adjacent.
@@ -36,7 +42,9 @@ mirror it into the code.
 pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   cli.py            (584)  argparse surface; the sidecar's entry point
   config.py         (452)  the whole settings tree
-  settings_schema.py (487) UI schema — 13 groups, 68 fields, all with `help` + `cost`
+  settings_schema.py (487) UI schema — 13 groups; 67 nested + 5 top-level = 72
+                           fields, plus CAPTION_FIELDS (15) outside GROUPS and
+                           outside the help guard. Real surface: 87
   hardware.py       (231)  CUDA/CPU detection. The single place that answers
                            "what can this machine do"
   jobs/queue.py     (355)  Job/Stage machinery, SQLite, checkpoints
@@ -48,7 +56,7 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   insights/calibration.py  (908) LARGEST FILE. Instagram feedback + calibration
   models/specs.py    (82)  weight registry
   vendor/                  DO NOT EDIT — see §6
-  tests/                   223 tests, 14 files
+  tests/                   263 tests, 15 files
 
 app/src/                          React frontend — ~5,300 lines
   App.tsx           (229)  view router: boot|onboarding|studio|review|loop|settings
@@ -74,13 +82,17 @@ exist. If the database and the disk disagree, the disk wins.
 # Python pipeline
 cd pipeline
 uv sync
-uv run pytest -q                    # 223 tests, no video or model I/O
-uv run pytest -q -k house_rules     # the guard tests in §5 — run these before every PR
+uv run pytest -q                    # 263 tests, ~50 s. Needs ffmpeg on PATH:
+                                    # test_render_smoke encodes a synthetic clip.
+uv run pytest -q -k house_rules     # the §5 guards — but NOT test_settings.py,
+                                    # which holds the §5.2 guard. Before a PR,
+                                    # run the full suite, not just this.
 uv run ruff check .                 # lint
 
-# Full app, dev
+# Frontend — CI runs this, so run it before pushing frontend work
 cd app
-npm install
+npm ci                              # what CI runs; npm install drifts the lockfile
+npx tsc --noEmit                    # the only frontend check that exists
 npm run tauri dev                   # dev builds call `uv run` against ./pipeline,
                                     # so Python changes need no rebuild
 
@@ -88,9 +100,15 @@ npm run tauri dev                   # dev builds call `uv run` against ./pipelin
 npx tauri build                     # a bare cargo build still points at localhost:1430
 ```
 
-**Never run the pipeline on real media to "check if it works".** A full job takes
-10–60 minutes and downloads ~2.5 GB of models. The test suite is designed to run
-without either. If you think you need a real run, say so in the PR and stop.
+**Never run the pipeline on real source media or model weights to "check if it
+works".** A full job takes 10–60 minutes and downloads ~2.5 GB of models. If you
+think you need a real run, say so in the PR and stop.
+
+Synthetic ffmpeg fixtures are fine and the suite already uses them:
+`test_render_smoke` encodes a 20-second `testsrc2` clip and burns captions into
+it. That is the intended way to verify a render change. Note that it is marked
+`@pytest.mark.slow` but the marker is **not registered**, so it runs on every
+`pytest -q` — the mark currently does nothing but emit a warning.
 
 ---
 
@@ -111,28 +129,78 @@ still correct?*
    `upstream_stale`. Without it, new candidate windows get scored with stale scores,
    or a re-directed camera's trajectories never reach a cached render.
 
-3. **A missing fingerprint key means "unchanged", not "stale".** Checkpoints written
-   before a setting existed lack its key. `fingerprint_ok(stored, current, factory)`
-   compares a missing key against the **factory default**, so adding an unrelated
-   toggle does not throw away an hour of transcription.
+3. **A missing fingerprint key is compared against the factory default.** Checkpoints
+   written before a setting existed lack its key. `fingerprint_ok(stored, current,
+   factory)` treats a missing key as the factory value — so a user who never touched
+   that setting keeps their hour of transcription, and a user who did gets a re-run.
+   "Missing means unchanged" is the wrong summary: it is only unchanged *if the
+   current value is still the default*.
 
-Current fingerprints:
+   **`fingerprint_ok` has exactly one caller** (`candidates`). Everything below uses
+   strict comparison instead, which means rule 3 does **not** hold for those stages.
 
-| Stage | Invalidated by |
-|---|---|
-| `camera` | `camera_settings`, `retention_settings`, `clip_framing` |
-| `render` | `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` |
+What each stage actually does — all eight, because the two-row version of this table
+is how a shipped setting ended up dead:
 
-Each covers **only** what that stage reads. A title edit must not force a re-encode;
-a caption tweak must not re-run the expensive camera pass.
+| Stage | `artifacts_ok` | Rule 3 holds? |
+|---|---|---|
+| `ingest` | files exist + source hash | n/a |
+| `asr` | **no override** — cached forever once written | n/a |
+| `diarize` | **no override** — cached forever once written | n/a |
+| `events` | `curves.json` exists — **no settings fingerprint at all** | **no** |
+| `candidates` | `fingerprint_ok(...)` — the only caller | yes |
+| `scoring` | strict `==` on `settings_used` | no |
+| `camera` | two strict `!=` on `__dict__` (`camera`, `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
+| `render` | six strict comparisons | no |
+
+Two live consequences, both worth knowing before you touch any of this:
+
+- **`Settings.laughter_specialist` is a shipped UI toggle that does nothing on a
+  re-run.** It is consumed at `events/stage.py:81`, but `events.artifacts_ok` only
+  checks that `curves.json` exists. Turn it on for a job that has already run and
+  the setting is inert, forever, silently. This violates §5.2 and is tracked as
+  T-21 in `AGENT-WORKPLAN.md`.
+- **Adding any field to `CameraSettings` or the scoring settings invalidates every
+  existing checkpoint**, because those stages compare `__dict__` strictly. That is
+  precisely the "throw away an hour of work over an unrelated toggle" failure rule 3
+  claims to have solved. It has not been solved outside `candidates`.
+
+Each fingerprint covers **only** what that stage reads. A title edit must not force a
+re-encode; a caption tweak must not re-run the expensive camera pass.
+
+**The tests for this section are in `pipeline/tests/test_clip_edit_sync.py`** (23
+tests: fingerprint invalidation, structural edits, cache survival). Nothing in §5's
+guard file covers the checkpoint contract. If you change a fingerprint, that is the
+file that will tell you whether you were right.
 
 ---
 
 ## 5. Invariants
 
-Every one of these is enforced by a test in `pipeline/tests/test_house_rules.py`.
-If you are about to break one, the test will tell you. Do not edit the test to make
-it pass — that is the one change that is never correct.
+**Six of these ten are enforced by a test. Four are not, and you need to know which.**
+
+| Invariant | Where the guard lives |
+|---|---|
+| 5.1, 5.3, 5.4, 5.5, 5.6 | `test_house_rules.py` |
+| 5.2 | `test_settings.py` — which `-k house_rules` **deselects**, and which T-22 shows is weaker than it reads |
+| **5.7, 5.8, 5.9, 5.10** | **Nowhere. On these you are on your own.** |
+
+**Every guard in this repo is narrower than the rule above it.** §5.3's covers
+`read_text`/`write_text` but not `open()`; §5.2's covers a hardcoded list of groups;
+the schema help check covers `GROUPS` but not `CAPTION_FIELDS`. A green suite means
+"nothing known-checkable broke", not "the rule holds". Read the test before trusting
+the heading.
+
+**Do not edit a guard test to silence it.** That is the one change that is never
+correct.
+
+**But registering a new field in a guard's classification list is not silencing it** —
+it is the guard doing its job. `test_every_clip_edit_field_is_fingerprinted_or_exempt`
+exists precisely to make you make that declaration. Adding your field to
+`RENDER_FINGERPRINT_FIELDS`, `CAMERA_FINGERPRINT_FIELDS` or
+`CLIP_EDIT_RENDER_IRRELEVANT` is expected and required. Changing an assertion,
+raising a baseline, or deleting a case is silencing. The line is: **you may tell a
+guard what your change is; you may not tell it not to look.**
 
 ### 5.1 The four-place law
 
@@ -143,10 +211,30 @@ it pass — that is the one change that is never correct.
 3. **the stage fingerprint** (`artifacts_ok`)
 4. the UI (`settings_schema.py` entry, or the editor component)
 
-**Number 3 is the one people forget, and forgetting it makes the setting silently do
-nothing on the next run.** `test_every_clip_edit_field_is_fingerprinted_or_exempt`
-fails until you classify a new `ClipEdit` field as either fingerprinted or explicitly
-render-irrelevant.
+**Number 3 is the one people forget**, and forgetting it makes the setting silently do
+nothing on the next run. Not through carelessness: 1, 2 and 4 all produce visible
+behaviour the moment you run the app, so you get feedback. 3 only misbehaves on the
+*second* run of an existing job — which is not something you do while building the
+feature. You can hand-test a new setting to your own satisfaction and never once
+enter the broken path.
+
+**5. For a `ClipEdit` field there is a fifth place: the guard's classification list.**
+`test_every_clip_edit_field_is_fingerprinted_or_exempt` fails until you add the field
+to `RENDER_FINGERPRINT_FIELDS`, `CAMERA_FINGERPRINT_FIELDS`, or
+`CLIP_EDIT_RENDER_IRRELEVANT` with a reason. This is expected work, not architecture
+being bent, and §10's "stop if you need a fifth place" does **not** apply to it. It is
+also not "editing a test to make it pass" — see the carve-out above.
+
+**A field on `config.Settings` has no such guard.** Places 3 and 4 are unchecked for
+job-level settings; `test_settings.py`'s group check is coarse and, as written, only
+covers a hardcoded list (see T-22). Job-level settings need the four places by
+discipline, not by test.
+
+**So supply the missing net yourself:** add a fingerprint test to
+`test_clip_edit_sync.py` alongside the existing ones. `test_camera_cache_is_invalidated_by_a_framing_edit`
+and `test_render_fingerprint_covers_every_style_the_stage_applies` are the templates —
+set up a checkpoint, change the setting, assert `artifacts_ok` returns False. This
+also satisfies §7's "one new test that fails without your change" for free.
 
 ### 5.2 No decorative settings
 
@@ -167,14 +255,26 @@ Every `read_text` / `write_text` passes `encoding="utf-8"`. A `±` in a score on
 corrupted `score.json` under cp1252 and Rust's read failed silently.
 
 `PYTHONUTF8=1` in `quiet_command` masks this in the desktop app but **not** in CLI use.
-39 call sites currently violate this; `test_no_text_io_without_encoding` is a
-**ratchet** — the count may only go down. If you touch a file with a violation, fix it
-and lower the baseline.
+39 call sites currently violate this.
+
+**The baseline is a two-sided pin, not a one-way ratchet.** There are two tests:
+`test_no_text_io_without_encoding` asserts `<=` and `test_encoding_baseline_is_not_stale`
+asserts `==`. The suite goes red the moment you fix one call site without lowering the
+constant. Practical consequence: **a partial sweep is not possible** — every commit
+that fixes a violation must lower the baseline in the same commit, and a task that
+incidentally fixes one site drags the constant edit into its diff. That is deliberate
+(a baseline nobody lowers stops protecting anything), but it is the opposite of what
+"ratchet" implies.
+
+**The guard covers `read_text` / `write_text` only.** `open()` is invisible to it —
+`events/panns_channel.py:64` is a text read with no encoding that the count does not
+see. "Everywhere" in the heading is the rule; the guard is narrower than the rule.
 
 ### 5.4 Every `invoke()` lives in `api.ts`
 
-`app/src/api.ts` is the single list of Tauri calls — but it covers only 11 of the 17
-Tauri commands. **12** direct `invoke()` calls currently sit outside it: `ClipEditor.tsx`
+`app/src/api.ts` is the single list of Tauri calls — but it covers only 13 of the 17
+Tauri commands (missing: `run_edit_render`, `save_clip_edits`, `save_pexels_key`,
+`ig_connect`). **12** direct `invoke()` calls currently sit outside it: `ClipEditor.tsx`
 (6), `IgModal.tsx` (3), `KeyModal.tsx` (3). `test_no_invoke_outside_api_ts` is a ratchet
 on that count. Add new commands to `api.ts` and nowhere else; if you touch a component
 with a stray call, move it and lower the baseline.
@@ -190,8 +290,9 @@ values are never empty strings. `test_no_truthy_gameplay_amount_check` enforces 
 `_resolve_content_box(0.0, w, h)` must reproduce the original tight 9:16 crop exactly —
 full source height, `h * 9/16` width (~31.6 % of a 16:9 frame). Any change to the
 framing dial that moves the `0.0` endpoint by a single pixel is a regression, however
-good it looks at other values. `test_framing_dial_zero_is_exact` pins both the
-landscape and the portrait branch.
+good it looks at other values. `test_framing_dial_zero_is_exact_landscape`
+(parametrized over four resolutions) and `test_framing_dial_zero_is_exact_portrait`
+pin both branches.
 
 ### 5.7 Probe, do not trust
 
@@ -248,9 +349,13 @@ once in `onUp`. Follow that pattern for any new slider or handle.
 A task is done when **all** of these hold:
 
 - [ ] The named requirement ID is implemented — and nothing adjacent to it.
-- [ ] `uv run pytest -q` passes (223 tests + whatever you added).
-- [ ] `uv run pytest -q -k house_rules` passes, with **no baseline raised**.
+- [ ] `uv run pytest -q` passes — the **full** suite, not `-k house_rules`, which
+      deselects the §5.2 guard in `test_settings.py`.
+- [ ] No baseline raised in `test_house_rules.py`. Equal is fine only if you fixed
+      nothing — the `==` guard goes red the moment you fix a violation and leave the
+      constant alone (§5.3).
 - [ ] `uv run ruff check .` is clean.
+- [ ] If you touched `app/`: `npx tsc --noEmit` is clean.
 - [ ] At least one new test **fails without your change**. Verify this by reverting
       your change and watching it fail; a test that passes both ways tests nothing.
 - [ ] If you added a setting: all four places from §5.1, in this commit.
@@ -289,8 +394,11 @@ building it.
   is written this way; match it.
 - PR description states: the requirement ID, which of the four places you touched,
   which test fails without the change, and anything you deliberately did not do.
-- **Never** `git add --renormalize`, mass reformat, or reorder imports across files you
-  are not otherwise changing. Diff noise is what makes review impossible.
+- **Never mass reformat or reorder imports across files you are not otherwise
+  changing.** Diff noise is what makes review impossible.
+- `git add --renormalize` is the one exception, and only when line endings are
+  genuinely wrong — which is what `guards.yml` tells you to run when its CRLF check
+  fails. When you do, it goes in a commit that contains **nothing else**.
 
 ---
 
@@ -301,7 +409,9 @@ Stop and say so. Specifically:
 - The requirement conflicts with an invariant here → say which, do not pick one.
 - You need a real pipeline run to verify → say so, do not run it.
 - The change would need a fifth place not listed in §5.1 → say so; that means the
-  architecture is being bent and a human should look.
+  architecture is being bent and a human should look. **Exception: the `ClipEdit`
+  guard classification list in `test_house_rules.py` is an expected fifth place —
+  register your field there and carry on. See §5.1.**
 - You cannot make a test fail without your change → the change may not be doing
   anything. Say so.
 
