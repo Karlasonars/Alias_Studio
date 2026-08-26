@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# pre-push — the local half of the review gate.
+#
+# guards.yml on GitHub is what *enforces* the house rules. This hook exists so
+# you find out in fifteen seconds instead of three minutes, before the push,
+# without spending a CI round trip on a mistake you can see locally.
+#
+# Deliberately fast and narrow: lint plus the house rules, not the full suite.
+# A hook that takes two minutes gets bypassed, and a bypassed hook protects
+# nothing. The full suite is CI's job.
+#
+# Enable (once per clone):
+#     git config core.hooksPath .githooks
+#
+# Bypass, when you genuinely mean to:
+#     git push --no-verify
+#
+# See CLAUDE.md §5 for what each guard protects.
+
+set -e
+
+RED=''; GREEN=''; YELLOW=''; BOLD=''; OFF=''
+if [ -t 1 ]; then
+    RED=$(printf '\033[31m'); GREEN=$(printf '\033[32m')
+    YELLOW=$(printf '\033[33m'); BOLD=$(printf '\033[1m'); OFF=$(printf '\033[0m')
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT/pipeline" || exit 0
+
+# Without uv there is nothing to run. Warn rather than block: a docs-only push
+# from a machine with no Python env is a legitimate thing to do, and CI still
+# has the last word.
+if ! command -v uv >/dev/null 2>&1; then
+    printf '%spre-push: uv not found, skipping local guards.%s\n' "$YELLOW" "$OFF"
+    printf '          CI will still run them. Install uv to catch this sooner.\n'
+    exit 0
+fi
+
+fail() {
+    printf '\n%s%spre-push blocked: %s%s\n\n' "$BOLD" "$RED" "$1" "$OFF"
+    printf 'Fix it, or push with --no-verify if you are certain.\n'
+    printf 'Do NOT edit a guard test to make it pass — CLAUDE.md §5.\n\n'
+    exit 1
+}
+
+printf '%spre-push:%s lint … ' "$BOLD" "$OFF"
+if ! uv run ruff check . >/tmp/pp-ruff.log 2>&1; then
+    cat /tmp/pp-ruff.log
+    fail 'ruff'
+fi
+printf '%sok%s\n' "$GREEN" "$OFF"
+
+printf '%spre-push:%s house rules … ' "$BOLD" "$OFF"
+if ! uv run pytest -q tests/test_house_rules.py >/tmp/pp-guards.log 2>&1; then
+    tail -40 /tmp/pp-guards.log
+    printf '\n'
+    # The ratchets are the most common trip, and the least obvious to read, so
+    # say out loud which direction a baseline is allowed to move.
+    printf '%sIf a ratchet baseline changed: lower it, never raise it.%s\n' "$YELLOW" "$OFF"
+    fail 'house rules'
+fi
+printf '%sok%s\n' "$GREEN" "$OFF"
+
+exit 0

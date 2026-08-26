@@ -72,9 +72,22 @@ scoring quality).
 
 ## Status
 
+**No release yet. Nothing here is packaged for general use.**
+
+The repository is public because the project is AGPL-3.0 and because CI and
+branch protection need it to be — not because it is finished. There are no
+installers, no support, and no answer time on issues. If you install this
+today, you are installing from source and you are on your own.
+
 Working end to end: hour-long source in, rendered/captioned/scored 9:16 clips
 out, validated on real footage including gameplay. Builds are unsigned —
 install from source below.
+
+Where the project is going, and why:
+[`PRODUCT-REQUIREMENTS.md`](PRODUCT-REQUIREMENTS.md) (Latvian) for the product
+decisions, [`AGENT-WORKPLAN.md`](AGENT-WORKPLAN.md) for what is being built in
+what order, [`SPECIFICATION.md`](SPECIFICATION.md) for how the built thing
+works today.
 
 Developed and validated on Windows 11 x64. The macOS path is inherited from the
 base project and is not currently exercised here; GPU acceleration is
