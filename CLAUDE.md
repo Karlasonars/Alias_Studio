@@ -252,6 +252,12 @@ to `RENDER_FINGERPRINT_FIELDS`, `CAMERA_FINGERPRINT_FIELDS`, or
 being bent, and §10's "stop if you need a fifth place" does **not** apply to it. It is
 also not "editing a test to make it pass" — see the carve-out above.
 
+**A task can *be* one of the four places.** §5.1 is written in the voice of adding a
+new setting, but the audit findings are producing tasks that supply a place a shipped
+setting never got — T-21 was place 3 arriving late for `laughter_specialist`. The
+checklist does not apply to those; say so in the PR rather than reporting N/A and
+leaving the reader to guess whether you understood it.
+
 **A field on `config.Settings` has no such guard.** Places 3 and 4 are unchecked for
 job-level settings; `test_settings.py`'s group check is coarse and, as written, only
 was blind to new groups until T-22 fixed it — it now resolves them through
@@ -367,6 +373,12 @@ byte-identical — and neither should have been possible. Build the list first, 
 it, then write. "The diff came out empty" is not the same as "I was allowed to write
 there".
 
+**After a scripted rewrite, `git status` lies until you refresh the index.** Files
+show as modified while `git diff` is empty: the stat cache is stale because mtimes
+changed, not because content did. `git update-index --refresh` clears it instantly.
+This is how T-22's cleanup ended up writing into `vendor/` — it was "repairing" 42
+files that had nothing wrong with them.
+
 **`pipeline/publikclip_pipeline/vendor/` — do not edit.** `clippyme`, `laughter`,
 `panns` and `campplus` are copies of upstream projects, and two upstreams are
 themselves AGPL-3.0. Modify only when you must, and record it in
@@ -387,6 +399,13 @@ alone does not fix an installed build.
 **Drag interactions.** Update local state continuously in `onMove`, call `persist()`
 once in `onUp`. Follow that pattern for any new slider or handle.
 
+`ClipEditor.tsx` follows it for the monitor drag only (`onUp` at line 354 persists
+only when `monitorDragRef` is set). Timeline bound and overlay drags update state and
+are never persisted on mouseup — they survive on whatever calls `persist()` next, or
+on `doRender()` saving on its way out. Whether that is intended or a bug is
+**unresolved**. Do not "correct" it as part of another task; if you think it is
+wrong, file it.
+
 ---
 
 ## 7. Definition of done
@@ -403,6 +422,12 @@ A task is done when **all** of these hold:
 - [ ] If you touched `app/`: `npx tsc --noEmit` is clean.
 - [ ] At least one new test **fails without your change**. Verify this by reverting
       your change and watching it fail; a test that passes both ways tests nothing.
+      **When your change strengthens a guard rather than altering behaviour,
+      reverting proves nothing** — both versions pass on a clean tree. Verify by
+      injecting the defect the guard exists to catch, then showing the old version
+      passes it and the new one fails. **When a task changes no behaviour at all**
+      (documentation, a pure move), this item does not apply: say so explicitly in
+      the PR rather than inventing a test to satisfy it.
 - [ ] Every attribute your test sets actually exists. `config.Settings` and its
       groups are ordinary dataclasses, so `settings.curve.weights = …` on a field
       that was never declared creates it silently and the assertion then passes
@@ -438,6 +463,10 @@ building it.
 ## 9. Commits and pull requests
 
 - **One requirement ID, one branch, one PR.** Branch name: `e11-f03-calibration-report`.
+- **Branch from the commit that contains your task's own entry, not reflexively from
+  `main`.** Doc corrections often land on a branch that is ahead of `main`, and a task
+  whose entry, invariants or numbers live there must be based on it. Name in the PR
+  which branch must merge first.
 - Commit subject: lowercase, imperative, scoped — `render: clamp captions to the
   visible band (E7-F07)`.
 - The body explains **why**, and names the failure it prevents. The existing history
