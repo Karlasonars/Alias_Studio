@@ -129,7 +129,6 @@ class RenderStage(Stage):
         return all(Path(c["path"]).exists() for c in data.get("outputs", []))
 
     def run(self, ctx: StageContext) -> dict:
-        import numpy as np
 
         from ..captions import ass as ass_mod
         from . import ffmpeg_bin, renderer

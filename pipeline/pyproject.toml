@@ -30,6 +30,10 @@ publikclip = "publikclip_pipeline.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    # Lint. Deliberately not pinned here: uv.lock pins the exact version, so
+    # CI, the pre-push hook and every developer run the same ruff. A hard pin
+    # in this file would be a second source of truth that drifts from the lock.
+    "ruff>=0.6",
 ]
 
 # PyPI serves CPU-only torch wheels on Windows; the CUDA builds live on

@@ -19,31 +19,49 @@ target-version = "py312"
 extend-exclude = ["publikclip_pipeline/vendor"]
 
 [lint]
+# First run reported 91 findings. 74 of them were the config being wrong, not
+# the code: RUF001/002/003 flag every `×`, `–`, `ρ` and `≥` in a docstring, and
+# RUF100 wanted to delete `# noqa: BLE001 — surface, don't crash the app`
+# comments that carry the reason a broad except is deliberate. Both would have
+# made this codebase worse. The selection below is what is left after removing
+# rules that punish it for being carefully written.
 select = [
-    "F",    # pyflakes — undefined names, unused imports, f-strings with no
-            #   placeholders. Real bugs, and an agent's most common slip when it
-            #   moves code between files.
+    "F",    # pyflakes — undefined names, unused imports and locals. Real bugs,
+            #   and an agent's most common slip when it moves code between
+            #   files. This is the rule that earns its place.
     "B",    # bugbear — mutable default arguments, loop-variable capture in
-            #   closures, `except` that swallows everything.
-    "RUF",  # ruff's own checks — including mutable dataclass defaults, which
-            #   matters here: config.py and timeline.py are almost entirely
-            #   dataclasses.
-    "T20",  # no stray print() — the pipeline talks over JSONL; a print()
+            #   closures, except clauses that swallow everything.
+    "T20",  # no stray print() — the pipeline talks over JSONL, and a print()
             #   corrupts the stream the Rust layer parses.
 ]
 
 ignore = [
-    "B008",  # function call in default arg — argparse patterns rely on it
+    "B008",  # function call in a default arg — argparse patterns rely on it.
+    # The next three are real but need a deliberate pass, not --fix:
+    "B905",  # zip() without strict=. 12 sites. strict=True turns a silent
+             #   truncation into an exception, which is usually right and
+             #   occasionally a behaviour change — worth its own task, worth
+             #   reading each site. Not worth a mechanical sweep.
+    "B007",  # unused loop variable. Cosmetic; renaming to _x churns diffs.
+    "B028",  # warnings.warn without stacklevel — only in winpatches.py, which
+             #   mirrors upstream code on purpose.
 ]
 
-# --- Turn these on later, one commit each -------------------------------------
-# "E",    # pycodestyle — whitespace and spacing. Big first diff.
-# "I",    # import sorting. Big first diff, zero behaviour change.
-# "UP",   # pyupgrade — this project is 3.12-only, so these are safe wins.
-# "SIM",  # simplifiable constructs. Read each one; some hurt readability in
-#         #   the stage code, where the long form documents the branch.
-# "PTH",  # prefer pathlib. The codebase already does, mostly.
-# "TID",  # tidy imports.
+# --- Considered and rejected, with reasons ------------------------------------
+# "RUF001/002/003"  ambiguous Unicode. Built to catch homoglyphs in
+#                   identifiers, not typography in prose. Would rewrite
+#                   `0.7×max(w,h)` to `0.7xmax(w,h)` and `Spearman ρ` to
+#                   `Spearman p`. Never enable these here.
+# "RUF100"          unused noqa. The noqa comments in this repo carry their
+#                   reason; deleting them deletes the reasoning. Becomes
+#                   meaningful only if E731/BLE001/N802/SLF001 are enabled.
+# "RUF046"          int() on an already-int. Wrong on numpy scalars, where
+#                   round() does not return a Python int.
+#
+# --- Style rules, to enable one commit each -----------------------------------
+# "E"    pycodestyle whitespace.   "I"  import sorting.
+# "UP"   pyupgrade (3.12-only).    "SIM" simplifiable constructs.
+# "PTH"  prefer pathlib.           "TID" tidy imports.
 # ------------------------------------------------------------------------------
 
 [lint.per-file-ignores]

@@ -217,7 +217,7 @@ def _overlay_filters(overlays, input_offset: int, out_w: int, out_h: int) -> tup
         w_px = int(out_w * ov.scale)
         pre = f"[{idx}:v]scale={w_px}:-2,pad=iw+16:ih+16:8:8:white@0.95,format=rgba"
         if ov.animation == "ping":
-            dur = max(0.3, ov.end - ov.start)
+            
             pre += (
                 f",fade=in:st={ov.start:.2f}:d=0.18:alpha=1"
                 f",fade=out:st={max(ov.start, ov.end - 0.18):.2f}:d=0.18:alpha=1"

@@ -271,7 +271,7 @@ def test_max_candidates_limits_pool():
 
 
 def test_curve_weights_shift_the_peak():
-    n = 10
+    
     channels = {
         "dynamics": np.concatenate([np.ones(5), np.zeros(5)]),
         "lexical": np.concatenate([np.zeros(5), np.ones(5)]),

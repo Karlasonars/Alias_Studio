@@ -58,7 +58,6 @@ class EventsStage(Stage):
         import json
 
         import librosa
-        import numpy as np
         import torch
 
         from ..vendor.laughter import model as laugh_model

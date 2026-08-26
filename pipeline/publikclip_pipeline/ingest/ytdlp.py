@@ -15,7 +15,6 @@ must never freeze the pipeline (PLAN.md §3).
 from __future__ import annotations
 
 import json
-import os
 import platform
 import re
 import subprocess
