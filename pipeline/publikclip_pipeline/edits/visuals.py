@@ -92,8 +92,11 @@ def pexels_key() -> str | None:
     secrets_path = config.home_dir() / "secrets.json"
     if secrets_path.exists():
         try:
-            return json.loads(secrets_path.read_text()).get("pexels_api_key")
-        except (json.JSONDecodeError, OSError):
+            return json.loads(secrets_path.read_text(encoding="utf-8")).get("pexels_api_key")
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            # UnicodeDecodeError became reachable when the read became
+            # explicitly utf-8; an unreadable secrets file must still mean
+            # "no key", not a crash.
             return None
     return None
 

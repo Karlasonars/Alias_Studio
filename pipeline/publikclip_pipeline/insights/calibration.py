@@ -155,9 +155,12 @@ def rendered_clips() -> list[dict]:
         if not render_path.exists() or not score_path.exists():
             continue
         try:
-            render = json.loads(render_path.read_text())["data"]
-            score = json.loads(score_path.read_text())["data"]
-        except (json.JSONDecodeError, KeyError, OSError):
+            render = json.loads(render_path.read_text(encoding="utf-8"))["data"]
+            score = json.loads(score_path.read_text(encoding="utf-8"))["data"]
+        except (json.JSONDecodeError, KeyError, OSError, UnicodeDecodeError):
+            # UnicodeDecodeError became reachable when the reads became
+            # explicitly utf-8. One unreadable job must skip that job, not
+            # abandon the scan over every other job on disk.
             continue
         clips = score.get("clips", [])
         config_version = score.get("scoring_config_version", 1)

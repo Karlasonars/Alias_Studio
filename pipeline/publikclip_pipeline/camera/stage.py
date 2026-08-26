@@ -110,7 +110,7 @@ class CameraStage(Stage):
         detector = FaceDetector(str(uf))
         model = asd_mod.AsdModel(str(fe), str(be))
 
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
         dynamics = np.asarray(curves["dynamics"], dtype=float)
         grid = float(curves["grid_sec"])
         turns = diarize["turns"]
@@ -132,21 +132,20 @@ class CameraStage(Stage):
                 start, end, src_w, src_h, settings,
             )
             out_path = ctx.job_dir / f"trajectory_{i:02d}.json"
-            out_path.write_text(
-                json.dumps(
-                    {
-                        "clip_start": start,
-                        "clip_end": end,
-                        "fps": traj.fps,
-                        "frames": traj.frames,
-                        "cuts": traj.cuts,
-                        "punches": traj.punches,
-                        "content_w": traj.content_w,
-                        "content_h": traj.content_h,
-                        "meta": traj.meta,
-                    }
-                )
+            payload = json.dumps(
+                {
+                    "clip_start": start,
+                    "clip_end": end,
+                    "fps": traj.fps,
+                    "frames": traj.frames,
+                    "cuts": traj.cuts,
+                    "punches": traj.punches,
+                    "content_w": traj.content_w,
+                    "content_h": traj.content_h,
+                    "meta": traj.meta,
+                }
             )
+            out_path.write_text(payload, encoding="utf-8")
             trajectories[str(i)] = str(out_path)
             stats.append(
                 {

@@ -55,8 +55,11 @@ def gemini_api_key() -> str | None:
     secrets_path = config.home_dir() / "secrets.json"
     if secrets_path.exists():
         try:
-            return json.loads(secrets_path.read_text()).get("gemini_api_key")
-        except (json.JSONDecodeError, OSError):
+            return json.loads(secrets_path.read_text(encoding="utf-8")).get("gemini_api_key")
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            # UnicodeDecodeError became reachable when the read became
+            # explicitly utf-8; an unreadable secrets file must still fall
+            # through to "no key", which the caller degrades on.
             return None
     return None
 
@@ -121,7 +124,7 @@ class GeminiClient:
         images = images or []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, images)}.json"
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            return json.loads(cache_file.read_text(encoding="utf-8"))
 
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for img in images:
@@ -176,7 +179,7 @@ class GeminiClient:
                 payload = res.json()
                 text = payload["candidates"][0]["content"]["parts"][0]["text"]
                 data = json.loads(_strip_fences(text))
-                cache_file.write_text(json.dumps(data))
+                cache_file.write_text(json.dumps(data), encoding="utf-8")
                 return data
             except LlmError:
                 raise
@@ -218,7 +221,7 @@ class OllamaClient:
             images = []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, [])}.json"
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            return json.loads(cache_file.read_text(encoding="utf-8"))
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -232,7 +235,7 @@ class OllamaClient:
             data = json.loads(_strip_fences(res.json()["message"]["content"]))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as err:
             raise LlmError(f"Ollama call failed: {err}", fatal=False) from err
-        cache_file.write_text(json.dumps(data))
+        cache_file.write_text(json.dumps(data), encoding="utf-8")
         return data
 
 

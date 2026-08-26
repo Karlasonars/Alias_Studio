@@ -21,15 +21,22 @@ def load(job_dir: Path) -> dict[str, ClipEdit]:
     if not p.exists():
         return {}
     try:
-        raw = json.loads(p.read_text())
-    except (json.JSONDecodeError, OSError):
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # UnicodeDecodeError joined this list when the read became explicitly
+        # utf-8. Before that, a file an older build wrote under the Windows
+        # ANSI codepage decoded as mojibake and loaded; now it raises, and a
+        # single smart quote in a title would take the whole editor down
+        # instead of resetting one file. Losing edits is bad; refusing to
+        # open the clip at all is worse.
         return {}
     return {k: ClipEdit.from_json(v) for k, v in raw.items()}
 
 
 def save(job_dir: Path, edits: dict[str, ClipEdit]) -> None:
     tmp = path_for(job_dir).with_suffix(".tmp")
-    tmp.write_text(json.dumps({k: e.to_json() for k, e in edits.items()}, indent=1))
+    payload = json.dumps({k: e.to_json() for k, e in edits.items()}, indent=1)
+    tmp.write_text(payload, encoding="utf-8")
     tmp.replace(path_for(job_dir))
 
 

@@ -22,11 +22,12 @@ from .timeline import ClipEdit, TimeRemap, detect_dead_space, keep_ranges, resol
 
 
 def _job_settings(job_dir: Path) -> config.Settings:
-    return config.Settings.from_json(json.loads((job_dir / "settings.json").read_text()))
+    raw = (job_dir / "settings.json").read_text(encoding="utf-8")
+    return config.Settings.from_json(json.loads(raw))
 
 
 def _load_stage(job_dir: Path, stage: str) -> dict:
-    return json.loads((job_dir / f"{stage}.json").read_text())["data"]
+    return json.loads((job_dir / f"{stage}.json").read_text(encoding="utf-8"))["data"]
 
 
 def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
@@ -48,7 +49,7 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
         for w in seg.get("words", [])
         if win_a <= w["start"] <= win_b
     ]
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
     grid = float(curves["grid_sec"])
     rms = curves["rms"][int(win_a / grid) : int(win_b / grid)]
     clip_events = [
@@ -67,10 +68,10 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
     trajectory = None
     camera_path = job_dir / "camera.json"
     if camera_path.exists():
-        cam = json.loads(camera_path.read_text())["data"]
+        cam = json.loads(camera_path.read_text(encoding="utf-8"))["data"]
         traj_file = cam.get("trajectories", {}).get(str(clip_idx))
         if traj_file and Path(traj_file).exists():
-            t = json.loads(Path(traj_file).read_text())
+            t = json.loads(Path(traj_file).read_text(encoding="utf-8"))
             trajectory = {
                 "fps": t.get("fps", 25),
                 "frames": t.get("frames", []),
@@ -149,7 +150,7 @@ def _run_framing(camera: dict, clip_idx: int) -> dict:
 def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: dict, settings: config.Settings, emit) -> dict:
     if not _camera_needs_redirect(job_dir, clip_idx, edit, score_clip):
         traj_path = _load_stage(job_dir, "camera")["trajectories"][str(clip_idx)]
-        return json.loads(Path(traj_path).read_text())
+        return json.loads(Path(traj_path).read_text(encoding="utf-8"))
 
     emit(-1, "Re-directing camera for new bounds…")
     import numpy as np
@@ -162,7 +163,7 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
     ingest = _load_stage(job_dir, "ingest")
     diarize = _load_stage(job_dir, "diarize")
     events = _load_stage(job_dir, "events")
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
 
     detector = FaceDetector(str(registry.ensure(specs.ULTRAFACE, lambda f, m: None)))
     model = asd_mod.AsdModel(
@@ -279,7 +280,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         if edit.start <= w["start"] < edit.end
     ]
     words_out = remap.remap_words(words_src)
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
     cap_words = [ass_mod.Word(text=w["word"], start=w["start"], end=w["end"]) for w in words_out]
     # Emphasis is a SOURCE-time property (per-word RMS in the original
     # audio): mark it on source-timed copies, then carry each surviving
@@ -319,12 +320,11 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     ass_path = out_dir / f"clip_{clip_idx:02d}.ass"
     # Job-level caption tweaks first, then this clip's own on top.
     cap_overrides = {**settings.captions.overrides, **(edit.caption_overrides or {})}
-    ass_path.write_text(
-        ass_mod.build_ass(
-            cap_words, clip_events_out, preset_name=preset,
-            emoji_ok=emoji_ok, overrides=cap_overrides,
-        )
+    ass_doc = ass_mod.build_ass(
+        cap_words, clip_events_out, preset_name=preset,
+        emoji_ok=emoji_ok, overrides=cap_overrides,
     )
+    ass_path.write_text(ass_doc, encoding="utf-8")
 
     # --- build the graph ----------------------------------------------------
     emit(-1, "Rendering clip…")
@@ -340,7 +340,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     graph = trims + [f"{concat_in}concat=n={n}:v=1:a=1[vc][ac]"]
 
     cmd_path = out_dir / f"clip_{clip_idx:02d}.cmd"
-    cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n")
+    cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n", encoding="utf-8")
     scale_pad = ",".join(
         renderer.scale_pad_vf(
             trajectory.get("content_w", 0),
