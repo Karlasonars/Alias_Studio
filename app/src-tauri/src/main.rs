@@ -1,4 +1,4 @@
-// publikclip desktop shell. The pipeline is a Python sidecar speaking JSONL
+// Alias Studio desktop shell. The pipeline is a Python sidecar speaking JSONL
 // on stdout (`publikclip --jsonl ...`); this shell spawns it, forwards every
 // event to the frontend, and exposes small filesystem/settings commands.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -491,7 +491,7 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
         return Err("clip file missing".into());
     }
     let downloads = dirs_home().join("Downloads");
-    let stem = title.unwrap_or_else(|| "publikclip".into());
+    let stem = title.unwrap_or_else(|| "Alias Studio".into());
     let safe: String = stem
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
@@ -540,5 +540,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running publikclip");
+        .expect("error while running Alias Studio");
 }

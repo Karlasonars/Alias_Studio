@@ -1,6 +1,6 @@
 # CLAUDE.md — working rules for this repository
 
-You are working on **Publikclip Extra**: a desktop app that turns one long horizontal
+You are working on **Alias Studio**: a desktop app that turns one long horizontal
 video into several short vertical (9:16) clips, each scored, captioned and reframed.
 Everything runs locally. AGPL-3.0.
 

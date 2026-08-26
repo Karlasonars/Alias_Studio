@@ -1,4 +1,4 @@
-# Publikclip — Produkta prasību dokumentācija (PRD)
+# Alias Studio — Produkta prasību dokumentācija (PRD)
 
 **Versija:** 1.5 · **Datums:** 2026-08-25 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
@@ -83,7 +83,7 @@ Trūkstošais variants: **rīks ar aizvērtu cilpu.** Tas prognozē, kurš momen
 
 ### 1.2. Risinājums
 
-Publikclip ir darbvirsmas lietotne, kas maksimizē klipu vērtību pa divām svirām:
+Alias Studio ir darbvirsmas lietotne, kas maksimizē klipu vērtību pa divām svirām:
 
 **Svira 1 — atlase.** Kurus momentus no avota vispār vērts pārvērst klipos. Astoņu posmu lokāls konveijers būvē interešu līkni no septiņiem signāliem, un vērtēšana tos sver kopā ar LLM spriedumu. Šodien svari ir nostādīti pēc gaumes. **Mērķis: tie tiek nostādīti pēc tā, kas tavai auditorijai reāli nostrādāja.**
 
@@ -128,7 +128,7 @@ Trīs lietas, secībā pēc svarīguma:
 
 ### 2.1. Vīzijas formulējums
 
-> **Publikclip izspiež maksimālo vērtību no katras ierakstītās stundas — uz tava datora, par brīvu, un tas mācās no tā, kas tavai auditorijai reāli nostrādāja.**
+> **Alias Studio izspiež maksimālo vērtību no katras ierakstītās stundas — uz tava datora, par brīvu, un tas mācās no tā, kas tavai auditorijai reāli nostrādāja.**
 
 Trīs vārdi šeit ir izvēlēti apzināti:
 
@@ -169,9 +169,9 @@ Trīs vārdi šeit ir izvēlēti apzināti:
 
 ### 2.4. Pozicionējuma paziņojums
 
-> **Operatoriem**, kuri regulāri ieraksta garu video, zina, ko dara, un kuriem svarīgs ir rezultāts, ne process — **Publikclip** ir bezmaksas, atvērtā pirmkoda darbvirsmas rīks, kas maksimizē vērtību no katras ierakstītās stundas pa divām svirām: **atlasi** (kuri momenti kļūst par klipiem) un **iepakojumu** (nosaukums, hook, vāks, apraksts).
+> **Operatoriem**, kuri regulāri ieraksta garu video, zina, ko dara, un kuriem svarīgs ir rezultāts, ne process — **Alias Studio** ir bezmaksas, atvērtā pirmkoda darbvirsmas rīks, kas maksimizē vērtību no katras ierakstītās stundas pa divām svirām: **atlasi** (kuri momenti kļūst par klipiem) un **iepakojumu** (nosaukums, hook, vāks, apraksts).
 >
-> Atšķirībā no Opus Clip, Vizard un Submagic, kas atrod momentus un tur apstājas, Publikclip **aizver cilpu**: tas prognozē, tu publicē, tas izmēra, un nākamais prognozējums ir kalibrēts pret tavu auditoriju. Neviens no tiem neuzzina, vai to vērtējums bija pareizs. Šis uzzina.
+> Atšķirībā no Opus Clip, Vizard un Submagic, kas atrod momentus un tur apstājas, Alias Studio **aizver cilpu**: tas prognozē, tu publicē, tas izmēra, un nākamais prognozējums ir kalibrēts pret tavu auditoriju. Neviens no tiem neuzzina, vai to vērtējums bija pareizs. Šis uzzina.
 
 **Vienā teikumā, ko konkurents nevar atkārtot:** *rīks, kura vērtējums pēc trim mēnešiem ir labāks nekā pirmajā dienā, jo tas redzēja, kas tev nostrādāja.*
 
@@ -197,7 +197,7 @@ Trīs vārdi šeit ir izvēlēti apzināti:
 
 ### 2.6. Izplatīšanas modelis: bezmaksas un atvērts
 
-**Lēmums (D-09): Publikclip ir un paliek pilnībā bezmaksas.** Nav abonementa, nav vienreizēja pirkuma, nav maksas līmeņu, nav funkciju, kas atvērtas tikai maksātājiem, nav ūdenszīmju un nav apjoma ierobežojumu. Visi saņem visu.
+**Lēmums (D-09): Alias Studio ir un paliek pilnībā bezmaksas.** Nav abonementa, nav vienreizēja pirkuma, nav maksas līmeņu, nav funkciju, kas atvērtas tikai maksātājiem, nav ūdenszīmju un nav apjoma ierobežojumu. Visi saņem visu.
 
 Tas nav tikai cenu lēmums — tas maina produkta prasības piecos konkrētos veidos.
 
@@ -304,7 +304,7 @@ Trīs modeļi atkārtojas visos pārskatos un lietotāju sūdzībās:
 
 **Plaisa C — melnā kaste.** "Virality score: 87" bez pamatojuma. Lietotājs nevar nepiekrist, jo nav, ar ko strīdēties. Kad rīks kļūdās, vienīgā rīcība ir to ignorēt. *Šī plaisa mums jau ir aizvērta arhitektūras līmenī — tā tikai nav pietiekami redzama saskarnē.*
 
-**Plaisa D — geimeru materiāls.** Visi rīki ir būvēti runājošai galvai. Gameplay ar mazu facecam stūrī visos dod klipu, kurā redzama tikai facecam. Publikclip `gameplay_amount` regulators to jau atrisina daļēji; pilns split-screen to atrisinātu pilnībā ([E8](#e8--kadrēšana-un-kompozīcija)).
+**Plaisa D — geimeru materiāls.** Visi rīki ir būvēti runājošai galvai. Gameplay ar mazu facecam stūrī visos dod klipu, kurā redzama tikai facecam. Alias Studio `gameplay_amount` regulators to jau atrisina daļēji; pilns split-screen to atrisinātu pilnībā ([E8](#e8--kadrēšana-un-kompozīcija)).
 
 **Plaisa E — atvērtā cilpa.** *Šī ir svarīgākā, un v1.4 to izvirza priekšplānā.*
 
@@ -357,7 +357,7 @@ Sekas operatoram: **rīks nekad nekļūst labāks tieši viņa nišā.** Zināš
 - Klipa robeža pārgriež teikumu uz pusēm.
 - Nav veida, kā pateikt rīkam "tādus klipus, kā šis, vairāk".
 
-**Ko viņa sagaida no Publikclip.**
+**Ko viņa sagaida no Alias Studio.**
 - Vērtējums, kuram var nepiekrist un redzēt, kāpēc ([E5](#e5--klipu-pārskats-un-vērtējuma-caurspīdīgums)).
 - Savs subtitru stils, saglabāts vienreiz un pielietots vienmēr ([E7](#e7--subtitri-stils-un-zīmola-komplekti)).
 - Robežas, kas pieķeras teikumiem — jau realizēts.
@@ -421,7 +421,7 @@ Sekas operatoram: **rīks nekad nekļūst labāks tieši viņa nišā.** Zināš
 
 ### 4.2. Ieejas slieksnis ir dizaina izvēle
 
-Publikclip prasa vienu no diviem, pirms tas kaut ko izdara:
+Alias Studio prasa vienu no diviem, pirms tas kaut ko izdara:
 
 | Ceļš | Ko lietotājam jāizdara | Izmaksas |
 |---|---|---|
@@ -1526,7 +1526,7 @@ Aizver Kategorijas C2 nepilnību. Lielākais atsevišķais tehniskais darbs šaj
 ## E11 — Vērtības cilpa un kalibrācija
 
 **Mērķis:** kalibrēt vērtējumu pret realitāti, nevis pret gaumi.
-**Kāpēc svarīgi:** pēc [D-16](#374-lēmumu-žurnāls) **šī ir produkta kodola epika**, ne papildinājums. Bez tās Publikclip ir vēl viens klipu ģenerators, kura vienīgā diferenciācija ir cena. Ar to tas ir vienīgais rīks tirgū, kas kļūst labāks tieši tavā nišā ([Plaisa E](#32-kur-ir-plaisa)).
+**Kāpēc svarīgi:** pēc [D-16](#374-lēmumu-žurnāls) **šī ir produkta kodola epika**, ne papildinājums. Bez tās Alias Studio ir vēl viens klipu ģenerators, kura vienīgā diferenciācija ir cena. Ar to tas ir vienīgais rīks tirgū, kas kļūst labāks tieši tavā nišā ([Plaisa E](#32-kur-ir-plaisa)).
 
 **Kas mainījās v1.4:** visa epika pārcēlās uz **v1.1**, un E11-F02 un E11-F03 kļuva `P0`. Iepriekš tā bija v1.2 "diferenciācijas" darbs.
 
@@ -3406,7 +3406,7 @@ Audits pārbaudīja struktūru, konfigurāciju un konkrētus apgalvojumus, bet *
 
 **Un viens solis, kas nav steidzams, bet ir svarīgākais:**
 
-5. **Sākt vākt datus, pirms cilpa ir gatava.** [R16](#354-vērtības-cilpas-riski) — vai vērtējums vispār korelē ar rezultātu — ir produkta lielākais atklātais jautājums, un uz to var sākt atbildēt jau tagad, bez neviena jauna koda: ņem 30 klipus, kurus jau esi publicējis, pieraksti to Publikclip vērtējumu un reālo noturību, un aprēķini korelāciju. Ja tā ir 0,4, [D-16](#374-lēmumu-žurnāls) pamatpieņēmums turas un v1.1 ir vērts būvēt. Ja tā ir 0,05, to labāk uzzināt tagad nekā pēc desmit nedēļu darba.
+5. **Sākt vākt datus, pirms cilpa ir gatava.** [R16](#354-vērtības-cilpas-riski) — vai vērtējums vispār korelē ar rezultātu — ir produkta lielākais atklātais jautājums, un uz to var sākt atbildēt jau tagad, bez neviena jauna koda: ņem 30 klipus, kurus jau esi publicējis, pieraksti to Alias Studio vērtējumu un reālo noturību, un aprēķini korelāciju. Ja tā ir 0,4, [D-16](#374-lēmumu-žurnāls) pamatpieņēmums turas un v1.1 ir vērts būvēt. Ja tā ir 0,05, to labāk uzzināt tagad nekā pēc desmit nedēļu darba.
 
    Tas ir viens vakars ar izklājlapu, un tas ir lētākais veids, kā pārbaudīt visdārgāko pieņēmumu šajā dokumentā.
 

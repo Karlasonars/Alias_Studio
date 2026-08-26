@@ -1,8 +1,8 @@
-# Publikclip Extra
+# Alias Studio
 
 **Long video in. Scored vertical clips out. Everything runs on your machine.**
 
-Publikclip Extra is a modified build of
+Alias Studio is a modified build of
 [publikclip](https://github.com/Blueturboguy07/publikclip), an open-source
 (AGPL-3.0) desktop app that turns a YouTube URL or a horizontal video file into
 vertical 9:16 clips. This fork keeps the original pipeline and adds control
@@ -108,8 +108,8 @@ with C++** build tools, [Node](https://nodejs.org), git, and
 Then, in PowerShell:
 
 ```powershell
-git clone https://github.com/Karlasonars/Publikclip-Extra.git
-cd Publikclip-Extra\app
+git clone https://github.com/Karlasonars/Alias_clp.git
+cd Alias_clp\app
 npm.cmd install
 node_modules\.bin\tauri.cmd build --bundles nsis
 # run the installer it produces:

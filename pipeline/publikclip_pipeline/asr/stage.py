@@ -127,7 +127,7 @@ class AsrStage(Stage):
         word_count = sum(len(s["words"]) for s in segments)
         if word_count == 0:
             raise StageError(
-                "No speech was found in this video. publikclip needs dialogue to find moments."
+                "No speech was found in this video. Alias Studio needs dialogue to find moments."
             )
 
         total = transcribe_secs + align_secs

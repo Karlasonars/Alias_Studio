@@ -1,4 +1,4 @@
-"""publikclip CLI.
+"""Alias Studio CLI.
 
 Doubles as the desktop app's sidecar: with --jsonl every progress event and
 the final result are emitted as one JSON object per stdout line, so the

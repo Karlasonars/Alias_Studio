@@ -53,7 +53,7 @@ export default function Studio({ jobs, running, stages, error, log, onRun, onOpe
       {showKey && <KeyModal onClose={() => setShowKey(false)} />}
       <aside className="rail">
         <header className="rail-brand">
-          <span className="rail-logo">Publikclip extra</span>
+          <span className="rail-logo">Alias Studio</span>
           <span className="rail-sub">the clipper that shows its work</span>
         </header>
         <div className="rail-jobs">
@@ -96,7 +96,7 @@ export default function Studio({ jobs, running, stages, error, log, onRun, onOpe
                 publikclip, and publikclip is AGPL-3.0 — saying where it
                 came from is both honest and part of the licence. */}
             <p className="brand-credit">
-              Publikclip extra is based on{' '}
+              Alias Studio is based on{' '}
               <button
                 className="brand-credit-link"
                 onClick={() =>
