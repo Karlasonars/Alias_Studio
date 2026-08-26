@@ -43,8 +43,8 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   cli.py            (584)  argparse surface; the sidecar's entry point
   config.py         (452)  the whole settings tree
   settings_schema.py (487) UI schema — 13 groups; 67 nested + 5 top-level = 72
-                           fields, plus CAPTION_FIELDS (15) outside GROUPS and
-                           outside the help guard. Real surface: 87
+                           fields, plus CAPTION_FIELDS (15) outside GROUPS.
+                           Real surface: 87, all of it help-guarded
   hardware.py       (231)  CUDA/CPU detection. The single place that answers
                            "what can this machine do"
   jobs/queue.py     (355)  Job/Stage machinery, SQLite, checkpoints
@@ -56,7 +56,8 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   insights/calibration.py  (908) LARGEST FILE. Instagram feedback + calibration
   models/specs.py    (82)  weight registry
   vendor/                  DO NOT EDIT — see §6
-  tests/                   272 tests, 15 files
+  tests/                   15 files. No exact count here on purpose —
+                           see §3
 
 app/src/                          React frontend — ~5,300 lines
   App.tsx           (229)  view router: boot|onboarding|studio|review|loop|settings
@@ -82,8 +83,13 @@ exist. If the database and the disk disagree, the disk wins.
 # Python pipeline
 cd pipeline
 uv sync
-uv run pytest -q                    # 272 tests, ~50 s. Needs ffmpeg on PATH:
+uv run pytest -q                    # ~50 s. Needs ffmpeg on PATH:
                                     # test_render_smoke encodes a synthetic clip.
+                                    # No exact test count is written down anywhere
+                                    # in these docs: it changed with every task and
+                                    # was wrong in four consecutive revisions, and
+                                    # knowing it is 275 rather than 272 helps no
+                                    # one. `pytest -q` prints it.
 uv run pytest -q -k house_rules     # the §5 guards — but NOT test_settings.py,
                                     # which holds the §5.2 guard. Before a PR,
                                     # run the full suite, not just this.
@@ -200,11 +206,17 @@ file that will tell you whether you were right.
 | 5.2 | `test_settings.py` — which `-k house_rules` **deselects**, and which T-22 shows is weaker than it reads |
 | **5.7, 5.8, 5.9, 5.10** | **Nowhere. On these you are on your own.** |
 
-**Every guard in this repo is narrower than the rule above it.** §5.3's covers
-`read_text`/`write_text` but not `open()`; §5.2's covers a hardcoded list of groups;
-the schema help check covers `GROUPS` but not `CAPTION_FIELDS`. A green suite means
-"nothing known-checkable broke", not "the rule holds". Read the test before trusting
-the heading.
+**A guard can be narrower than the rule above it.** The live example is §5.3's: it
+covers `read_text`/`write_text` and cannot see `open()`. A green suite means "nothing
+known-checkable broke", not "the rule holds" — read the test before trusting the
+heading.
+
+*Two other examples stood here until T-22 and turned out not to hold: §5.2's group
+list is no longer hardcoded, and `CAPTION_FIELDS` was guarded all along by
+`test_settings.py`, more strictly than the `test_house_rules.py` copy. Both were
+written down from a report without being checked. Verify a "there is no guard for
+this" claim with a grep before it becomes a documented fact — it is the cheapest
+check there is, and it was skipped three times.*
 
 **Do not edit a guard test to silence it.** That is the one change that is never
 correct.
@@ -242,8 +254,10 @@ also not "editing a test to make it pass" — see the carve-out above.
 
 **A field on `config.Settings` has no such guard.** Places 3 and 4 are unchecked for
 job-level settings; `test_settings.py`'s group check is coarse and, as written, only
-covers a hardcoded list (see T-22). Job-level settings need the four places by
-discipline, not by test.
+was blind to new groups until T-22 fixed it — it now resolves them through
+`get_type_hints`. It still only asks whether a group is *read anywhere*, not whether
+it is fingerprinted. Job-level settings need places 3 and 4 by discipline, not by
+test.
 
 **So supply the missing net yourself:** add a fingerprint test to
 `test_clip_edit_sync.py` alongside the existing ones. `test_camera_cache_is_invalidated_by_a_framing_edit`
@@ -344,6 +358,14 @@ done.
 ---
 
 ## 6. Danger zones
+
+**Scripted rewrites run against a named file list, never a tree walk.** Two tasks
+have now been bitten by `rglob`-style sweeps: T-06 flipped 14 files to CRLF because
+`Path.write_text` translates newlines on Windows, and T-22's cleanup wrote to 42
+files including `vendor/`. Both were caught and reverted, both left the tree
+byte-identical — and neither should have been possible. Build the list first, print
+it, then write. "The diff came out empty" is not the same as "I was allowed to write
+there".
 
 **`pipeline/publikclip_pipeline/vendor/` — do not edit.** `clippyme`, `laughter`,
 `panns` and `campplus` are copies of upstream projects, and two upstreams are
