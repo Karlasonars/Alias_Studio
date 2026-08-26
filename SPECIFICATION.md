@@ -1,4 +1,4 @@
-# Publikclip Extra — Specification
+# Alias Studio — Specification
 
 Everything a new developer needs to understand this project and work on it
 without prior briefing. Written against commit `3dc43c1` (2026-08-22); §5, §15
@@ -58,7 +58,7 @@ Three properties define the design:
   treated as a bug, and there is a test that fails when a whole settings group
   goes unread ([§17](#17-conventions-and-house-rules)).
 
-This repository is **Publikclip Extra**, a modified build of the open-source
+This repository is **Alias Studio**, a modified build of the open-source
 [publikclip](https://github.com/Blueturboguy07/publikclip). Both are AGPL-3.0.
 See [§18](#18-change-history-what-this-build-added) for what this fork changed.
 
@@ -1027,7 +1027,7 @@ machine may carry that is 700+ MB and must never ride into the app.
 
 > **`tauri.conf.json` currently sets `bundle.targets` to `["dmg"]`.** On
 > Windows, `npx tauri build` therefore produces only
-> `src-tauri/target/release/publikclip-app.exe` — no NSIS installer. For local
+> `src-tauri/target/release/alias-studio-app.exe` — no NSIS installer. For local
 > use, copy that exe over the installed one (close the app first). To produce
 > a Windows installer, add `"nsis"` to the targets.
 
@@ -1037,7 +1037,7 @@ The installed app's `resources/pipeline/publikclip_pipeline` can be replaced
 with a directory junction to the repo:
 
 ```
-mklink /J "…\AppData\Local\publikclip\resources\pipeline\publikclip_pipeline" ^
+mklink /J "…\AppData\Local\Alias Studio\resources\pipeline\publikclip_pipeline" ^
           "…\publikclip\pipeline\publikclip_pipeline"
 ```
 
@@ -1100,7 +1100,7 @@ test. `CLAUDE.md` §5.1 carries the current procedure.
 
 ## 18. Change history: what this build added
 
-Publikclip Extra forks publikclip at `a53a359`. Since then: **10 commits, 62
+Alias Studio forks publikclip at `a53a359`. Since then: **10 commits, 62
 files, +10 433 / −389 lines.**
 
 ### `5d0c447` — Windows: fix the failures that stopped a real run end to end

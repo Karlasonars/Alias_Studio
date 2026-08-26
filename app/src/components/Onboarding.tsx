@@ -32,7 +32,7 @@ export default function Onboarding({ onDone }: Props) {
       <div className="grain" />
       {step === 0 && (
         <section className="ob-step" key="s0">
-          <p className="ob-kicker">Publikclip extra</p>
+          <p className="ob-kicker">Alias Studio</p>
           <h1 className="ob-title">
             THE CLIPPER
             <br />

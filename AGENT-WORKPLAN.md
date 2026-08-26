@@ -538,7 +538,7 @@ constraints that are not obvious from the PRD:
 - Split `insights/calibration.py` (908 lines). It is about to carry two more
   platforms plus the packaging attribution.
 - **Run the R16 check first.** Take 30 already-published clips, record their
-  Publikclip score and their real retention, compute the correlation. If it is near
+  Alias Studio score and their real retention, compute the correlation. If it is near
   zero, the v1.1 premise is wrong and ten weeks of calibration work should not start.
   This is a spreadsheet, not a task.
 

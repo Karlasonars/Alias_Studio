@@ -110,7 +110,7 @@ def _wait_for_callback(state: str, timeout_sec: float = 300.0) -> CallbackResult
             body = (
                 "<html><body style='font-family:sans-serif;background:#0e0f12;color:#ece9e2;"
                 "display:grid;place-items:center;height:100vh'><div><h2>"
-                + ("publikclip is connected." if result.code else "Connection failed.")
+                + ("Alias Studio is connected." if result.code else "Connection failed.")
                 + "</h2><p>You can close this tab.</p></div></body></html>"
             )
             self.wfile.write(body.encode())
