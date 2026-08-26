@@ -248,9 +248,50 @@ Watch out   the onMove/onUp persist pattern must survive the split intact
 Three v1.0 features land in this file ([E6-F01], [E6-F02], [E6-F04]). It is already
 22 % of the frontend. Split first, or the three tasks after it are unreviewable.
 
-Suggested shape: `ClipEditor/index.tsx`, `Timeline.tsx`, `PreviewPane.tsx`,
-`ControlsPanel.tsx`, `useClipEdit.ts`. Move the 6 stray `invoke()` calls into
-`api.ts` while you are here and lower `INVOKE_OUTSIDE_API_BASELINE`.
+**The "suggested shape" that used to sit here — `Timeline` / `PreviewPane` /
+`ControlsPanel` — was written without reading the component, and reading it says
+otherwise.** It is one function: 1071 lines, 15 `useState`, 7 `useEffect`, 10
+`useRef`. Those names cut across visual regions; the state does not run along those
+seams. **Split by state ownership or you will drill twenty props.** Propose the
+boundaries and stop before moving anything.
+
+Five landmines, all of which typecheck fine after being broken:
+
+1. **Two refs are assigned during render, not in an effect** (lines 130 and 132:
+   `editRef.current = edit`, `ctxRef.current = ctx`). The rAF loop reads them to get
+   the latest values without re-subscribing. The ref must travel with the state and
+   stay assigned in the same render pass — break it and the preview plays against a
+   stale edit. No error, wrong frames.
+2. **The rAF effect's dependency array is `[win, span]` and that is deliberate** — it
+   does not depend on `edit`, because it reads `editRef`. Move the loop into a child
+   that takes `edit` as a prop and the natural dependency array restarts the loop on
+   every state change: every drag frame, every keystroke. Visible stutter, nothing red.
+3. **`setTimeLabel` runs on every animation frame** (line 247), so the component
+   re-renders ~10×/s during playback. Survivable in one component; after a split with
+   prop drilling it is every child. Put `timeLabel` in its own leaf — and note in the
+   PR that doing so is a performance change inside a task defined as a pure move.
+4. **Three `window` listeners across two effects** — `keydown` (297), `mousemove` ×2
+   and `mouseup` (361–363). They must land in exactly one component. `StrictMode` is
+   on, so a double mount double-attaches; dev shows it, CI does not.
+5. **The persist asymmetry.** See CLAUDE.md §6. Do not "fix" it here.
+
+**There is no frontend test infrastructure at all** — no vitest, no jest, no
+`.test.tsx`, and `package.json` has four scripts, none of them `test`. `tsc --noEmit`
+is the entire net, and it will happily typecheck an animation loop reading stale
+state. §7's "one new test fails without your change" does not apply; say so and carry
+a manual checklist instead: open the editor, drag both bounds, scrub, play through a
+dead-space cut, drag an overlay on the timeline and on the monitor, change a caption
+preset, render. Two more steps, because the obvious list misses landmines 1 and 2:
+**type in the title field while playback is running** (if the rAF loop restarts on
+every state change, the stutter is immediate), and **move a bound, then play without
+persisting** (the preview must follow the new bound, not the stale one). Adding a test runner is its own task and its own PR.
+
+Move the 6 `invoke()` calls into `api.ts` — that lowers
+`INVOKE_OUTSIDE_API_BASELINE` from 12 to 6. Note that three of them are
+`save_clip_edits` with an identical argument shape (373, 378, 387) but three
+different intents: 373 is inside `persist()`, the other two are pre-flight saves
+before render and before suggest. Collapsing them is slightly more than a move —
+worth one sentence in the PR either way.
 
 ---
 
