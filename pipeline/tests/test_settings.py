@@ -116,6 +116,7 @@ def test_every_settings_group_is_read_by_the_pipeline():
     crude but catches an entire group going dark.
     """
     import re
+    import typing
     from pathlib import Path
 
     pkg = Path(__file__).resolve().parents[1] / "publikclip_pipeline"
@@ -126,13 +127,23 @@ def test_every_settings_group_is_read_by_the_pipeline():
     ]
     blob = "\n".join(sources)
 
+    # get_type_hints, not f.type. config.py has `from __future__ import
+    # annotations`, so f.type is the STRING "CameraSettings" and
+    # is_dataclass() on it is always False — the discovery half never fired
+    # and only a hardcoded ten-name tuple was ever checked. The test written
+    # to catch a newly added group going dark could not see a newly added
+    # group at all. `descriptions` was already sitting outside that tuple; it
+    # happens to be read at cli.py:309, so it was luck, not the guard. (T-22)
+    hints = typing.get_type_hints(config.Settings)
     groups = [
         f.name
         for f in dataclasses.fields(config.Settings)
-        if dataclasses.is_dataclass(f.type) or f.name in
-        ("camera", "clips", "curve", "scoring", "retention", "pacing", "captions",
-         "performance", "titles", "hooks")
+        if dataclasses.is_dataclass(hints[f.name])
     ]
+    assert len(groups) >= 11, (
+        f"Only {len(groups)} dataclass groups discovered ({groups}). If this "
+        "dropped, resolution is broken again and the test is passing vacuously."
+    )
     unread = [g for g in groups if not re.search(rf"settings\.{g}\b", blob)]
     assert unread == [], f"settings groups nothing in the pipeline reads: {unread}"
 

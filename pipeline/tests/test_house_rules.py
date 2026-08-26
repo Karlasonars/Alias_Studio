@@ -310,7 +310,12 @@ def test_unpinned_model_baseline_is_not_stale() -> None:
 
 def test_schema_fields_all_carry_help() -> None:
     """`help` is what tells the user whether a change is worth a re-render. A
-    control without it is a knob with no label."""
+    control without it is a knob with no label.
+
+    CAPTION_FIELDS is checked too. It lives outside GROUPS, so iterating
+    GROUPS alone left 15 user-facing fields unguarded — the same
+    guard-narrower-than-the-rule shape as §5.3's `open()` hole. (T-22)
+    """
     from publikclip_pipeline import settings_schema
 
     missing: list[str] = []
@@ -318,6 +323,9 @@ def test_schema_fields_all_carry_help() -> None:
         for field in group["fields"]:
             if not field.get("help", "").strip():
                 missing.append(field["key"])
+    for field in settings_schema.CAPTION_FIELDS:
+        if not field.get("help", "").strip():
+            missing.append(f"caption.{field['key']}")
     assert not missing, f"Settings fields with no help text: {missing}"
 
 
