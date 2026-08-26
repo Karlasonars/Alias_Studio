@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from ..jobs.queue import Stage, StageContext, StageError
+from ..jobs.queue import Stage, StageContext, StageError, fingerprint_ok
 from ..models import registry, specs
 from ..render import ffmpeg_bin
 
@@ -44,8 +44,35 @@ class EventsStage(Stage):
     name = "events"
     schema_version = 2  # v2: measured PANNs thresholds (v1 heard nothing)
 
+    @staticmethod
+    def _settings_used(settings: config.Settings) -> dict:
+        """The settings subset this stage's output actually depends on.
+
+        Exactly one. The laughter specialist is a whole second detector: its
+        spans go into the fused timeline, and where it agrees with PANNs the
+        merge raises the confidence PANNs alone would have reported. Nothing
+        else this stage reads is a setting — the PANNs thresholds are measured
+        constants, and the torch device comes from the machine rather than
+        from the user, so it must not invalidate anything (§5.9)."""
+        return {"laughter_specialist": bool(getattr(settings, "laughter_specialist", False))}
+
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
-        return (ctx.job_dir / "curves.json").exists()
+        # Until this existed the only question asked was whether curves.json
+        # was on disk, so turning the laughter specialist on for a job that
+        # had already run did nothing, forever, silently — the exact failure
+        # the checkpoint contract exists to prevent (CLAUDE.md §4 rule 1).
+        if not (ctx.job_dir / "curves.json").exists():
+            return False
+        # `or {}` is doing real work: no events checkpoint ever written
+        # carries this key, and fingerprint_ok(None, ...) is False. Without it
+        # every job already on disk would re-run the PANNs pass and cascade
+        # into candidates, scoring, camera and render — an hour of work thrown
+        # away over a toggle the user never touched. An empty dict instead
+        # sends every missing key to the factory comparison, which is what
+        # rule 3 asks for: untouched stays cached, genuinely changed re-runs.
+        current = self._settings_used(ctx.settings)
+        factory = self._settings_used(config.Settings())
+        return fingerprint_ok(data.get("settings_used") or {}, current, factory)
 
     def run(self, ctx: StageContext) -> dict:
         prior = ctx.prior or {}
@@ -173,6 +200,10 @@ class EventsStage(Stage):
             "timeline": timeline,
             "counts": by_type,
             "curves_path": str(curves_path),
+            # What artifacts_ok compares against on the next run. Without it
+            # persisted here the fingerprint has nothing to read and the stage
+            # re-runs every time.
+            "settings_used": self._settings_used(ctx.settings),
             "arousal_source": arousal_source,
             "duration_sec": round(duration, 1),
             "benchmark": bench,

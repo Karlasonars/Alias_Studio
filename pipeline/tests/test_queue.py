@@ -136,3 +136,123 @@ def test_failure_then_resume_skips_completed_stages():
     assert counting.runs == 1  # not re-run
     assert results["failing"] == {"ok": True}
     assert queue.get_job(job.id).status == "done"
+
+
+def test_a_rerun_stage_invalidates_every_stage_after_it():
+    """Rule 2 of the checkpoint contract, which nothing exercised directly.
+    The chain is linear, so a stage that re-runs must force everything
+    downstream to re-run too — otherwise a recomputed upstream feeds a
+    downstream that is still serving output derived from the old one."""
+
+    class AlwaysStale(queue.Stage):
+        name = "upstream"
+        schema_version = 1
+
+        def __init__(self):
+            self.runs = 0
+
+        def run(self, ctx):
+            self.runs += 1
+            return {"runs": self.runs}
+
+        def artifacts_ok(self, ctx, data):
+            return False  # something the user changed invalidates this
+
+    job = queue.create_job("file", "/tmp/x.mp4", _settings_json())
+    upstream, downstream = AlwaysStale(), CountingStage()
+    queue.run_stages(job, [upstream, downstream], _noop_progress)
+    assert (upstream.runs, downstream.runs) == (1, 1)
+
+    # downstream's own checkpoint is perfectly fresh and its artifacts_ok
+    # would say so — the cascade is what must override that.
+    queue.run_stages(job, [upstream, downstream], _noop_progress)
+    assert (upstream.runs, downstream.runs) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# events: the settings fingerprint (T-21)
+
+
+def _events_ctx(job_dir, settings):
+    """Enough of a StageContext for artifacts_ok, plus the curves.json the
+    stage writes — so these tests isolate the fingerprint, not file presence."""
+    (job_dir / "curves.json").write_text("{}", encoding="utf-8")
+
+    class _Job:
+        dir = job_dir
+
+    class _Ctx:
+        job = _Job()
+
+        def __init__(self, s):
+            self.settings = s
+
+        @property
+        def job_dir(self):
+            return job_dir
+
+    return _Ctx(settings)
+
+
+def _events_data(laughter: bool | None):
+    """A checkpoint. `None` means one written before the key existed."""
+    data = {"timeline": [], "curves_path": "curves.json"}
+    if laughter is not None:
+        data["settings_used"] = {"laughter_specialist": laughter}
+    return data
+
+
+@pytest.mark.parametrize(
+    "stored,current,expected",
+    [
+        (False, False, True),    # untouched — stays cached
+        (True, True, True),      # on, still on — stays cached
+        (False, True, False),    # the bug this fixes: turning it ON must re-run
+        (True, False, False),    # turning it OFF must re-run too
+        (None, False, True),     # pre-fingerprint checkpoint, setting at factory
+        (None, True, False),     # pre-fingerprint checkpoint, setting changed
+    ],
+)
+def test_events_fingerprint_tracks_the_laughter_specialist(
+    tmp_path, stored, current, expected
+):
+    """`laughter_specialist` adds a second laughter detector whose spans reach
+    the fused timeline, so it changes this stage's output. Before T-21
+    artifacts_ok only checked that curves.json existed, and the toggle did
+    nothing on any job that had already run.
+
+    The two `None` rows are the ones that make this safe to ship: no events
+    checkpoint ever written carries the key, and re-running events cascades
+    into candidates, scoring, camera and render."""
+    from publikclip_pipeline.events.stage import EventsStage
+
+    settings = config.Settings()
+    settings.laughter_specialist = current
+    ctx = _events_ctx(tmp_path, settings)
+    assert EventsStage().artifacts_ok(ctx, _events_data(stored)) is expected
+
+
+def test_events_fingerprint_still_requires_curves_json(tmp_path):
+    """The artifact check the fingerprint was added alongside, not instead of:
+    every downstream stage reads curves.json by path."""
+    from publikclip_pipeline.events.stage import EventsStage
+
+    ctx = _events_ctx(tmp_path, config.Settings())
+    (tmp_path / "curves.json").unlink()
+    assert EventsStage().artifacts_ok(ctx, _events_data(False)) is False
+
+
+def test_events_fingerprint_ignores_settings_the_stage_does_not_read(tmp_path):
+    """Do not widen beyond what the stage reads. A caption preset or a camera
+    dial must not re-run 300k forward passes and cascade into four stages."""
+    from publikclip_pipeline.events.stage import EventsStage
+
+    settings = config.Settings()
+    settings.caption_preset = "beast"
+    settings.camera.gameplay_amount = 0.9
+    settings.camera.speaker_change = "pan"
+    settings.curve.dynamics = 9.0
+    settings.curve.events = 0.0
+    settings.retention.punch_in_sensitivity = 0.99
+    ctx = _events_ctx(tmp_path, settings)
+    assert EventsStage().artifacts_ok(ctx, _events_data(False)) is True
