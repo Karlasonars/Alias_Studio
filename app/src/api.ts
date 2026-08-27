@@ -24,6 +24,7 @@ export const api = {
     camera?: string,
     gameplayAmount?: number
   ) => invoke<void>('resume_job', { jobId, llm, captions, camera, gameplayAmount }),
+  cancelJob: () => invoke<void>('cancel_job'),
   jobResults: (jobId: string) => invoke<JobResults>('job_results', { jobId }),
   listJobs: () => invoke<JobSummary[]>('list_job_dirs'),
   saveGeminiKey: (key: string) => invoke<boolean>('save_gemini_key', { key }),

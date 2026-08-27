@@ -207,6 +207,7 @@ export interface JobSummary {
   title: string | null
   ingested: boolean
   rendered: boolean
+  cancelled: boolean
 }
 
 export interface SetupState {

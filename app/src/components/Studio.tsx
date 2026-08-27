@@ -25,7 +25,9 @@ interface Props {
   running: boolean
   stages: Record<string, { fraction: number; message: string }>
   error: string | null
+  cancelled: boolean
   log: LogLine[]
+  onCancel: () => void
   onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
   onOpenLoop: () => void
   onOpenSettings: () => void
@@ -33,12 +35,13 @@ interface Props {
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, log, onRun, onOpenLoop, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, cancelled, log, onCancel, onRun, onOpenLoop, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
   const [gameplayAmount, setGameplayAmount] = useState(0)
   const [showKey, setShowKey] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const consoleRef = useRef<HTMLDivElement>(null)
   const showConsole = running || log.length > 0
 
@@ -46,6 +49,12 @@ export default function Studio({ jobs, running, stages, error, log, onRun, onOpe
     const el = consoleRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [log])
+
+  // The button disables itself on click; the run ending (cancelled event,
+  // result, or crash) is what re-arms it.
+  useEffect(() => {
+    if (!running) setCancelling(false)
+  }, [running])
 
   return (
     <div className="studio">
@@ -65,11 +74,19 @@ export default function Studio({ jobs, running, stages, error, log, onRun, onOpe
               className={`rail-job ${job.rendered ? '' : 'partial'}`}
               onClick={() => (job.rendered ? onOpenJob(job.id) : onResume(job.id))}
               disabled={running}
-              title={job.rendered ? 'open results' : 'resume from checkpoint'}
+              title={
+                job.rendered
+                  ? 'open results'
+                  : job.cancelled
+                    ? 'cancelled — resume from checkpoint'
+                    : 'resume from checkpoint'
+              }
             >
               <span className={`led ${job.rendered ? 'led-on' : 'led-half'}`} />
               <span className="rail-job-title">{job.title ?? job.id}</span>
-              <span className="rail-job-hint">{job.rendered ? 'open' : 'resume'}</span>
+              <span className="rail-job-hint">
+                {job.rendered ? 'open' : job.cancelled ? 'cancelled' : 'resume'}
+              </span>
             </button>
           ))}
         </div>
@@ -194,6 +211,27 @@ export default function Studio({ jobs, running, stages, error, log, onRun, onOpe
                   </div>
                 )
               })}
+              {running && (
+                <div className="deck-cancel">
+                  <button
+                    className="btn-ghost"
+                    onClick={() => {
+                      setCancelling(true)
+                      onCancel()
+                    }}
+                    disabled={cancelling}
+                  >
+                    {cancelling ? 'CANCELLING…' : '■ CANCEL'}
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
+
+          {cancelled && !running && (
+            <section className="error-block">
+              <span className="led led-half" />
+              Cancelled — the job kept its checkpoints. Resume it from the rail anytime.
             </section>
           )}
 

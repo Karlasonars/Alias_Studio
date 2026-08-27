@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     source_type TEXT NOT NULL,          -- 'url' | 'file'
     source TEXT NOT NULL,
     title TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|failed
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|failed|cancelled
     error TEXT,
     settings_json TEXT NOT NULL
 );
@@ -148,6 +149,104 @@ def set_job_status(job_id: str, status: str, error: str | None = None, title: st
             conn.execute(
                 "UPDATE jobs SET status = ?, error = ? WHERE id = ?", (status, error, job_id)
             )
+
+
+# ---------------------------------------------------------------------------
+# Cancellation (T-07 / E2-F07)
+#
+# Two sentinel files in the job dir carry the cancel protocol, and their
+# ownership is deliberately split across two processes — do not "tidy" one
+# half without the other (main.rs carries the matching comment):
+#
+#   cancel.requested — written by the Rust shell (cancel_job), consumed
+#       here: run_stages exits at the next stage boundary, and deletes any
+#       stale copy when a run starts, so resuming a hard-killed job cannot
+#       cancel itself.
+#   cancelled — the library's marker. list_job_dirs (main.rs) reads the
+#       filesystem, not SQLite, so this file is what makes 'cancelled'
+#       visible there. Written by whichever side knows first: this module
+#       at a boundary, the shell right after a hard kill — which keeps the
+#       library correct even if the bookkeeping one-shot never runs.
+#       Deleted here when a run starts.
+
+CANCEL_FLAG = "cancel.requested"
+CANCELLED_MARKER = "cancelled"
+
+
+class JobCancelled(Exception):  # noqa: N818 - a signal, not an error
+    """A cancel request landed at a stage boundary. Deliberate, not a
+    failure: the CLI exits 0 on this, so the shell's crash handler ('exited')
+    never fires for a cancel."""
+
+
+def _mark_cancelled_on_disk(job: Job) -> None:
+    set_job_status(job.id, "cancelled")
+    (job.dir / CANCELLED_MARKER).write_text("1", encoding="utf-8")
+    (job.dir / CANCEL_FLAG).unlink(missing_ok=True)
+
+
+def mark_cancelled(job_id: str) -> dict:
+    """Post-mortem bookkeeping after the shell hard-kills a run.
+
+    Only a 'running' job can become cancelled: a cancel click racing the
+    job's own completion must leave 'done' alone (the shell then removes the
+    marker it optimistically wrote). Returns {"marked", "status"} so the
+    shell can tell those cases apart.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return {"marked": False, "status": None}
+    if job.status != "running":
+        return {"marked": False, "status": job.status}
+    _mark_cancelled_on_disk(job)
+    try:
+        _drop_corrupt_render_outputs(job)
+    except Exception as err:  # noqa: BLE001 - cleanup is best-effort (5.9):
+        # the status write above must stand even on a machine whose ffprobe
+        # is unavailable; skipping cleanup merely reverts to the pre-existing
+        # exists()-only artifacts_ok behaviour this narrows.
+        sys.stderr.write(f"cancel cleanup skipped: {err!r}\n")
+    return {"marked": True, "status": "cancelled"}
+
+
+def _drop_corrupt_render_outputs(job: Job) -> None:
+    """Delete render outputs the killed run left truncated — the file,
+    never the checkpoint.
+
+    A kill mid-encode can truncate an mp4 that an older, still-valid render
+    checkpoint lists; if the user then resumes with settings matching that
+    checkpoint, artifacts_ok's exists() would serve the truncated file as
+    done. Deleting the file routes through machinery that already exists:
+    artifacts_ok fails (a listed path is gone) so the stage re-runs, while
+    _previous_outputs keeps its adoption map for every clip whose file
+    verified — per-file invalidation with no checkpoint surgery. Pruning
+    checkpoint entries instead would let artifacts_ok pass with a clip
+    missing.
+
+    Only files the killed run was re-encoding from job settings can fail the
+    probe: editor-kept clips are never open for writing here, so nothing the
+    editor produced gets deleted.
+    """
+    if stage_statuses(job.id).get("render") != "running":
+        return
+    path = checkpoint_path(job, "render")
+    if not path.exists():
+        return
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return
+    outputs = (envelope.get("data") or {}).get("outputs") or []
+    from ..render.renderer import verify_output  # deferred: no ffmpeg tax elsewhere
+
+    for entry in outputs:
+        if not isinstance(entry, dict) or entry.get("duration") is None:
+            continue
+        out = Path(str(entry.get("path", "")))
+        if not out.name or not out.exists():
+            continue
+        if not verify_output(out, float(entry["duration"]))["ok"]:
+            out.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +408,20 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
     ctx = StageContext(job=job, settings=settings, progress=progress)
     results: dict[str, dict] = {}
     upstream_stale = False
+    # A stale cancel flag or marker from a previous (possibly hard-killed)
+    # run must not cancel THIS run the moment it starts. Run setup, not a
+    # change to resume's contract.
+    (job.dir / CANCEL_FLAG).unlink(missing_ok=True)
+    (job.dir / CANCELLED_MARKER).unlink(missing_ok=True)
     set_job_status(job.id, "running")
     for stage in stages:
+        # The guaranteed-clean cancel boundary: after the previous stage's
+        # write_checkpoint, before anything about the next stage runs, so a
+        # cancel can never invalidate finished work. The <3 s criterion is
+        # met by the shell's hard kill, not by this check.
+        if (job.dir / CANCEL_FLAG).exists():
+            _mark_cancelled_on_disk(job)
+            raise JobCancelled(job.id)
         cached = read_checkpoint(job, stage.name, stage.schema_version)
         if cached is not None and not upstream_stale and stage.artifacts_ok(ctx, cached):
             results[stage.name] = cached
