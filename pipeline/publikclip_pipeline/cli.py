@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from . import config, winpatches
 from .jobs import queue
@@ -120,6 +121,7 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     from .render import ffmpeg_bin
 
     ffmpeg_bin.ensure_capable(progress=lambda f, m: emit("setup", f, m))
+    run_started = time.time()
     try:
         results = queue.run_stages(job, _stages(), emit)
     except queue.JobCancelled:
@@ -134,6 +136,15 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     except queue.StageError as err:
         _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": str(err)})
         return 1
+    # E13-F01: fold this run's measured stage timings into the hardware
+    # profile. Best-effort - a profile hiccup must never fail a job that
+    # just finished rendering (§5.9).
+    try:
+        from . import hardware_profile
+
+        hardware_profile.update_after_job(job.id, run_started)
+    except Exception:  # noqa: BLE001
+        pass
     summary = {
         "ok": True,
         "job_id": job.id,
@@ -142,6 +153,16 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
         "heatmap_segments": len(results.get("ingest", {}).get("heatmap") or []),
     }
     _emit_result(jsonl, summary)
+    return 0
+
+
+def cmd_hardware(args: argparse.Namespace) -> int:
+    """Probe, persist, print. The shell only ever READS the profile file
+    (probing costs a uv one-shot plus, worst case, nvidia-smi's 20 s
+    timeout); this verb is the one deliberate way to re-probe."""
+    from . import hardware_profile
+
+    print(json.dumps(hardware_profile.refresh()), flush=True)
     return 0
 
 
@@ -559,6 +580,11 @@ def main(argv: list[str] | None = None) -> int:
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
     )
     p_resume.set_defaults(fn=cmd_resume)
+
+    p_hw = sub.add_parser(
+        "hardware", help="probe the machine, update hardware_profile.json, print it"
+    )
+    p_hw.set_defaults(fn=cmd_hardware)
 
     p_jobs = sub.add_parser("jobs", help="list jobs (with --jsonl: one JSON object per job)")
     jobs_sub = p_jobs.add_subparsers(dest="jobs_cmd", required=False)
