@@ -6,11 +6,12 @@ import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
 import Loop from './components/Loop'
+import QueueView from './components/QueueView'
 import Settings from './components/Settings'
 import ThemeSwitcher from './components/ThemeSwitcher'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings' | 'queue'
 
 const LOG_LIMIT = 2000
 
@@ -53,8 +54,10 @@ export default function App() {
   const [log, setLog] = useState<LogLine[]>([])
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
+  const runningRef = useRef(false)
   const logIdRef = useRef(0)
   activeJobRef.current = activeJob
+  runningRef.current = running
 
   const appendLog = useCallback((payload: PipelineEvent) => {
     const text = formatLogLine(payload)
@@ -150,14 +153,21 @@ export default function App() {
 
   const startRun = useCallback(
     async (source: string, llm: string, captions: string, gameplayAmount: number) => {
-      setRunning(true)
-      setLog([])
-      setRunError(null)
-      setCancelled(false)
-      setStages({})
-      setResults(null)
-      setActiveJob(null)
-      await api.runJob(source, llm, captions, gameplayAmount)
+      // While a job is running this only enqueues - the running job's log
+      // and stage bars must not be cleared out from under it.
+      const wasIdle = !runningRef.current
+      if (wasIdle) {
+        setRunning(true)
+        setLog([])
+        setRunError(null)
+        setCancelled(false)
+        setStages({})
+        setResults(null)
+        setActiveJob(null)
+      }
+      await api.enqueueJob(source, llm, captions, gameplayAmount).catch(() => {
+        if (wasIdle) setRunning(false)
+      })
     },
     []
   )
@@ -187,6 +197,8 @@ export default function App() {
     content = <Loop onBack={() => setView('studio')} />
   } else if (view === 'settings') {
     content = <Settings onBack={() => setView('studio')} />
+  } else if (view === 'queue') {
+    content = <QueueView onBack={() => setView('studio')} />
   } else if (view === 'review' && results) {
     content = (
       <Review
@@ -222,6 +234,7 @@ export default function App() {
         onRun={startRun}
         onOpenLoop={() => setView('loop')}
         onOpenSettings={() => setView('settings')}
+        onOpenQueue={() => setView('queue')}
         onOpenJob={openJob}
         onResume={(id, llm) => {
           setRunning(true)

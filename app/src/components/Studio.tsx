@@ -30,12 +30,13 @@ interface Props {
   onCancel: () => void
   onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
   onOpenLoop: () => void
+  onOpenQueue: () => void
   onOpenSettings: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, cancelled, log, onCancel, onRun, onOpenLoop, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, cancelled, log, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -55,6 +56,14 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
   useEffect(() => {
     if (!running) setCancelling(false)
   }, [running])
+
+  // Enqueue and clear the field: with the input live while a job runs, a
+  // stuck value plus a second Enter would silently queue a duplicate.
+  const submit = () => {
+    if (!source.trim()) return
+    onRun(source.trim(), llm, captions, gameplayAmount)
+    setSource('')
+  }
 
   return (
     <div className="studio">
@@ -97,6 +106,9 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
           </button>
+          <button className="btn-ghost" onClick={onOpenQueue}>
+            ⧉ queue
+          </button>
           <button className="btn-ghost" onClick={onOpenSettings}>
             ⚙ settings
           </button>
@@ -129,21 +141,11 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
               <input
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  source.trim() &&
-                  !running &&
-                  onRun(source.trim(), llm, captions, gameplayAmount)
-                }
+                onKeyDown={(e) => e.key === 'Enter' && submit()}
                 placeholder="YouTube URL or a path to a video file"
-                disabled={running}
               />
-              <button
-                className="btn-primary"
-                onClick={() => onRun(source.trim(), llm, captions, gameplayAmount)}
-                disabled={running || !source.trim()}
-              >
-                {running ? 'WORKING' : 'CUT IT'}
+              <button className="btn-primary" onClick={submit} disabled={!source.trim()}>
+                {running ? 'QUEUE IT' : 'CUT IT'}
               </button>
             </div>
             <div className="run-options">
@@ -154,7 +156,6 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
                     key={mode}
                     className={`opt ${llm === mode ? 'opt-on' : ''}`}
                     onClick={() => setLlm(mode)}
-                    disabled={running}
                   >
                     {mode}
                   </button>
@@ -167,7 +168,6 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
                     key={preset}
                     className={`opt ${captions === preset ? 'opt-on' : ''}`}
                     onClick={() => setCaptions(preset)}
-                    disabled={running}
                   >
                     {preset}
                   </button>
@@ -178,14 +178,12 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
                 <button
                   className={`opt ${gameplayAmount === 0 ? 'opt-on' : ''}`}
                   onClick={() => setGameplayAmount(0)}
-                  disabled={running}
                 >
                   podcast
                 </button>
                 <button
                   className={`opt ${gameplayAmount === 1 ? 'opt-on' : ''}`}
                   onClick={() => setGameplayAmount(1)}
-                  disabled={running}
                 >
                   gameplay
                 </button>

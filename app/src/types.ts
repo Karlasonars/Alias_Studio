@@ -210,6 +210,22 @@ export interface JobSummary {
   cancelled: boolean
 }
 
+export interface QueueJob {
+  id: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+  error: string | null
+  title: string | null
+  source: string
+  created_at: number
+  stages_done: number
+}
+
+export interface QueueStateResult {
+  jobs: QueueJob[]
+  paused: boolean
+  active_job_id: string | null
+}
+
 export interface SetupState {
   has_gemini_key: boolean
   onboarded: boolean
