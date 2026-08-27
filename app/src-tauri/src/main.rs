@@ -792,6 +792,27 @@ async fn save_gemini_key(key: String) -> Result<Value, String> {
     Ok(json!({"status": status, "reason": reason}))
 }
 
+/// Read-only by design: hardware_profile.json is written by python (at
+/// the end of every successful job, and by `publikclip hardware`), and
+/// the shell only ever reads the file. Probing from here would mean a
+/// `uv run` one-shot plus nvidia-smi's 20 s worst case per view - the
+/// T-08 poll lesson. Returns null when no profile exists yet.
+#[tauri::command]
+fn get_hardware_profile() -> Result<Value, String> {
+    Ok(fs::read_to_string(home_dir().join("hardware_profile.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null))
+}
+
+/// The one deliberate probe: run `publikclip hardware` (which persists
+/// the profile) and return its answer. Onboarding calls this once when
+/// no profile file exists - never on a timer, never per view.
+#[tauri::command]
+async fn probe_hardware() -> Result<Value, String> {
+    one_shot_json(&["hardware".to_string()]).ok_or_else(|| "hardware probe failed".to_string())
+}
+
 #[tauri::command]
 fn get_setup_state() -> Result<Value, String> {
     let secrets = home_dir().join("secrets.json");
@@ -1038,6 +1059,8 @@ fn main() {
             list_job_dirs,
             save_gemini_key,
             get_setup_state,
+            get_hardware_profile,
+            probe_hardware,
             mark_onboarded,
             check_ollama,
             ig_status,

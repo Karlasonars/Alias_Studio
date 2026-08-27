@@ -34,6 +34,26 @@ beforeEach(() => {
 })
 
 const notRunning = () => ({ running: false, models: [] })
+const ollamaReady = () => ({ running: true, models: ['llama3.1:8b'] })
+
+function gpuProfile(overrides: Record<string, unknown> = {}) {
+  return {
+    summary: {
+      torch_device: 'cuda',
+      gpu: 'NVIDIA GeForce RTX 4070',
+      vram_gb: 12,
+      whisper_device: 'cuda',
+      whisper_compute: 'float16',
+      onnx_providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'],
+      cpu_threads: 16,
+      forced: null
+    },
+    key: 'k',
+    estimate_ratio: 0.15,
+    estimate_jobs: 3,
+    ...overrides
+  }
+}
 
 async function mountBrainStep() {
   render(<Onboarding onDone={() => {}} />)
@@ -140,5 +160,45 @@ describe('the Ollama door leads through instead of dead-ending', () => {
       fireEvent.click(screen.getByText(/check again/))
     })
     expect(callsTo('check_ollama')).toBe(3)
+  })
+})
+
+describe('the hardware sentence is honest (T-10, E1-F03)', () => {
+  async function reachWarningStep() {
+    commands.check_ollama = ollamaReady
+    await mountBrainStep()
+    await act(async () => {
+      fireEvent.click(screen.getByText('Continue'))
+    })
+  }
+
+  it('shows the GPU and the measured estimate when one exists', async () => {
+    commands.get_hardware_profile = () => gpuProfile()
+    await reachWarningStep()
+    // 0.15 processing-sec per source-sec → a 60 min video ≈ 9 min
+    expect(screen.getByText(/RTX 4070 · 12 GB — a 60 min video ≈ 9 min/)).toBeTruthy()
+  })
+
+  it('a fresh machine probes once and admits it has no estimate yet', async () => {
+    commands.get_hardware_profile = () => null
+    commands.probe_hardware = () => gpuProfile({ estimate_ratio: null, estimate_jobs: 0 })
+    await reachWarningStep()
+    expect(screen.getByText(/first run — no estimate yet/)).toBeTruthy()
+    expect(callsTo('probe_hardware')).toBe(1)
+  })
+
+  it('a forced device is never invisible', async () => {
+    commands.get_hardware_profile = () =>
+      gpuProfile({
+        summary: {
+          ...gpuProfile().summary,
+          torch_device: 'cpu',
+          gpu: '',
+          forced: 'cpu'
+        },
+        estimate_ratio: null
+      })
+    await reachWarningStep()
+    expect(screen.getByText(/forced CPU \(PUBLIKCLIP_DEVICE\)/)).toBeTruthy()
   })
 })

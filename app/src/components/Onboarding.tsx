@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { api } from '../api'
+import { hardwareLabel, sixtyMinEstimate } from '../hw'
+import type { HardwareProfile } from '../types'
 
 /**
  * Three beats: what this is → pick the brain (Gemini key or local Ollama) →
@@ -29,7 +31,35 @@ export default function Onboarding({ onDone }: Props) {
   const [keyError, setKeyError] = useState<string | null>(null)
   const [ollama, setOllama] = useState<{ running: boolean; models: string[] } | null>(null)
   const [copied, setCopied] = useState(false)
+  // undefined = still asking; null = probe failed (line is omitted, §5.9)
+  const [hw, setHw] = useState<HardwareProfile | null | undefined>(undefined)
   const checkingRef = useRef(false)
+
+  // The profile is a file the shell just reads. Only when no file exists
+  // yet (a fresh machine) does onboarding trigger the ONE deliberate
+  // probe - never on a timer, never per view (T-08's poll lesson; the
+  // probe is a uv one-shot with nvidia-smi's 20 s worst case inside).
+  useEffect(() => {
+    let disposed = false
+    api
+      .hardwareProfile()
+      .then((p) => {
+        if (disposed) return undefined
+        if (p) {
+          setHw(p)
+          return undefined
+        }
+        return api.probeHardware().then((fresh) => {
+          if (!disposed) setHw(fresh)
+        })
+      })
+      .catch(() => {
+        if (!disposed) setHw(null)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
 
   // Re-check on demand and on window focus — never on a timer (T-08's 2 s
   // poll stacked subprocesses faster than they answered; a focus event
@@ -265,6 +295,20 @@ export default function Onboarding({ onDone }: Props) {
             podcast then takes a while on-device — the progress bar never lies to you,
             and every stage checkpoints, so you can quit and resume anytime.
           </p>
+          {/* The honest hardware sentence (E1-F03): the GPU or its absence,
+              the forced device when PUBLIKCLIP_DEVICE is set, and an
+              estimate ONLY once one has been measured — never invented. */}
+          {hw !== null && (
+            <p className="ob-fine mono">
+              {hw === undefined
+                ? 'checking hardware…'
+                : `${hardwareLabel(hw)} — ${
+                    sixtyMinEstimate(hw) != null
+                      ? `a 60 min video ≈ ${sixtyMinEstimate(hw)} min`
+                      : 'first run — no estimate yet; measured from your first job'
+                  }`}
+            </p>
+          )}
           <button className="btn-primary" onClick={onDone}>
             Open the studio
           </button>

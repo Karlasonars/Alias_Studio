@@ -4,6 +4,7 @@ import type {
   DescriptionResult,
   EditContext,
   EditState,
+  HardwareProfile,
   HookResult,
   JobResults,
   JobSummary,
@@ -36,6 +37,8 @@ export const api = {
   listJobs: () => invoke<JobSummary[]>('list_job_dirs'),
   saveGeminiKey: (key: string) => invoke<SaveKeyResult>('save_gemini_key', { key }),
   setupState: () => invoke<SetupState>('get_setup_state'),
+  hardwareProfile: () => invoke<HardwareProfile | null>('get_hardware_profile'),
+  probeHardware: () => invoke<HardwareProfile>('probe_hardware'),
   markOnboarded: () => invoke<void>('mark_onboarded'),
   checkOllama: () => invoke<{ running: boolean; models: string[] }>('check_ollama'),
   exportClip: (path: string, title?: string) =>

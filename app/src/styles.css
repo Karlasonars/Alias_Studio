@@ -967,6 +967,18 @@ body {
 .ig-connected { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; }
 .ig-user { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
 .ig-hint { font-size: 13px; color: var(--dim); line-height: 1.7; }
+/* the machine and its measured expectation (T-10) */
+.rail-hw {
+  margin-top: auto;
+  padding: 12px 22px 0;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--faint);
+}
+.rail-hw p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* when the hw block is present it takes over the auto margin above the footer */
+.rail-hw + .rail-foot { margin-top: 0; }
+
 /* Explicit layout, not accident: this rule once had no layout at all, so
    the buttons flowed inline and landed one-per-line only because 264px was
    too narrow for two — adding a fourth button put two on a line. The number

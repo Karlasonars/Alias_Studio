@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import type { JobSummary, LogLine } from '../types'
+import { hardwareLabel, sixtyMinEstimate } from '../hw'
+import type { HardwareProfile, JobSummary, LogLine } from '../types'
 import KeyModal from './KeyModal'
 
 const STAGE_ORDER = [
@@ -29,6 +30,7 @@ interface Props {
   log: LogLine[]
   enqueueing: boolean
   queued: number
+  hardware: HardwareProfile | null
   onCancel: () => void
   onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
   onOpenLoop: () => void
@@ -38,7 +40,7 @@ interface Props {
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, cancelled, log, enqueueing, queued, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, cancelled, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -101,6 +103,19 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, e
             </button>
           ))}
         </div>
+        {/* E13-F01: the machine and its measured expectation, refreshed by
+            App after every run. No profile file yet → no block — never an
+            invented number. */}
+        {hardware && (
+          <div className="rail-hw mono">
+            <p>{hardwareLabel(hardware)}</p>
+            <p>
+              {sixtyMinEstimate(hardware) != null
+                ? `60 min video ≈ ${sixtyMinEstimate(hardware)} min`
+                : 'first run — no estimate yet'}
+            </p>
+          </div>
+        )}
         <footer className="rail-foot">
           <button className="btn-ghost" onClick={() => setShowKey(true)}>
             ◈ gemini key
