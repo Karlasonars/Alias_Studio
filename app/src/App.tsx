@@ -31,6 +31,8 @@ function formatLogLine(payload: PipelineEvent): string | null {
     }
     case 'result':
       return payload.ok ? 'job finished' : `job failed: ${payload.error ?? 'unknown error'}`
+    case 'cancelled':
+      return 'job cancelled — checkpoints kept'
     case 'exited':
       return `pipeline exited unexpectedly (code ${payload.code ?? '?'})`
     default:
@@ -47,6 +49,7 @@ export default function App() {
   const [stages, setStages] = useState<Record<string, { fraction: number; message: string }>>({})
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
+  const [cancelled, setCancelled] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
@@ -121,6 +124,12 @@ export default function App() {
         } else if (!payload.ok) {
           setRunError(String(payload.error ?? 'Pipeline failed'))
         }
+      } else if (payload.event === 'cancelled') {
+        // A deliberate stop: must never read as the 'exited' crash below.
+        setRunning(false)
+        setRunError(null)
+        setCancelled(true)
+        refreshJobs()
       } else if (payload.event === 'exited') {
         setRunning(false)
         const detail = payload.stderr?.trim()
@@ -144,6 +153,7 @@ export default function App() {
       setRunning(true)
       setLog([])
       setRunError(null)
+      setCancelled(false)
       setStages({})
       setResults(null)
       setActiveJob(null)
@@ -188,6 +198,7 @@ export default function App() {
         onRestyle={(captions, camera, gameplayAmount) => {
           setRunning(true)
           setRunError(null)
+          setCancelled(false)
           setStages({})
           setLog([])
           setActiveJob(results.job_id)
@@ -203,7 +214,11 @@ export default function App() {
         running={running}
         stages={stages}
         error={runError}
+        cancelled={cancelled}
         log={log}
+        onCancel={() => {
+          api.cancelJob().catch(() => {})
+        }}
         onRun={startRun}
         onOpenLoop={() => setView('loop')}
         onOpenSettings={() => setView('settings')}
@@ -211,6 +226,7 @@ export default function App() {
         onResume={(id, llm) => {
           setRunning(true)
           setRunError(null)
+          setCancelled(false)
           setStages({})
           setLog([])
           setActiveJob(id)

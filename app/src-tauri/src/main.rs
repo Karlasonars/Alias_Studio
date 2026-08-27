@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -48,6 +49,172 @@ fn quiet_command(program: &str) -> Command {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     cmd
+}
+
+// ---------------------------------------------------------------------------
+// T-07 cancellation. Three facts drive this shape:
+//
+//   - The sidecar is a tree (uv -> python -> ffmpeg); on Windows, killing the
+//     direct child leaves its descendants encoding at full CPU. A Job Object
+//     kills the whole tree atomically, and membership is inherited at process
+//     creation, so an ffmpeg spawned a millisecond after adoption is already
+//     a member - taskkill /T's pid-snapshot race has no equivalent here.
+//   - KILL_ON_JOB_CLOSE is deliberately NOT set: quitting the app mid-job
+//     leaves the pipeline finishing headless, exactly as before this task.
+//     Changing that is an E2-F05 decision, not a cancel side effect.
+//   - Two sentinel files in the job dir are shared with python, with split
+//     ownership (jobs/queue.py carries the matching comment - do not "tidy"
+//     one half): cancel.requested is written here and consumed by run_stages
+//     at a stage boundary; the cancelled marker is written here right after a
+//     hard kill so the library (list_job_dirs reads the filesystem, not
+//     SQLite) is correct even if the bookkeeping one-shot never runs. Python
+//     writes the same marker at a boundary cancel and deletes both files
+//     when a run starts.
+
+const CANCEL_FLAG: &str = "cancel.requested";
+const CANCELLED_MARKER: &str = "cancelled";
+
+#[cfg(target_os = "windows")]
+mod job_object {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+    };
+
+    pub struct JobHandle(HANDLE);
+    // A job object handle is process-global; moving it across threads is fine.
+    unsafe impl Send for JobHandle {}
+
+    impl JobHandle {
+        /// Create a job and put `child` - and every future descendant - in
+        /// it. Adoption happens right after spawn(), long before uv gets to
+        /// exec python, and descendants are members from creation onward.
+        pub fn adopt(child: &std::process::Child) -> Option<Self> {
+            use std::os::windows::io::AsRawHandle;
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    CloseHandle(job);
+                    return None;
+                }
+                Some(Self(job))
+            }
+        }
+
+        pub fn terminate(&self) {
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for JobHandle {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+struct ActiveRun {
+    job_id: Option<String>, // learned from the sidecar's 'job' JSONL event
+    child_pid: u32,
+    cancel_requested: bool,
+    #[cfg(target_os = "windows")]
+    job: Option<job_object::JobHandle>, // None: adoption failed -> taskkill fallback
+}
+
+struct RunState(Mutex<Option<ActiveRun>>);
+
+/// Which kind of sidecar stream_pipeline is driving. Only full job runs
+/// register in RunState - edit renders are never cancellable from here.
+#[derive(Clone, Copy, PartialEq)]
+enum PipelineKind {
+    Job,
+    Tool,
+}
+
+/// Cancel the running job: sentinel files first (a python that survives the
+/// kill still stops at its next boundary, and the library marker exists even
+/// if every later step fails), then kill the whole tree. Bookkeeping happens
+/// in stream_pipeline once wait() returns.
+#[tauri::command]
+fn cancel_job(state: tauri::State<RunState>) -> Result<(), String> {
+    let mut guard = state.0.lock().unwrap();
+    let run = guard.as_mut().ok_or_else(|| "no job is running".to_string())?;
+    run.cancel_requested = true;
+    if let Some(id) = &run.job_id {
+        let dir = home_dir().join("jobs").join(id);
+        let _ = fs::write(dir.join(CANCEL_FLAG), "1");
+        let _ = fs::write(dir.join(CANCELLED_MARKER), "1");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match &run.job {
+            Some(job) => job.terminate(),
+            None => {
+                // Job-object adoption failed at spawn; degrade to the pid
+                // walk. It has the snapshot race the job object doesn't -
+                // the flag file above is the belt for exactly that race.
+                let _ = quiet_command("taskkill")
+                    .args(["/T", "/F", "/PID", &run.child_pid.to_string()])
+                    .output();
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        // UNVERIFIED on real macOS until T-19 lands: process_group(0) at
+        // spawn makes the child's pid its pgid, so this reaches the tree.
+        unsafe {
+            libc::killpg(run.child_pid as i32, libc::SIGKILL);
+        }
+    }
+    Ok(())
+}
+
+/// After a cancel, once the child is dead: run the bookkeeping one-shot,
+/// reconcile the optimistic marker, and emit at most one 'cancelled' event.
+/// The boundary path (python saw the flag between stages) exits 0 having
+/// emitted its own 'cancelled' through the JSONL stream, so this emits only
+/// for non-zero exits - one event either way.
+fn handle_cancelled_exit(
+    app: &AppHandle,
+    run: &ActiveRun,
+    exit: Option<&std::process::ExitStatus>,
+) {
+    let clean_exit = exit.map(|s| s.success()).unwrap_or(false);
+    if let Some(id) = &run.job_id {
+        let (program, base_args) = pipeline_invocation();
+        let mut args = base_args;
+        args.push("jobs".to_string());
+        args.push("mark-cancelled".to_string());
+        args.push(id.clone());
+        let mut status_after: Option<String> = None;
+        if let Ok(out) = quiet_command(&program).args(&args).output() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = stdout.lines().rev().find(|l| l.trim_start().starts_with('{')) {
+                if let Ok(v) = serde_json::from_str::<Value>(line) {
+                    status_after = v["status"].as_str().map(String::from);
+                }
+            }
+        }
+        // The cancel raced the job's own completion: nothing was cancelled,
+        // so take back the marker cancel_job optimistically wrote.
+        if clean_exit && status_after.as_deref() == Some("done") {
+            let _ = fs::remove_file(home_dir().join("jobs").join(id).join(CANCELLED_MARKER));
+        }
+    }
+    if !clean_exit {
+        let _ = app.emit(
+            "pipeline-event",
+            json!({"event": "cancelled", "job_id": run.job_id.clone()}),
+        );
+    }
 }
 
 /// Where the Python pipeline lives and how to invoke it.
@@ -122,7 +289,7 @@ fn run_job(
             args.push("--gameplay-amount".to_string());
             args.push(g.to_string());
         }
-        stream_pipeline(&app, &program, &args);
+        stream_pipeline(&app, &program, &args, PipelineKind::Job);
     });
     Ok(())
 }
@@ -158,17 +325,22 @@ fn resume_job(
             args.push("--gameplay-amount".to_string());
             args.push(g.to_string());
         }
-        stream_pipeline(&app, &program, &args);
+        stream_pipeline(&app, &program, &args, PipelineKind::Job);
     });
     Ok(())
 }
 
-fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
-    let child = quiet_command(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+fn stream_pipeline(app: &AppHandle, program: &str, args: &[String], kind: PipelineKind) {
+    let mut cmd = quiet_command(program);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Job runs get their own process group on unix so cancel_job can killpg
+    // the whole tree. UNVERIFIED on real macOS until T-19 lands.
+    #[cfg(unix)]
+    if kind == PipelineKind::Job {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let child = cmd.spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(err) => {
@@ -179,6 +351,17 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
             return;
         }
     };
+    if kind == PipelineKind::Job {
+        #[cfg(target_os = "windows")]
+        let job = job_object::JobHandle::adopt(&child);
+        *app.state::<RunState>().0.lock().unwrap() = Some(ActiveRun {
+            job_id: None,
+            child_pid: child.id(),
+            cancel_requested: false,
+            #[cfg(target_os = "windows")]
+            job,
+        });
+    }
     // Keep the tail of stderr around so a non-zero exit can report *why* —
     // the sidecar's traceback lands here, not in the JSONL stream on stdout.
     let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
@@ -199,6 +382,15 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                // run_job can't know its job id at spawn; the sidecar's own
+                // 'job' event is where it is learned.
+                if kind == PipelineKind::Job && value["event"] == "job" {
+                    if let Some(id) = value["job_id"].as_str() {
+                        if let Some(run) = app.state::<RunState>().0.lock().unwrap().as_mut() {
+                            run.job_id = Some(id.to_string());
+                        }
+                    }
+                }
                 let _ = app.emit("pipeline-event", value);
             }
         }
@@ -206,6 +398,15 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
     let status = child.wait();
     if let Some(t) = stderr_thread {
         let _ = t.join();
+    }
+    if kind == PipelineKind::Job {
+        let finished = app.state::<RunState>().0.lock().unwrap().take();
+        if let Some(run) = finished {
+            if run.cancel_requested {
+                handle_cancelled_exit(app, &run, status.as_ref().ok());
+                return; // deliberate stop - never the 'exited' crash path
+            }
+        }
     }
     if let Ok(status) = status {
         if !status.success() {
@@ -255,6 +456,7 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
             let dir = entry.path();
             let has_render = dir.join("render.json").exists();
             let has_ingest = dir.join("ingest.json").exists();
+            let cancelled = dir.join(CANCELLED_MARKER).exists();
             let title = fs::read_to_string(dir.join("ingest.json"))
                 .ok()
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok())
@@ -262,6 +464,7 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
             out.push(json!({
                 "id": id, "title": title,
                 "ingested": has_ingest, "rendered": has_render,
+                "cancelled": cancelled,
             }));
         }
     }
@@ -384,7 +587,7 @@ fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), Stri
         args.push("render-clip".to_string());
         args.push(job_id);
         args.push(clip.to_string());
-        stream_pipeline(&app, &program, &args);
+        stream_pipeline(&app, &program, &args, PipelineKind::Tool);
     });
     Ok(())
 }
@@ -513,12 +716,14 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
 
 fn main() {
     tauri::Builder::default()
+        .manage(RunState(Mutex::new(None)))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             run_job,
             resume_job,
+            cancel_job,
             job_results,
             list_job_dirs,
             save_gemini_key,

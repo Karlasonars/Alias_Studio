@@ -21,6 +21,7 @@ dependencies = [
 name = "alias-studio-app"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tauri",
@@ -28,6 +29,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
