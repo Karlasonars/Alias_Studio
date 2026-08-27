@@ -185,6 +185,74 @@ def _mark_cancelled_on_disk(job: Job) -> None:
     (job.dir / CANCEL_FLAG).unlink(missing_ok=True)
 
 
+def next_pending() -> Job | None:
+    """The queue's entire scheduling policy, in one query (T-08 / E2-F04).
+
+    Eligible means status 'pending' and nothing else, ever: failed is
+    terminal (no automatic retry - an unattended retry of a 40-minute GPU
+    job is a real cost, and checkpoint resume makes manual retry nearly
+    free), cancelled never comes back, running is the shell's business.
+    Order is FIFO; rowid breaks created_at ties, which on Windows can land
+    inside the same clock tick for jobs enqueued back to back.
+
+    The Rust side deliberately holds no copy of this policy - it asks this
+    function (via `jobs next`) and spawns whatever it answers.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE status = 'pending'"
+            " ORDER BY created_at ASC, rowid ASC LIMIT 1"
+        ).fetchone()
+    return _row_to_job(row) if row else None
+
+
+def cancel_pending(job_id: str) -> dict:
+    """Cancel a job that has not started. Guarded on 'pending' the way
+    mark_cancelled guards on 'running': the active job's cancel is T-07's
+    kill path, and a finished job is not this function's to touch."""
+    job = get_job(job_id)
+    if job is None:
+        return {"marked": False, "status": None}
+    if job.status != "pending":
+        return {"marked": False, "status": job.status}
+    _mark_cancelled_on_disk(job)
+    return {"marked": True, "status": "cancelled"}
+
+
+def reconcile_stale_running() -> list[dict]:
+    """App-start reconciliation: a 'running' row when no app is running is
+    a ghost - the app is the runner, so at startup nothing can truly be
+    running. Only 'running' rows are touched; that is what makes
+    resurrection impossible (a cancelled job is not 'running', a pending
+    job stays queued across the restart).
+
+    A ghost whose job dir carries the cancelled marker becomes 'cancelled' -
+    disk truth, and it heals the case where T-07's bookkeeping one-shot
+    never ran. Everything else becomes 'failed' with an error that says
+    what actually happened. 'failed' is mildly wrong as a label for an
+    interrupted job and deliberately so: an 'interrupted' status would be
+    enum creep with a single consumer. Do not sniff this error string to
+    re-derive the distinction; if a view ever needs it rendered apart,
+    promote a real status instead.
+    """
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM jobs WHERE status = 'running'").fetchall()
+    out: list[dict] = []
+    for job in (_row_to_job(r) for r in rows):
+        if (job.dir / CANCELLED_MARKER).exists():
+            set_job_status(job.id, "cancelled")
+            out.append({"job_id": job.id, "status": "cancelled"})
+        else:
+            set_job_status(
+                job.id,
+                "failed",
+                "interrupted: the app closed while this job was running - "
+                "resume to continue from its last checkpoint",
+            )
+            out.append({"job_id": job.id, "status": "failed"})
+    return out
+
+
 def mark_cancelled(job_id: str) -> dict:
     """Post-mortem bookkeeping after the shell hard-kills a run.
 
