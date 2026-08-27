@@ -710,19 +710,41 @@ Job IDs are `YYYYMMDD-HHMMSS-<6 hex>`.
 
 ### Downloaded weights
 
-Declared in `models/specs.py`, fetched by `models/registry.py` into
-`PUBLIKCLIP_HOME/models/<name>`. Downloads resume via HTTP Range and are
-verified against a pinned sha256 where one is known.
+A first job fetches **~2.39 GB, through three different downloaders** — measured
+2026-08-27 from a complete install (T-11), because the "~2.5 GB" figure had
+never been checked. Only the registry share is fully ours:
+
+| Downloader | What | Bytes | Resume | Verify | Progress |
+|---|---|---|---|---|---|
+| `models/registry.py` (ours) | PANNs 312 MB, CAM++ 28 MB, vision ONNX 4.6 MB, (laughter 10 MB, optional) | ~360 MB (15%) | `.part` + Range | pinned sha256 | our callback |
+| huggingface_hub (faster-whisper) | whisper `large-v3-turbo` snapshot | 1.62 GB (68%) | `.incomplete` | etag | none — T-11 watches the cache dir |
+| torch.hub (whisperX) | wav2vec2 English aligner 378 MB, silero-vad repo ~35 MB | 413 MB (17%) | **no** | **none** | none |
+
+Registry weights are declared in `models/specs.py` and land in
+`PUBLIKCLIP_HOME/models/<name>`; the HF and torch caches live under
+`models/hf` and `models/torch` (`asr/stage.py` points `HF_HOME`/`TORCH_HOME`
+there so deleting the app data dir stays a complete uninstall).
+
+`publikclip setup status` reports what is present — derived from disk on every
+call, never remembered — and `publikclip setup run` fetches what is missing
+with JSONL progress (E1-F01, T-11). The onboarding warning step drives both;
+stages keep their lazy fetches, so setup is a default, not a gate. Setup
+deliberately skips: the laughter specialist unless the user's settings enable
+it, non-English aligners (the language is detected mid-transcribe), and the
+SER weights (~378 MB) whose loader has never succeeded (T-38).
 
 | Model | File | Purpose |
 |---|---|---|
-| whisperX `large-v3-turbo` | (HF cache) | transcription + alignment, ~1.6 GB |
+| whisperX `large-v3-turbo` | (HF cache) | transcription, 1.62 GB |
+| wav2vec2 ASR base 960h | (torch.hub cache) | English word alignment, 378 MB |
+| silero-vad | (torch.hub cache) | voice activity detection, ~35 MB |
 | PANNs Cnn14_DecisionLevelMax | `Cnn14_DecisionLevelMax.pth` | audio events, ~312 MB |
-| CAM++ | `campplus_cn_common.bin` | speaker embeddings |
+| CAM++ | `campplus_cn_common.bin` | speaker embeddings, 28 MB |
 | UltraFace RFB-320 | `ultraface-rfb-320.onnx` | face detection |
 | LR-ASD frontend | `frontend.onnx` | active-speaker detection |
 | LR-ASD backend | `backend.onnx` | active-speaker detection |
 | jrgillick laughter | `best.pth.tar` | optional laughter specialist |
+| speechbrain SER | (should be `models/ser`) | arousal — **has never loaded; T-38** |
 
 > **Note on the PANNs checkpoint.** The correct file is ~312 MB
 > (`content-length: 327428481`). A 514 MB response from that URL is the

@@ -677,6 +677,25 @@ title, it is P0 — it means a class of ordinary videos cannot be processed. A s
 job the same day failed with `score: No candidate produced a scoreable transcript`,
 which may be unrelated and may not be.
 
+### T-38 · The SER model has never loaded                 [P1, found in T-11]
+
+```
+Blocked by  nothing
+Touches     events/ser.py (the blanket except at line 62 is what hides the cause)
+Proves it   a job's curves.json says arousal_source=ser; and scoring stops
+            discounting shock ×0.6 (rubric.py:283)
+Watch out   fix the loader BEFORE adding its ~378 MB to setup's download list —
+            T-11 deliberately excluded it (setup.py docstring + a test pin)
+```
+
+Every job on the reference machine — 15 of 15 — fell back to `dsp-proxy`: the
+speechbrain `foreign_class` load fails before the weights ever download (the HF
+cache holds exactly one 6 KB file of the repo), `except Exception: return None`
+swallows the reason, and `rubric.py:283` then discounts every shock score ×0.6.
+The product has been running on the fallback since day one and nothing said so.
+Diagnose the load failure (likely Windows/speechbrain fetch semantics), then
+add the model to setup's list only once it demonstrably loads.
+
 Both also surface as raw Python `repr` in the UI, which is T-13's whole subject.
 
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
@@ -716,13 +735,22 @@ estimate yet" when nothing is measured under the current key. A forced
 PUBLIKCLIP_DEVICE is shown, never invisible. This also corrected T-08's
 deferral note: T-20 is a UI task now and the queue estimate is unblocked.
 
-### T-11 · E1-F01 — Setup flow                                  [P0]
+### T-11 · E1-F01 — Setup flow                                  [DONE 2026-08-27]
 
 ```
-Blocked by  T-10
-Touches     app/src-tauri/src/main.rs (bootstrap progress events),
-            app/src/components/Onboarding.tsx
-Proves it   manual: killing the app mid-setup resumes at the last completed step
+Merged      setup.py (new) + `publikclip setup status|run`; SetupModels.tsx in
+            onboarding's warning step; Rust streams the run as `setup-event`
+Proves it   tests/test_setup.py (7) — presence is disk truth, an interrupted
+            registry download resumes by Range, one failure skips nothing else;
+            SetupModels.test.tsx (6) + the no-second-gate pin. Manual: killing
+            the app mid-setup resumes at the last completed item (its Job
+            Object sets KILL_ON_JOB_CLOSE, unlike job runs)
+Watch out   only ~360 MB of the ~2.39 GB goes through registry.ensure. The
+            1.62 GB whisper snapshot is huggingface_hub's downloader (resumes,
+            no progress hook -> disk-watcher thread) and 413 MB is torch.hub's
+            (NO resume, NO checksum). Setup skips the laughter specialist
+            unless enabled, SER entirely (T-38), and non-English aligners
+            (language is only known mid-transcribe)
 ```
 
 ### T-12 · E1-F07 — Disk space check                            [P0]
@@ -862,7 +890,7 @@ reading code the first just wrote.
 | `pipeline/.../jobs/queue.py` | 534 | T-12, T-14, T-29, T-30 | The checkpoint contract AND the queue policy live here — read `CLAUDE.md` §4 |
 | `pipeline/.../insights/calibration.py` | 908 | all of E11 | Split before v1.1 |
 | `pipeline/.../settings_schema.py` | 487 | E12-F01, then anything adding a setting | Do E12-F01 first |
-| `app/src/components/Onboarding.tsx` | 122 | T-09, T-10, T-11 | Three tasks in a row; keep them in that order |
+| `app/src/components/Onboarding.tsx` | 323 | T-09, T-10, T-11 all landed | The three-beat flow now carries the gate, the hardware line and SetupModels |
 
 ---
 

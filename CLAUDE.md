@@ -40,7 +40,7 @@ mirror it into the code.
 
 ```
 pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
-  cli.py            (584)  argparse surface; the sidecar's entry point
+  cli.py            (718)  argparse surface; the sidecar's entry point
   config.py         (452)  the whole settings tree
   settings_schema.py (487) UI schema — 13 groups; 67 nested + 5 top-level = 72
                            fields, plus CAPTION_FIELDS (15) outside GROUPS.
@@ -72,13 +72,16 @@ app/src/                          React frontend
   components/ClipEditor/   nine files, 1151 lines — one 1175-line component until
                            T-03. Largest is now Controls.tsx (293). Split by state
                            ownership, not by visual region; §6 says why
-  test/tauri.ts + *.test.tsx  the T-36 suite: vitest + jsdom, 5 tests, each one
-                           re-catching a hand-found T-08 defect. The Tauri
-                           boundary is mocked at the module seam — see §7
-app/src-tauri/src/main.rs  (993)  the whole Rust layer. Was 544 before T-07 and
+  test/tauri.ts + *.test.tsx  the T-36 suite: vitest + jsdom. Started as 5 tests
+                           re-catching T-08's hand-found defects; T-09/T-10/T-11
+                           grew it (no count here on purpose — §3's lesson; `npm
+                           test` prints it). The Tauri boundary is mocked at the
+                           module seam — see §7
+app/src-tauri/src/main.rs (1253)  the whole Rust layer. Was 544 before T-07 and
                            T-08; it now holds RunState, the Job Object kill, the
-                           queue runner and the queue cache. See §6 — it is a
-                           danger zone now, not a thin shell
+                           queue runner, the queue cache and T-11's setup runner.
+                           See §6 — it is a danger zone now, not a thin shell,
+                           and at this size a split task is overdue
 ```
 
 **Three processes, one direction of control:** React → Rust (Tauri) → Python sidecar.
