@@ -166,6 +166,32 @@ def cmd_hardware(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """E1-F01: what a first job would download, checked or fetched up front.
+    `status` is filesystem-only and prints one JSON line; `run` fetches
+    everything missing with JSONL progress and is safe to kill — completion
+    is re-derived from disk, and the resumable downloads keep their offset."""
+    from . import setup as setup_mod
+
+    if getattr(args, "setup_cmd", None) == "status":
+        print(json.dumps(setup_mod.status()), flush=True)
+        return 0
+
+    def emit(obj: dict) -> None:
+        if args.jsonl:
+            print(json.dumps(obj), flush=True)
+        else:
+            state = obj.get("state", obj.get("event"))
+            frac = obj.get("fraction")
+            pct = f" {frac * 100:5.1f}%" if isinstance(frac, float) and frac >= 0 else ""
+            detail = obj.get("message") or obj.get("error") or ""
+            print(f"[{obj.get('item', 'setup'):<10}] {state}{pct} {detail}", file=sys.stderr, flush=True)
+
+    result = setup_mod.run(emit)
+    _emit_result(args.jsonl, result)
+    return 0 if result["ok"] else 1
+
+
 def cmd_jobs(args: argparse.Namespace) -> int:
     sub = getattr(args, "jobs_cmd", None)
     if sub == "create":
@@ -585,6 +611,14 @@ def main(argv: list[str] | None = None) -> int:
         "hardware", help="probe the machine, update hardware_profile.json, print it"
     )
     p_hw.set_defaults(fn=cmd_hardware)
+
+    p_setup = sub.add_parser(
+        "setup", help="fetch everything a first job would download (resumable; kill-safe)"
+    )
+    setup_sub = p_setup.add_subparsers(dest="setup_cmd", required=False)
+    setup_sub.add_parser("status", help="what is present and what is missing, from disk")
+    setup_sub.add_parser("run", help="fetch what is missing (the default)")
+    p_setup.set_defaults(fn=cmd_setup)
 
     p_jobs = sub.add_parser("jobs", help="list jobs (with --jsonl: one JSON object per job)")
     jobs_sub = p_jobs.add_subparsers(dest="jobs_cmd", required=False)
