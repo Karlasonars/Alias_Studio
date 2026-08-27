@@ -72,6 +72,9 @@ app/src/                          React frontend
   components/ClipEditor/   nine files, 1151 lines — one 1175-line component until
                            T-03. Largest is now Controls.tsx (293). Split by state
                            ownership, not by visual region; §6 says why
+  test/tauri.ts + *.test.tsx  the T-36 suite: vitest + jsdom, 5 tests, each one
+                           re-catching a hand-found T-08 defect. The Tauri
+                           boundary is mocked at the module seam — see §7
 app/src-tauri/src/main.rs  (993)  the whole Rust layer. Was 544 before T-07 and
                            T-08; it now holds RunState, the Job Object kill, the
                            queue runner and the queue cache. See §6 — it is a
@@ -118,7 +121,10 @@ uv run ruff check .                 # lint
 # Frontend — CI runs this, so run it before pushing frontend work
 cd app
 npm ci                              # what CI runs; npm install drifts the lockfile
-npx tsc --noEmit                    # the only frontend check that exists
+npx tsc --noEmit                    # typecheck
+npm test                            # vitest run — the T-36 suite (~2 s). CI runs
+                                    # both; a green tsc alone proves compilation,
+                                    # not behaviour
 npm run tauri dev                   # dev builds call `uv run` against ./pipeline,
                                     # so Python changes need no rebuild
 
@@ -468,8 +474,9 @@ seams that exist, and read `useClipEdit.ts` before touching anything that render
 during playback: it assigns `editRef` and `ctxRef` **during render**, deliberately,
 so the rAF loop in `usePlayer.ts` reads current values without re-subscribing. That
 loop's dependency array is `[win, span]` and does **not** include `edit`. Break
-either and the preview plays against stale state — no error, wrong frames. There is
-still no frontend test infrastructure to catch it: `tsc --noEmit` is the whole net.
+either and the preview plays against stale state — no error, wrong frames. T-36
+added a component test runner, but nothing covers this rAF path: for this file,
+`tsc --noEmit` is still the whole net.
 
 **`pipeline/publikclip_pipeline/insights/calibration.py` (908 lines).** Largest file in
 the pipeline, and about to carry two more platforms. Same advice.
@@ -512,7 +519,7 @@ A task is done when **all** of these hold:
       nothing — the `==` guard goes red the moment you fix a violation and leave the
       constant alone (§5.3).
 - [ ] `uv run ruff check .` is clean.
-- [ ] If you touched `app/`: `npx tsc --noEmit` is clean.
+- [ ] If you touched `app/`: `npx tsc --noEmit` is clean **and `npm test` is green.**
 - [ ] At least one new test **fails without your change**. Verify this by reverting
       your change and watching it fail; a test that passes both ways tests nothing.
       **When your change strengthens a guard rather than altering behaviour,
@@ -534,38 +541,49 @@ A task is done when **all** of these hold:
 - [ ] **If you touched `app/` or the Rust shell: the hand test, and it is not a
       formality.** See below.
 
-### The frontend has no tests. None.
+### Frontend tests exist now (T-36). Know what they cover — and what they cannot.
 
-There is no vitest, no jest, no `.test.tsx`, and `app/package.json` has no `test`
-script. `npx tsc --noEmit` is the entire automated net for ~5,300 lines of React, and
-`cargo check` is the entire net for 993 lines of Rust. Both prove the code compiles.
-Neither proves it does anything.
+`npm test` runs vitest (jsdom + testing-library) over `app/src/*.test.tsx`;
+guards.yml runs it after the typecheck. The Tauri runtime does not exist in a
+test, so `invoke`/`listen` are mocked at the module seam (`src/test/tauri.ts`) —
+**no product code was restructured to be testable**, and the §5.4 guard scans the
+test files like any other: they contain no direct `invoke(` and must stay that way.
 
-This is not an abstract risk. T-08 shipped to review with **289 green tests and green
-CI**, and one afternoon of a person clicking found seven defects, every one invisible
-to the suite:
+The suite earned its place by re-catching T-08's hand-found defects. That task
+shipped to review with **289 green tests and green CI**, and one afternoon of a
+person clicking found seven, every one invisible to everything automated:
 
-1. enqueueing while busy changed nothing on screen — six duplicate jobs queued
-2. the queue view rendered inside a 264 px column
+1. enqueueing while busy changed nothing on screen — six duplicate jobs queued.
+   **Pinned** (`App.test.tsx`)
+2. the queue view rendered inside a 264 px column. **CSS — a DOM test cannot see
+   layout; still hand-test only**
 3. it polled a `uv run` subprocess every 2 s, stacking processes faster than they
-   could answer
-4. the rail footer had no layout rule at all; a fourth button broke it
+   could answer. **Pinned** (`QueueView.test.tsx` — one ask at mount, none on a
+   60 s fake clock)
+4. the rail footer had no layout rule at all; a fourth button broke it. **CSS —
+   same as 2**
 5. the queue view was a flat history list — a waiting job was indistinguishable
-   from one cancelled days ago, so the owner could not run the checklist
-6. an auto-advanced job inherited the previous job's stage bars
-7. and, worst, `running` never returned to true, so **every job after the first had
-   no Cancel button** — T-07's process-tree kill unreachable for exactly the jobs
-   the queue exists to run
+   from one cancelled days ago. **Partially pinned**: the NOW / UP NEXT / HISTORY
+   sections and FIFO numbering are asserted; whether they *read* well is not
+6. an auto-advanced job inherited the previous job's stage bars. **Pinned**
+7. and, worst, `running` never returned to true, so **every job after the first
+   had no Cancel button** — T-07's process-tree kill unreachable for exactly the
+   jobs the queue exists to run. **Pinned — the most valuable test in the suite**
 
-So: a UI or shell task carries a hand-test checklist in its PR, written for someone
-who has not read the thread — what to click, and what must appear. Say plainly which
-steps you ran and which you could not. **Do not describe a step you did not run.**
-Several of these need a completed job's artifacts, which §3 forbids you from
-producing; those belong to whoever has a machine with models, and the PR should say
-so rather than quietly omitting them.
+What the suite still cannot see, and the hand test still owns: **CSS layout**
+(defects 2 and 4 were real, and a class-name assertion would test the test, not
+the layout), **the Rust kill path** (§6 — nothing but Task Manager proves a
+cancel kills the process tree), and **anything needing a real job's artifacts**
+(§3 forbids producing them).
 
-Building the missing test infrastructure is T-36, and it is worth more than the next
-three features.
+So the hand-test rule stands — narrowed, not retired: a UI or shell task carries
+a hand-test checklist in its PR **for what the suite cannot see**, written for
+someone who has not read the thread — what to click, and what must appear. Say
+plainly which steps you ran and which you could not. **Do not describe a step you
+did not run.** Steps needing a completed job's artifacts belong to whoever has a
+machine with models, and the PR should say so rather than quietly omitting them.
+And when a UI behaviour *is* pinnable, pin it: a UI change ships with a test the
+way a Python change does.
 
 ---
 

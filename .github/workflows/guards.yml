@@ -75,3 +75,10 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+
+      # T-36. Five tests that each re-catch a hand-found T-08 defect —
+      # including the missing Cancel button that tsc was blind to. A test
+      # CI does not run is a test nobody will keep passing.
+      - name: Frontend tests
+        working-directory: app
+        run: npm test
