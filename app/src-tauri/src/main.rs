@@ -696,23 +696,73 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-fn save_gemini_key(key: String) -> Result<bool, String> {
-    let home = home_dir();
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    let path = home.join("secrets.json");
-    let mut current: Value = fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({}));
-    current["gemini_api_key"] = json!(key.trim());
-    fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+/// One cheap authenticated call (ListModels) to learn a key's fate. Three
+/// answers, not two:
+///   - "verified": Google accepted the key (200; 429 also proves it is
+///     recognized - a throttle is not a rejection)
+///   - "rejected": Google affirmatively refused it (400/401/403; the API
+///     answers 400 API_KEY_INVALID for a malformed key)
+///   - "unverified": the check itself was impossible (no network, a 5xx,
+///     curl missing). §5.9: inability to check must never become a wall.
+/// §5.11: the key rides a header, and the header reaches curl through
+/// stdin (`-H @-`), so it is never in a URL - and never in argv either.
+fn gemini_key_status(key: &str) -> &'static str {
+    use std::io::Write;
+    let sink = if cfg!(target_os = "windows") { "NUL" } else { "/dev/null" };
+    let spawned = quiet_command("curl")
+        .args([
+            "-s", "-m", "8", "-o", sink, "-w", "%{http_code}", "-H", "@-",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return "unverified";
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(stdin, "x-goog-api-key: {key}");
     }
-    Ok(true)
+    let Ok(out) = child.wait_with_output() else {
+        return "unverified";
+    };
+    match String::from_utf8_lossy(&out.stdout).trim().parse::<u16>() {
+        Ok(200) | Ok(429) => "verified",
+        Ok(400) | Ok(401) | Ok(403) => "rejected",
+        _ => "unverified",
+    }
+}
+
+/// Verify, then save. This used to write unconditionally and return true,
+/// so "Saved ✓" meant "written to disk" - a typo'd key opened the
+/// onboarding gate and failed twenty minutes later inside scoring. A
+/// rejected key is NOT written: overwriting a working key with one Google
+/// just refused would trade a visible failure for a silent one.
+#[tauri::command]
+async fn save_gemini_key(key: String) -> Result<Value, String> {
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err("key is empty".to_string());
+    }
+    let status = gemini_key_status(&key);
+    if status != "rejected" {
+        let home = home_dir();
+        fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+        let path = home.join("secrets.json");
+        let mut current: Value = fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| json!({}));
+        current["gemini_api_key"] = json!(key);
+        fs::write(&path, serde_json::to_string_pretty(&current).unwrap())
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(json!({"status": status}))
 }
 
 #[tauri::command]

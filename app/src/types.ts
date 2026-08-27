@@ -233,6 +233,14 @@ export interface SetupState {
   onboarded: boolean
 }
 
+/** save_gemini_key verifies with one cheap call before accepting (E1-F02).
+ *  "rejected" means Google refused the key and nothing was written;
+ *  "unverified" means the check itself was impossible (offline) — the key
+ *  is saved and the gate must not become a wall (§5.9). */
+export interface SaveKeyResult {
+  status: 'verified' | 'unverified' | 'rejected'
+}
+
 /* ---------- the Instagram loop ---------- */
 
 export interface LoopMetrics {

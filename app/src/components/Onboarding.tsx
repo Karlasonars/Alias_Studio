@@ -1,30 +1,85 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { api } from '../api'
 
 /**
  * Three beats: what this is → pick the brain (Gemini key or local Ollama) →
  * go. The optional Instagram feedback module gets its own guided flow later
  * (Settings → Connect Instagram), so first-run stays under a minute.
+ *
+ * The Continue gate is deliberate (PRD §4.2, D-15): one of the two brains
+ * is a contract, not friction to remove. E1-F02's job is that the gate
+ * LEADS THROUGH — both doors prove they work before opening (a verified
+ * key, a chat-capable Ollama), and a closed door says what to do next.
  */
 
 interface Props {
   onDone: () => void
 }
 
+type KeyState = 'idle' | 'checking' | 'verified' | 'unverified' | 'rejected'
+
+const PULL_CMD = 'ollama pull llama3.1:8b'
+
 export default function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState(0)
   const [key, setKey] = useState('')
-  const [saved, setSaved] = useState(false)
+  const [keyState, setKeyState] = useState<KeyState>('idle')
+  const [keyError, setKeyError] = useState<string | null>(null)
   const [ollama, setOllama] = useState<{ running: boolean; models: string[] } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const checkingRef = useRef(false)
 
-  useEffect(() => {
-    api.checkOllama().then(setOllama).catch(() => setOllama({ running: false, models: [] }))
+  // Re-check on demand and on window focus — never on a timer (T-08's 2 s
+  // poll stacked subprocesses faster than they answered; a focus event
+  // fires exactly when the user comes back from installing Ollama in
+  // another window, which is better timing than any interval). Cost when
+  // the answer is "no": one curl with a 3 s cap per focus or press; the
+  // in-flight guard keeps a focus flood from stacking curls.
+  const refreshOllama = useCallback(() => {
+    if (checkingRef.current) return
+    checkingRef.current = true
+    api
+      .checkOllama()
+      .then(setOllama)
+      .catch(() => setOllama({ running: false, models: [] }))
+      .finally(() => {
+        checkingRef.current = false
+      })
   }, [])
 
+  useEffect(() => {
+    refreshOllama()
+    window.addEventListener('focus', refreshOllama)
+    return () => window.removeEventListener('focus', refreshOllama)
+  }, [refreshOllama])
+
+  // Embedding-only Ollama must not read as ready: scoring needs a chat
+  // model, and OllamaClient fails on an empty list — after the expensive
+  // stages already ran.
+  const chatModels = (ollama?.models ?? []).filter((m) => !m.includes('embed'))
+  const ollamaReady = !!ollama?.running && chatModels.length > 0
+  const keySaved = keyState === 'verified' || keyState === 'unverified'
+
   async function saveKey() {
-    if (!key.trim()) return
-    await api.saveGeminiKey(key)
-    setSaved(true)
+    if (!key.trim() || keyState === 'checking') return
+    setKeyState('checking')
+    setKeyError(null)
+    try {
+      const res = await api.saveGeminiKey(key)
+      setKeyState(res.status)
+    } catch (err) {
+      // the write itself failed — nothing on disk, so the gate must not open
+      setKeyState('idle')
+      setKeyError(String(err))
+    }
+  }
+
+  function copyPull() {
+    navigator.clipboard
+      .writeText(PULL_CMD)
+      .then(() => setCopied(true))
+      .catch(() => {})
   }
 
   return (
@@ -55,14 +110,25 @@ export default function Onboarding({ onDone }: Props) {
         <section className="ob-step" key="s1">
           <p className="ob-kicker">01 / the scoring brain</p>
           <h2 className="ob-h2">Pick how moments get judged</h2>
+          <p className="ob-fine">
+            Without a model that judges content, a score would be a number pretending
+            to be a judgment — so one of these two is required. Both are free.
+          </p>
           <div className="ob-cards">
-            <div className={`ob-card ${saved ? 'done' : ''}`}>
+            <div className={`ob-card ${keySaved ? 'done' : ''}`}>
               <h3>Gemini key <span className="chip chip-amber">recommended</span></h3>
               <p>
-                Bring your own key (aistudio.google.com). Costs roughly{' '}
+                Bring your own key: sign in at aistudio.google.com, press{' '}
+                <em>Get API key</em>, paste it here. Costs roughly{' '}
                 <span className="mono">$0.15</span> per hour of source video. Best
                 humor and shock judgment.
               </p>
+              <button
+                className="btn-ghost"
+                onClick={() => openUrl('https://aistudio.google.com/apikey').catch(() => {})}
+              >
+                ↗ get a key (aistudio.google.com)
+              </button>
               <div className="ob-key-row">
                 <input
                   type="password"
@@ -71,32 +137,107 @@ export default function Onboarding({ onDone }: Props) {
                   onChange={(e) => setKey(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && saveKey()}
                 />
-                <button className="btn-secondary" onClick={saveKey} disabled={!key.trim()}>
-                  {saved ? 'Saved ✓' : 'Save'}
+                <button
+                  className="btn-secondary"
+                  onClick={saveKey}
+                  disabled={!key.trim() || keyState === 'checking'}
+                >
+                  {keyState === 'checking'
+                    ? 'Checking…'
+                    : keyState === 'verified'
+                      ? 'Verified ✓'
+                      : keyState === 'unverified'
+                        ? 'Saved'
+                        : 'Save & verify'}
                 </button>
               </div>
+              {keyState === 'rejected' && (
+                <p className="ob-fine">
+                  <span className="led led-err" /> Google rejected that key — a typo,
+                  or it was revoked. Nothing was saved; fix it and try again.
+                </p>
+              )}
+              {keyState === 'unverified' && (
+                <p className="ob-fine">
+                  <span className="led led-half" /> Saved, but Google could not be
+                  reached to verify it (offline?). It will be checked on first use.
+                </p>
+              )}
+              {keyError && (
+                <p className="ob-fine">
+                  <span className="led led-err" /> Could not save the key: {keyError}
+                </p>
+              )}
             </div>
-            <div className={`ob-card ${ollama?.running ? '' : 'dim'}`}>
+            <div className={`ob-card ${ollamaReady ? '' : 'dim'}`}>
               <h3>
-                Ollama <span className={`led ${ollama?.running ? 'led-on' : 'led-off'}`} />
+                Ollama{' '}
+                <span
+                  className={`led ${ollamaReady ? 'led-on' : ollama?.running ? 'led-half' : 'led-off'}`}
+                />
               </h3>
-              <p>
-                {ollama === null
-                  ? 'Checking…'
-                  : ollama.running
-                    ? `Running locally (${ollama.models.filter((m) => !m.includes('embed')).slice(0, 2).join(', ') || 'no chat models'}). Zero cost, fully offline — scores are labeled "local estimate" because small models judge humor less reliably.`
-                    : 'Not detected. Install ollama.com and pull a model (e.g. llama3.1:8b) to run fully offline.'}
-              </p>
+              {ollama === null ? (
+                <p>Checking…</p>
+              ) : ollamaReady ? (
+                <p>
+                  Running locally ({chatModels.slice(0, 2).join(', ')}). Zero cost,
+                  fully offline — scores are labeled "local estimate" because small
+                  models judge humor less reliably.
+                </p>
+              ) : ollama.running ? (
+                <>
+                  <p>
+                    Running — but it has no chat model yet
+                    {ollama.models.length > 0 ? ' (only embedding models are installed)' : ''}
+                    , so it cannot judge anything. Pull the recommended one
+                    (~<span className="mono">4.9 GB</span>) in a terminal, then check
+                    again:
+                  </p>
+                  <p className="mono">
+                    {PULL_CMD}{' '}
+                    <button className="btn-ghost" onClick={copyPull}>
+                      {copied ? 'copied ✓' : 'copy'}
+                    </button>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Not installed (or not running). Free, no limits, fully offline —
+                    three steps: install Ollama, run{' '}
+                    <span className="mono">{PULL_CMD}</span> (~
+                    <span className="mono">4.9 GB</span>) in a terminal, come back
+                    here.
+                  </p>
+                  <button
+                    className="btn-ghost"
+                    onClick={() => openUrl('https://ollama.com/download').catch(() => {})}
+                  >
+                    ⇩ get Ollama (ollama.com)
+                  </button>
+                </>
+              )}
+              {ollama !== null && !ollamaReady && (
+                <button className="btn-ghost" onClick={refreshOllama}>
+                  ↻ check again
+                </button>
+              )}
             </div>
           </div>
           <p className="ob-fine">
             You can switch per-run. Everything else — transcription, laughter
             detection, speaker tracking, rendering — is local either way.
           </p>
+          {/* The gate. Deliberate (PRD §4.2, D-15) — do not remove, do not
+              add a skip. Both sides now mean "proven to work": a rejected
+              key never sets keySaved, and Ollama without a chat model is
+              not ready (it would fail at scoring, after the expensive
+              stages already ran — the exact late failure the key check
+              exists to prevent). */}
           <button
             className="btn-primary"
             onClick={() => setStep(2)}
-            disabled={!saved && !ollama?.running}
+            disabled={!keySaved && !ollamaReady}
           >
             Continue
           </button>
