@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { JobResults, JobSummary, LogLine, PipelineEvent, SetupState } from './types'
+import type { JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
@@ -54,8 +54,8 @@ export default function App() {
   const [log, setLog] = useState<LogLine[]>([])
   // Enqueue-while-running feedback: six silent QUEUE IT presses once
   // enqueued six invisible jobs. `enqueueing` acknowledges the press the
-  // moment it happens; `queuedCount` is the real pending count, asked from
-  // the queue after each change the frontend can observe.
+  // moment it happens; `queuedCount` is the real pending count, pushed
+  // from Rust's queue-state event whenever the queue changes.
   const [enqueueing, setEnqueueing] = useState(0)
   const [queuedCount, setQueuedCount] = useState(0)
   const unlistenRef = useRef<(() => void) | null>(null)
@@ -84,11 +84,22 @@ export default function App() {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
   }, [])
 
-  const refreshQueueCount = useCallback(() => {
-    api
-      .queueState()
-      .then((s) => setQueuedCount(s.jobs.filter((j) => j.status === 'pending').length))
-      .catch(() => {})
+  // Seed once from the instant cached snapshot, then ride the push: Rust
+  // emits queue-state at every mutation, so no view ever polls for it.
+  useEffect(() => {
+    const count = (s: QueueStateResult) =>
+      setQueuedCount(s.jobs.filter((j) => j.status === 'pending').length)
+    api.queueState().then(count).catch(() => {})
+    let disposed = false
+    let un: (() => void) | null = null
+    listen<QueueStateResult>('queue-state', ({ payload }) => count(payload)).then((u) => {
+      if (disposed) u()
+      else un = u
+    })
+    return () => {
+      disposed = true
+      un?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -121,9 +132,6 @@ export default function App() {
       if (payload.event === 'job' && payload.job_id) {
         setActiveJob(payload.job_id)
         setResults(null)
-        // A start means a pending row just left the queue - keep the
-        // "N waiting" count truthful instead of letting it go stale.
-        refreshQueueCount()
       } else if (payload.event === 'progress' && payload.stage) {
         setStages((prev) => ({
           ...prev,
@@ -165,7 +173,7 @@ export default function App() {
       disposed = true
       unlistenRef.current?.()
     }
-  }, [refreshJobs, appendLog, refreshQueueCount])
+  }, [refreshJobs, appendLog])
 
   const startRun = useCallback(
     async (source: string, llm: string, captions: string, gameplayAmount: number) => {
@@ -187,9 +195,8 @@ export default function App() {
         if (!wasIdle) {
           // A busy-enqueue used to change nothing on screen - the rail
           // refreshes only on run events, so six presses queued six
-          // invisible jobs. Refresh the rail and the count Studio shows.
+          // invisible jobs. The count Studio shows arrives by push.
           refreshJobs()
-          refreshQueueCount()
         }
       } catch (err) {
         // A swallowed enqueue error is the same silence: surface it the
@@ -200,7 +207,7 @@ export default function App() {
         setEnqueueing((n) => n - 1)
       }
     },
-    [refreshJobs, refreshQueueCount]
+    [refreshJobs]
   )
 
   const openJob = useCallback(async (jobId: string) => {

@@ -224,6 +224,8 @@ export interface QueueStateResult {
   jobs: QueueJob[]
   paused: boolean
   active_job_id: string | null
+  /** false while Rust's cache is still cold — render "loading", not "empty" */
+  ready: boolean
 }
 
 export interface SetupState {

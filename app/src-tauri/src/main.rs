@@ -300,13 +300,18 @@ fn resume_job(
         args.push("--gameplay-amount".to_string());
         args.push(g.to_string());
     }
-    let state = app.state::<RunState>();
-    let mut guard = state.0.lock().unwrap();
-    if guard.active.is_some() {
-        return Err("a job is already running".to_string());
+    {
+        let state = app.state::<RunState>();
+        let mut guard = state.0.lock().unwrap();
+        if guard.active.is_some() {
+            return Err("a job is already running".to_string());
+        }
+        guard.cancel_latch = false; // an explicit go gesture outranks a stale latch
+        start_job_locked(&app, &mut guard, args, job_id)?;
     }
-    guard.cancel_latch = false; // an explicit go gesture outranks a stale latch
-    start_job_locked(&app, &mut guard, args, job_id)
+    // Outside the lock block: emit_queue_state takes the RunState lock.
+    emit_queue_state(&app);
+    Ok(())
 }
 
 /// Run one CLI verb to completion; every JSON line it printed, in order.
@@ -326,6 +331,72 @@ fn one_shot_json_lines(extra: &[String]) -> Vec<Value> {
 /// Run one CLI verb to completion; its last JSON line.
 fn one_shot_json(extra: &[String]) -> Option<Value> {
     one_shot_json_lines(extra).pop()
+}
+
+/// The queue view used to poll queue_state on a 2s timer, and every call
+/// spawned a `uv run` subprocess that can take seconds (uv re-syncs the env
+/// per launch), so polls stacked up faster than they answered. The fix is
+/// push, not poll: this caches python's `--jsonl jobs` answer VERBATIM —
+/// no derived state, no decisions, SQLite (through python) stays the only
+/// truth — and it is invalidated by overwrite at exactly the moments the
+/// shell changes the queue or learns it changed: enqueue, advance, job
+/// exit, cancel-pending, startup reconcile. Each landed answer is emitted
+/// as a `queue-state` event. `gen` discards an answer overtaken by a newer
+/// ask, so the cache only ever moves forward.
+struct QueueCache(Mutex<QueueCacheInner>);
+struct QueueCacheInner {
+    gen: u64,
+    jobs: Option<Vec<Value>>,
+}
+
+/// The queue-state payload: the cached jobs listing plus the shell's own
+/// session truth (paused, active job). `ready: false` means the cache is
+/// still cold — the frontend renders "loading", not a false "empty".
+/// Never call while holding the RunState lock: it takes that lock itself.
+fn queue_snapshot(app: &AppHandle) -> Value {
+    let (jobs, ready) = {
+        let cache = app.state::<QueueCache>();
+        let guard = cache.0.lock().unwrap();
+        match &guard.jobs {
+            Some(jobs) => (jobs.clone(), true),
+            None => (Vec::new(), false),
+        }
+    };
+    let (paused, active_job_id) = {
+        let state = app.state::<RunState>();
+        let guard = state.0.lock().unwrap();
+        (guard.paused, guard.active.as_ref().map(|r| r.job_id.clone()))
+    };
+    json!({"jobs": jobs, "paused": paused, "active_job_id": active_job_id, "ready": ready})
+}
+
+fn emit_queue_state(app: &AppHandle) {
+    let _ = app.emit("queue-state", queue_snapshot(app));
+}
+
+/// Re-ask python for the jobs listing off-thread, store the answer, push
+/// it to the frontend. Only ever called at mutation moments — never on a
+/// timer — so there is no process pileup to have.
+fn refresh_queue_cache(app: &AppHandle) {
+    let my_gen = {
+        let cache = app.state::<QueueCache>();
+        let mut guard = cache.0.lock().unwrap();
+        guard.gen += 1;
+        guard.gen
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let jobs = one_shot_json_lines(&["--jsonl".to_string(), "jobs".to_string()]);
+        {
+            let cache = app.state::<QueueCache>();
+            let mut guard = cache.0.lock().unwrap();
+            if guard.gen != my_gen {
+                return; // overtaken by a newer ask; its answer wins
+            }
+            guard.jobs = Some(jobs);
+        }
+        emit_queue_state(&app);
+    });
 }
 
 /// Spawn a job run and register it as the active run. The caller holds the
@@ -469,6 +540,8 @@ fn stream_child(app: &AppHandle, mut child: std::process::Child, kind: PipelineK
         if let Some(run) = finished {
             if run.cancel_requested {
                 handle_cancelled_exit(app, &run, status.as_ref().ok());
+                // mark-cancelled has run by now; the listing knows.
+                refresh_queue_cache(app);
                 return; // deliberate stop: no crash event, and no auto-advance
             }
         }
@@ -486,6 +559,10 @@ fn stream_child(app: &AppHandle, mut child: std::process::Child, kind: PipelineK
         // Completion or crash: the queue continues (one failure does not
         // stop the rest). A cancel returned above, so the queue holds.
         try_advance(app, false);
+        // Emit now (active flipped), then re-ask so the terminal status
+        // python just wrote lands in the cache.
+        emit_queue_state(app);
+        refresh_queue_cache(app);
     }
 }
 
@@ -519,6 +596,10 @@ async fn enqueue_job(
         .ok_or_else(|| "enqueue returned no job id".to_string())?
         .to_string();
     try_advance(&app, true);
+    // Emit first (the active flip is knowable now), then refresh so the
+    // new row itself reaches the cache.
+    emit_queue_state(&app);
+    refresh_queue_cache(&app);
     Ok(job_id)
 }
 
@@ -526,30 +607,40 @@ async fn enqueue_job(
 #[tauri::command]
 async fn start_queue(app: AppHandle) -> Result<(), String> {
     try_advance(&app, true);
+    emit_queue_state(&app);
+    refresh_queue_cache(&app);
     Ok(())
 }
 
 #[tauri::command]
-fn set_queue_paused(state: tauri::State<RunState>, paused: bool) -> Result<(), String> {
-    state.0.lock().unwrap().paused = paused;
+async fn set_queue_paused(app: AppHandle, paused: bool) -> Result<(), String> {
+    {
+        let state = app.state::<RunState>();
+        state.0.lock().unwrap().paused = paused;
+    }
+    // Pause is shell session truth, not SQLite: no re-ask, just push.
+    emit_queue_state(&app);
     Ok(())
 }
 
+/// Answered from the cache: opening the queue view must be instant and
+/// must not spawn a process. A cold cache kicks one refresh, whose answer
+/// arrives as a queue-state event.
 #[tauri::command]
 async fn queue_state(app: AppHandle) -> Result<Value, String> {
-    let jobs = one_shot_json_lines(&["--jsonl".to_string(), "jobs".to_string()]);
-    let (paused, active_job_id) = {
-        let state = app.state::<RunState>();
-        let guard = state.0.lock().unwrap();
-        (guard.paused, guard.active.as_ref().map(|r| r.job_id.clone()))
-    };
-    Ok(json!({"jobs": jobs, "paused": paused, "active_job_id": active_job_id}))
+    let snapshot = queue_snapshot(&app);
+    if snapshot["ready"] == Value::Bool(false) {
+        refresh_queue_cache(&app);
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
-async fn cancel_pending_job(job_id: String) -> Result<Value, String> {
-    one_shot_json(&["jobs".to_string(), "cancel-pending".to_string(), job_id])
-        .ok_or_else(|| "cancel-pending produced no answer".to_string())
+async fn cancel_pending_job(app: AppHandle, job_id: String) -> Result<Value, String> {
+    let out = one_shot_json(&["jobs".to_string(), "cancel-pending".to_string(), job_id])
+        .ok_or_else(|| "cancel-pending produced no answer".to_string())?;
+    refresh_queue_cache(&app);
+    Ok(out)
 }
 
 /// Everything the review UI needs for one job, read straight off the job
@@ -854,6 +945,7 @@ fn main() {
             cancel_latch: false,
             paused: false,
         })))
+        .manage(QueueCache(Mutex::new(QueueCacheInner { gen: 0, jobs: None })))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -887,8 +979,12 @@ fn main() {
             // before the queue can be looked at. The queue itself never
             // auto-starts at launch - a user reopening the app to look at a
             // finished clip must not find the GPU busy.
-            std::thread::spawn(|| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
                 let _ = one_shot_json(&["jobs".to_string(), "reconcile".to_string()]);
+                // Warm the queue cache only after reconcile made the rows
+                // truthful - the view opens against this.
+                refresh_queue_cache(&handle);
             });
             Ok(())
         })
