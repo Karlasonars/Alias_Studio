@@ -37,6 +37,7 @@ export default function KeyModal({ onClose }: Props) {
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
+  const [rejected, setRejected] = useState(false)
 
   useEffect(() => {
     invoke<{ has_gemini_key: boolean }>('get_setup_state').then((s) =>
@@ -46,7 +47,15 @@ export default function KeyModal({ onClose }: Props) {
 
   async function save() {
     if (!key.trim()) return
-    await invoke('save_gemini_key', { key })
+    // save_gemini_key verifies first and refuses a rejected key (E1-F02) -
+    // claiming SAVED for a key Rust never wrote would be the old lie back.
+    const res = await invoke<{ status: string }>('save_gemini_key', { key })
+    if (res.status === 'rejected') {
+      setRejected(true)
+      setSaved(false)
+      return
+    }
+    setRejected(false)
     setSaved(true)
     setHasKey(true)
   }
@@ -74,7 +83,7 @@ export default function KeyModal({ onClose }: Props) {
             className="mono"
           />
           <button className="btn-primary" onClick={save} disabled={!key.trim()}>
-            {saved ? 'SAVED ✓' : 'SAVE KEY'}
+            {rejected ? 'REJECTED ✗ — RETRY' : saved ? 'SAVED ✓' : 'SAVE KEY'}
           </button>
         </div>
         <p className="audit-label" style={{ marginTop: 22 }}>PEXELS (STOCK VISUALS)</p>
