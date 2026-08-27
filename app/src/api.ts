@@ -8,6 +8,7 @@ import type {
   JobResults,
   JobSummary,
   LoopOverview,
+  QueueStateResult,
   SettingsPayload,
   SetupState,
   SyncSummary,
@@ -15,8 +16,13 @@ import type {
 } from './types'
 
 export const api = {
-  runJob: (source: string, llm: string, captions: string, gameplayAmount: number) =>
-    invoke<void>('run_job', { source, llm, captions, gameplayAmount }),
+  enqueueJob: (source: string, llm: string, captions: string, gameplayAmount: number) =>
+    invoke<string>('enqueue_job', { source, llm, captions, gameplayAmount }),
+  startQueue: () => invoke<void>('start_queue'),
+  setQueuePaused: (paused: boolean) => invoke<void>('set_queue_paused', { paused }),
+  queueState: () => invoke<QueueStateResult>('queue_state'),
+  cancelPendingJob: (jobId: string) =>
+    invoke<{ marked: boolean }>('cancel_pending_job', { jobId }),
   resumeJob: (
     jobId: string,
     llm?: string,

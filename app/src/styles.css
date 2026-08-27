@@ -162,6 +162,17 @@ body {
 .led-half { background: var(--amber); box-shadow: 0 0 8px rgba(var(--amber-rgb), 0.6); }
 .led-off { background: var(--led-off); }
 .led-err { background: var(--red); box-shadow: 0 0 8px rgba(255, 92, 73, 0.7); }
+/* running: the one state that pulses — pending/done/cancelled once shared
+   a single LED look and the queue view became unreadable for it. */
+.led-run {
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(var(--amber-rgb), 0.6);
+  animation: led-pulse 1.2s ease-in-out infinite;
+}
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 /* ---------- onboarding ---------- */
 .onboarding {
@@ -403,6 +414,15 @@ body {
   transition: border-color 0.2s;
 }
 .input-row input:focus { border-bottom-color: var(--amber); }
+/* enqueue acknowledgement — the answer to a QUEUE IT press, on this screen */
+.queue-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--amber);
+}
 .run-options { display: flex; gap: 34px; margin-top: 20px; flex-wrap: wrap; }
 .opt-group { display: flex; align-items: center; gap: 6px; }
 .opt-label {
@@ -947,7 +967,19 @@ body {
 .ig-connected { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; }
 .ig-user { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
 .ig-hint { font-size: 13px; color: var(--dim); line-height: 1.7; }
-.rail-foot { margin-top: auto; padding: 14px 22px 68px; border-top: 1px solid var(--line); }
+/* Explicit layout, not accident: this rule once had no layout at all, so
+   the buttons flowed inline and landed one-per-line only because 264px was
+   too narrow for two — adding a fourth button put two on a line. The number
+   of entries must never be load-bearing. */
+.rail-foot {
+  margin-top: auto;
+  padding: 14px 22px 68px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
 
 /* ---------- theme switcher ---------- */
 .theme-switcher {
@@ -1340,3 +1372,70 @@ body {
 .loop-pick img { width: 44px; height: 78px; object-fit: cover; border: 1px solid var(--line); flex: none; }
 .loop-pick-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11px; min-width: 0; }
 .loop-pick-meta .mono { color: var(--amber); font-size: 12px; }
+
+/* ---------- the queue screen ---------- */
+/* Shell follows .loop/.settings (full-page flex column owning its own
+   background), NOT .studio — that grid's 264px first track belongs to a
+   .rail this view does not have. */
+.queue {
+  position: relative;
+  min-height: 100%;
+  padding: 28px 40px 60px;
+  background:
+    radial-gradient(1000px 420px at 90% -10%, rgba(var(--amber-rgb), 0.05), transparent 60%),
+    var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.queue > * { position: relative; z-index: 2; }
+.queue-head { display: flex; align-items: flex-end; gap: 24px; }
+.queue-head-title { flex: 1; }
+.queue-head-title .input-heading { margin-bottom: 10px; }
+.queue-head-actions { display: flex; align-items: center; gap: 12px; padding-bottom: 6px; }
+/* Three sections — NOW / UP NEXT / HISTORY — because a flat list of every
+   job ever run buried the queue: what is running, what is next and how
+   many wait must be answerable without reading. */
+.queue-label {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--faint);
+  padding-bottom: 8px;
+}
+.queue-now {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 320px) 1fr;
+  gap: 14px;
+  align-items: center;
+  max-width: 860px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+}
+.queue-table { display: flex; flex-direction: column; border: 1px solid var(--line); max-width: 860px; }
+/* Each row variant declares columns for exactly its children — .deck-row
+   is a two-column grid and wraps anything more onto extra rows. */
+.queue-row {
+  display: grid;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.queue-row:last-child { border-bottom: 0; }
+.queue-row-next { grid-template-columns: 28px 16px minmax(0, 1fr) auto auto; }
+.queue-row-hist { grid-template-columns: 16px minmax(0, 280px) 1fr auto; opacity: 0.65; }
+.queue-pos { font-size: 11px; color: var(--amber); }
+.queue-time { font-size: 10px; color: var(--faint); white-space: nowrap; }
+/* History is bounded so it can never push the queue off screen. */
+.queue-history { max-height: 320px; overflow-y: auto; }
+.queue-row-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-row-msg { font-size: 12px; color: var(--dim); min-width: 0; overflow-wrap: anywhere; }
+.queue-empty { color: var(--dim); font-size: 13px; }

@@ -121,14 +121,29 @@ mod job_object {
 }
 
 struct ActiveRun {
-    job_id: Option<String>, // learned from the sidecar's 'job' JSONL event
+    job_id: String, // every start path knows its id at spawn (T-08)
     child_pid: u32,
     cancel_requested: bool,
     #[cfg(target_os = "windows")]
     job: Option<job_object::JobHandle>, // None: adoption failed -> taskkill fallback
 }
 
-struct RunState(Mutex<Option<ActiveRun>>);
+/// Everything the queue's Rust side may decide with, under ONE mutex so
+/// idle-check, latch and pause are a single critical section (T-08).
+struct QueueState {
+    active: Option<ActiveRun>,
+    /// Cancel pressed while nothing was (visibly) running - which includes
+    /// the window between a run's take() and the auto-advance spawning the
+    /// next job. Recorded intent: the next auto-advance consumes it and
+    /// holds; every explicit go gesture clears it first. Session-scoped by
+    /// construction, and a running job implies it is clear, because every
+    /// start path consumed or cleared it.
+    cancel_latch: bool,
+    /// "Pause after the current job" - consulted by the auto-advance only.
+    paused: bool,
+}
+
+struct RunState(Mutex<QueueState>);
 
 /// Which kind of sidecar stream_pipeline is driving. Only full job runs
 /// register in RunState - edit renders are never cancellable from here.
@@ -145,10 +160,16 @@ enum PipelineKind {
 #[tauri::command]
 fn cancel_job(state: tauri::State<RunState>) -> Result<(), String> {
     let mut guard = state.0.lock().unwrap();
-    let run = guard.as_mut().ok_or_else(|| "no job is running".to_string())?;
+    let Some(run) = guard.active.as_mut() else {
+        // Nothing to kill - but the press still means "and start nothing".
+        // Without this latch, a Cancel landing in the take()->advance
+        // window would error out here and then watch the next job start.
+        guard.cancel_latch = true;
+        return Ok(());
+    };
     run.cancel_requested = true;
-    if let Some(id) = &run.job_id {
-        let dir = home_dir().join("jobs").join(id);
+    {
+        let dir = home_dir().join("jobs").join(&run.job_id);
         let _ = fs::write(dir.join(CANCEL_FLAG), "1");
         let _ = fs::write(dir.join(CANCELLED_MARKER), "1");
     }
@@ -188,26 +209,16 @@ fn handle_cancelled_exit(
     exit: Option<&std::process::ExitStatus>,
 ) {
     let clean_exit = exit.map(|s| s.success()).unwrap_or(false);
-    if let Some(id) = &run.job_id {
-        let (program, base_args) = pipeline_invocation();
-        let mut args = base_args;
-        args.push("jobs".to_string());
-        args.push("mark-cancelled".to_string());
-        args.push(id.clone());
-        let mut status_after: Option<String> = None;
-        if let Ok(out) = quiet_command(&program).args(&args).output() {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = stdout.lines().rev().find(|l| l.trim_start().starts_with('{')) {
-                if let Ok(v) = serde_json::from_str::<Value>(line) {
-                    status_after = v["status"].as_str().map(String::from);
-                }
-            }
-        }
-        // The cancel raced the job's own completion: nothing was cancelled,
-        // so take back the marker cancel_job optimistically wrote.
-        if clean_exit && status_after.as_deref() == Some("done") {
-            let _ = fs::remove_file(home_dir().join("jobs").join(id).join(CANCELLED_MARKER));
-        }
+    let status_after = one_shot_json(&[
+        "jobs".to_string(),
+        "mark-cancelled".to_string(),
+        run.job_id.clone(),
+    ])
+    .and_then(|v| v["status"].as_str().map(String::from));
+    // The cancel raced the job's own completion: nothing was cancelled,
+    // so take back the marker cancel_job optimistically wrote.
+    if clean_exit && status_after.as_deref() == Some("done") {
+        let _ = fs::remove_file(home_dir().join("jobs").join(&run.job_id).join(CANCELLED_MARKER));
     }
     if !clean_exit {
         let _ = app.emit(
@@ -264,37 +275,6 @@ fn pipeline_invocation() -> (String, Vec<String>) {
 }
 
 #[tauri::command]
-fn run_job(
-    app: AppHandle,
-    source: String,
-    llm: Option<String>,
-    captions: Option<String>,
-    gameplay_amount: Option<f64>,
-) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
-    std::thread::spawn(move || {
-        let mut args = base_args.clone();
-        args.push("--jsonl".to_string());
-        args.push("run".to_string());
-        args.push(source);
-        if let Some(mode) = llm {
-            args.push("--llm".to_string());
-            args.push(mode);
-        }
-        if let Some(preset) = captions {
-            args.push("--captions".to_string());
-            args.push(preset);
-        }
-        if let Some(g) = gameplay_amount {
-            args.push("--gameplay-amount".to_string());
-            args.push(g.to_string());
-        }
-        stream_pipeline(&app, &program, &args, PipelineKind::Job);
-    });
-    Ok(())
-}
-
-#[tauri::command]
 fn resume_job(
     app: AppHandle,
     job_id: String,
@@ -303,65 +283,230 @@ fn resume_job(
     camera: Option<String>,
     gameplay_amount: Option<f64>,
 ) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
-    std::thread::spawn(move || {
-        let mut args = base_args.clone();
-        args.push("--jsonl".to_string());
-        args.push("resume".to_string());
-        args.push(job_id);
-        if let Some(mode) = llm {
-            args.push("--llm".to_string());
-            args.push(mode);
+    let mut args = vec!["--jsonl".to_string(), "resume".to_string(), job_id.clone()];
+    if let Some(mode) = llm {
+        args.push("--llm".to_string());
+        args.push(mode);
+    }
+    if let Some(preset) = captions {
+        args.push("--captions".to_string());
+        args.push(preset);
+    }
+    if let Some(cam) = camera {
+        args.push("--camera".to_string());
+        args.push(cam);
+    }
+    if let Some(g) = gameplay_amount {
+        args.push("--gameplay-amount".to_string());
+        args.push(g.to_string());
+    }
+    {
+        let state = app.state::<RunState>();
+        let mut guard = state.0.lock().unwrap();
+        if guard.active.is_some() {
+            return Err("a job is already running".to_string());
         }
-        if let Some(preset) = captions {
-            args.push("--captions".to_string());
-            args.push(preset);
-        }
-        if let Some(cam) = camera {
-            args.push("--camera".to_string());
-            args.push(cam);
-        }
-        if let Some(g) = gameplay_amount {
-            args.push("--gameplay-amount".to_string());
-            args.push(g.to_string());
-        }
-        stream_pipeline(&app, &program, &args, PipelineKind::Job);
-    });
+        guard.cancel_latch = false; // an explicit go gesture outranks a stale latch
+        start_job_locked(&app, &mut guard, args, job_id)?;
+    }
+    // Outside the lock block: emit_queue_state takes the RunState lock.
+    emit_queue_state(&app);
     Ok(())
 }
 
-fn stream_pipeline(app: &AppHandle, program: &str, args: &[String], kind: PipelineKind) {
-    let mut cmd = quiet_command(program);
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    // Job runs get their own process group on unix so cancel_job can killpg
-    // the whole tree. UNVERIFIED on real macOS until T-19 lands.
+/// Run one CLI verb to completion; every JSON line it printed, in order.
+fn one_shot_json_lines(extra: &[String]) -> Vec<Value> {
+    let (program, base_args) = pipeline_invocation();
+    let mut args = base_args;
+    args.extend_from_slice(extra);
+    match quiet_command(&program).args(&args).output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .collect(),
+        Err(_) => vec![],
+    }
+}
+
+/// Run one CLI verb to completion; its last JSON line.
+fn one_shot_json(extra: &[String]) -> Option<Value> {
+    one_shot_json_lines(extra).pop()
+}
+
+/// The queue view used to poll queue_state on a 2s timer, and every call
+/// spawned a `uv run` subprocess that can take seconds (uv re-syncs the env
+/// per launch), so polls stacked up faster than they answered. The fix is
+/// push, not poll: this caches python's `--jsonl jobs` answer VERBATIM —
+/// no derived state, no decisions, SQLite (through python) stays the only
+/// truth — and it is invalidated by overwrite at exactly the moments the
+/// shell changes the queue or learns it changed: enqueue, advance, job
+/// exit, cancel-pending, startup reconcile. Each landed answer is emitted
+/// as a `queue-state` event. `gen` discards an answer overtaken by a newer
+/// ask, so the cache only ever moves forward.
+struct QueueCache(Mutex<QueueCacheInner>);
+struct QueueCacheInner {
+    gen: u64,
+    jobs: Option<Vec<Value>>,
+}
+
+/// The queue-state payload: the cached jobs listing plus the shell's own
+/// session truth (paused, active job). `ready: false` means the cache is
+/// still cold — the frontend renders "loading", not a false "empty".
+/// Never call while holding the RunState lock: it takes that lock itself.
+fn queue_snapshot(app: &AppHandle) -> Value {
+    let (jobs, ready) = {
+        let cache = app.state::<QueueCache>();
+        let guard = cache.0.lock().unwrap();
+        match &guard.jobs {
+            Some(jobs) => (jobs.clone(), true),
+            None => (Vec::new(), false),
+        }
+    };
+    let (paused, active_job_id) = {
+        let state = app.state::<RunState>();
+        let guard = state.0.lock().unwrap();
+        (guard.paused, guard.active.as_ref().map(|r| r.job_id.clone()))
+    };
+    json!({"jobs": jobs, "paused": paused, "active_job_id": active_job_id, "ready": ready})
+}
+
+fn emit_queue_state(app: &AppHandle) {
+    let _ = app.emit("queue-state", queue_snapshot(app));
+}
+
+/// Re-ask python for the jobs listing off-thread, store the answer, push
+/// it to the frontend. Only ever called at mutation moments — never on a
+/// timer — so there is no process pileup to have.
+fn refresh_queue_cache(app: &AppHandle) {
+    let my_gen = {
+        let cache = app.state::<QueueCache>();
+        let mut guard = cache.0.lock().unwrap();
+        guard.gen += 1;
+        guard.gen
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let jobs = one_shot_json_lines(&["--jsonl".to_string(), "jobs".to_string()]);
+        {
+            let cache = app.state::<QueueCache>();
+            let mut guard = cache.0.lock().unwrap();
+            if guard.gen != my_gen {
+                return; // overtaken by a newer ask; its answer wins
+            }
+            guard.jobs = Some(jobs);
+        }
+        emit_queue_state(&app);
+    });
+}
+
+/// Spawn a job run and register it as the active run. The caller holds the
+/// QueueState lock and this function registers before returning: idle-check,
+/// spawn and registration must be one atomic step, or two advance callers
+/// (an exit hook and an enqueue) could both pass the idle check and
+/// double-spawn - which would also leave one of them outside RunState,
+/// unreachable by cancel.
+fn start_job_locked(
+    app: &AppHandle,
+    qs: &mut QueueState,
+    args: Vec<String>,
+    job_id: String,
+) -> Result<(), String> {
+    let (program, base_args) = pipeline_invocation();
+    let mut full = base_args;
+    full.extend(args);
+    let mut cmd = quiet_command(&program);
+    cmd.args(&full).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Its own process group on unix is what lets cancel_job killpg the
+    // whole tree. UNVERIFIED on real macOS until T-19 lands.
     #[cfg(unix)]
-    if kind == PipelineKind::Job {
+    {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let child = cmd.spawn();
-    let mut child = match child {
-        Ok(c) => c,
-        Err(err) => {
-            let _ = app.emit(
-                "pipeline-event",
-                json!({"event": "result", "ok": false, "error": format!("could not start pipeline: {err}")}),
-            );
+    let child = cmd
+        .spawn()
+        .map_err(|err| format!("could not start pipeline: {err}"))?;
+    #[cfg(target_os = "windows")]
+    let job = job_object::JobHandle::adopt(&child);
+    qs.active = Some(ActiveRun {
+        job_id,
+        child_pid: child.id(),
+        cancel_requested: false,
+        #[cfg(target_os = "windows")]
+        job,
+    });
+    let app = app.clone();
+    std::thread::spawn(move || stream_child(&app, child, PipelineKind::Job));
+    Ok(())
+}
+
+/// Spawn a non-job sidecar stream (edit render). Never registers in
+/// RunState, so cancel cannot reach it - deliberately.
+fn spawn_tool(app: &AppHandle, args: Vec<String>) {
+    let (program, base_args) = pipeline_invocation();
+    let mut full = base_args;
+    full.extend(args);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let spawned = quiet_command(&program)
+            .args(&full)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        match spawned {
+            Ok(child) => stream_child(&app, child, PipelineKind::Tool),
+            Err(err) => {
+                let _ = app.emit(
+                    "pipeline-event",
+                    json!({"event": "result", "ok": false, "error": format!("could not start pipeline: {err}")}),
+                );
+            }
+        }
+    });
+}
+
+/// The queue's only Rust-side logic: when idle, ask python what is next and
+/// spawn it. Policy - order, eligibility, what failure means for the rest -
+/// lives entirely in next_pending() on the python side. The one judgment
+/// here is which gestures reach this function at all: completion and crash
+/// auto-advance; cancel and app launch do not (gesture semantics, the same
+/// class as the cancelled-vs-exited routing above).
+///
+/// The QueueState lock deliberately spans the `jobs next` one-shot:
+/// ask-first-lock-after would let two concurrent advances receive the same
+/// job id and double-spawn it. The cost is that cancel_job can block for
+/// about a second - only ever while nothing is running, when there is
+/// nothing to cancel. Do not "optimise" this into the broken ordering.
+fn try_advance(app: &AppHandle, explicit: bool) {
+    let state = app.state::<RunState>();
+    let mut guard = state.0.lock().unwrap();
+    if guard.active.is_some() {
+        return;
+    }
+    if explicit {
+        guard.cancel_latch = false; // a deliberate go outranks a stale latch
+    } else {
+        if guard.paused {
             return;
         }
-    };
-    if kind == PipelineKind::Job {
-        #[cfg(target_os = "windows")]
-        let job = job_object::JobHandle::adopt(&child);
-        *app.state::<RunState>().0.lock().unwrap() = Some(ActiveRun {
-            job_id: None,
-            child_pid: child.id(),
-            cancel_requested: false,
-            #[cfg(target_os = "windows")]
-            job,
-        });
+        if guard.cancel_latch {
+            // A Cancel press landed in the take()->advance window. Consume
+            // it and hold: "the user pressed Cancel and a job started" is
+            // the one behaviour this design promises never to produce.
+            guard.cancel_latch = false;
+            return;
+        }
     }
+    let next = one_shot_json(&["jobs".to_string(), "next".to_string()])
+        .and_then(|v| v["job_id"].as_str().map(String::from));
+    let Some(id) = next else { return };
+    let args = vec!["--jsonl".to_string(), "resume".to_string(), id.clone()];
+    // A spawn failure leaves the job pending; the next explicit gesture
+    // retries it rather than anything looping here.
+    let _ = start_job_locked(app, &mut guard, args, id);
+}
+
+fn stream_child(app: &AppHandle, mut child: std::process::Child, kind: PipelineKind) {
     // Keep the tail of stderr around so a non-zero exit can report *why* —
     // the sidecar's traceback lands here, not in the JSONL stream on stdout.
     let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
@@ -382,15 +527,6 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String], kind: Pipeli
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                // run_job can't know its job id at spawn; the sidecar's own
-                // 'job' event is where it is learned.
-                if kind == PipelineKind::Job && value["event"] == "job" {
-                    if let Some(id) = value["job_id"].as_str() {
-                        if let Some(run) = app.state::<RunState>().0.lock().unwrap().as_mut() {
-                            run.job_id = Some(id.to_string());
-                        }
-                    }
-                }
                 let _ = app.emit("pipeline-event", value);
             }
         }
@@ -400,15 +536,17 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String], kind: Pipeli
         let _ = t.join();
     }
     if kind == PipelineKind::Job {
-        let finished = app.state::<RunState>().0.lock().unwrap().take();
+        let finished = app.state::<RunState>().0.lock().unwrap().active.take();
         if let Some(run) = finished {
             if run.cancel_requested {
                 handle_cancelled_exit(app, &run, status.as_ref().ok());
-                return; // deliberate stop - never the 'exited' crash path
+                // mark-cancelled has run by now; the listing knows.
+                refresh_queue_cache(app);
+                return; // deliberate stop: no crash event, and no auto-advance
             }
         }
     }
-    if let Ok(status) = status {
+    if let Ok(status) = &status {
         if !status.success() {
             let detail = stderr_tail.lock().unwrap().trim().to_string();
             let _ = app.emit(
@@ -417,6 +555,92 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String], kind: Pipeli
             );
         }
     }
+    if kind == PipelineKind::Job {
+        // Completion or crash: the queue continues (one failure does not
+        // stop the rest). A cancel returned above, so the queue holds.
+        try_advance(app, false);
+        // Emit now (active flipped), then re-ask so the terminal status
+        // python just wrote lands in the cache.
+        emit_queue_state(app);
+        refresh_queue_cache(app);
+    }
+}
+
+/// Enqueue: `jobs create` (the row exists before any run does), then let
+/// the advance decide - enqueue-while-idle starts immediately, keeping the
+/// current one-job feel; enqueue-while-busy just queues.
+#[tauri::command]
+async fn enqueue_job(
+    app: AppHandle,
+    source: String,
+    llm: Option<String>,
+    captions: Option<String>,
+    gameplay_amount: Option<f64>,
+) -> Result<String, String> {
+    let mut args = vec!["jobs".to_string(), "create".to_string(), source];
+    if let Some(mode) = llm {
+        args.push("--llm".to_string());
+        args.push(mode);
+    }
+    if let Some(preset) = captions {
+        args.push("--captions".to_string());
+        args.push(preset);
+    }
+    if let Some(g) = gameplay_amount {
+        args.push("--gameplay-amount".to_string());
+        args.push(g.to_string());
+    }
+    let created = one_shot_json(&args).ok_or_else(|| "enqueue produced no answer".to_string())?;
+    let job_id = created["job_id"]
+        .as_str()
+        .ok_or_else(|| "enqueue returned no job id".to_string())?
+        .to_string();
+    try_advance(&app, true);
+    // Emit first (the active flip is knowable now), then refresh so the
+    // new row itself reaches the cache.
+    emit_queue_state(&app);
+    refresh_queue_cache(&app);
+    Ok(job_id)
+}
+
+/// The explicit re-arm: after a cancel held the queue, or a fresh launch.
+#[tauri::command]
+async fn start_queue(app: AppHandle) -> Result<(), String> {
+    try_advance(&app, true);
+    emit_queue_state(&app);
+    refresh_queue_cache(&app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_queue_paused(app: AppHandle, paused: bool) -> Result<(), String> {
+    {
+        let state = app.state::<RunState>();
+        state.0.lock().unwrap().paused = paused;
+    }
+    // Pause is shell session truth, not SQLite: no re-ask, just push.
+    emit_queue_state(&app);
+    Ok(())
+}
+
+/// Answered from the cache: opening the queue view must be instant and
+/// must not spawn a process. A cold cache kicks one refresh, whose answer
+/// arrives as a queue-state event.
+#[tauri::command]
+async fn queue_state(app: AppHandle) -> Result<Value, String> {
+    let snapshot = queue_snapshot(&app);
+    if snapshot["ready"] == Value::Bool(false) {
+        refresh_queue_cache(&app);
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+async fn cancel_pending_job(app: AppHandle, job_id: String) -> Result<Value, String> {
+    let out = one_shot_json(&["jobs".to_string(), "cancel-pending".to_string(), job_id])
+        .ok_or_else(|| "cancel-pending produced no answer".to_string())?;
+    refresh_queue_cache(&app);
+    Ok(out)
 }
 
 /// Everything the review UI needs for one job, read straight off the job
@@ -579,16 +803,16 @@ async fn settings_tool(args: Vec<String>) -> Result<Value, String> {
 
 #[tauri::command]
 fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
-    std::thread::spawn(move || {
-        let mut args = base_args.clone();
-        args.push("--jsonl".to_string());
-        args.push("edit".to_string());
-        args.push("render-clip".to_string());
-        args.push(job_id);
-        args.push(clip.to_string());
-        stream_pipeline(&app, &program, &args, PipelineKind::Tool);
-    });
+    spawn_tool(
+        &app,
+        vec![
+            "--jsonl".to_string(),
+            "edit".to_string(),
+            "render-clip".to_string(),
+            job_id,
+            clip.to_string(),
+        ],
+    );
     Ok(())
 }
 
@@ -716,14 +940,23 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
 
 fn main() {
     tauri::Builder::default()
-        .manage(RunState(Mutex::new(None)))
+        .manage(RunState(Mutex::new(QueueState {
+            active: None,
+            cancel_latch: false,
+            paused: false,
+        })))
+        .manage(QueueCache(Mutex::new(QueueCacheInner { gen: 0, jobs: None })))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            run_job,
             resume_job,
             cancel_job,
+            enqueue_job,
+            start_queue,
+            set_queue_paused,
+            queue_state,
+            cancel_pending_job,
             job_results,
             list_job_dirs,
             save_gemini_key,
@@ -742,6 +975,17 @@ fn main() {
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");
+            // App-start reconciliation: ghost 'running' rows become truthful
+            // before the queue can be looked at. The queue itself never
+            // auto-starts at launch - a user reopening the app to look at a
+            // finished clip must not find the GPU busy.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let _ = one_shot_json(&["jobs".to_string(), "reconcile".to_string()]);
+                // Warm the queue cache only after reconcile made the rows
+                // truthful - the view opens against this.
+                refresh_queue_cache(&handle);
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

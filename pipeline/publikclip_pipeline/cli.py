@@ -65,21 +65,29 @@ def _emit_result(jsonl: bool, payload: dict) -> None:
         print(json.dumps(payload, indent=2))
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    source = args.source
-    source_type = "url" if source.startswith(("http://", "https://")) else "file"
-    # New jobs start from the user's saved global settings; CLI flags below
-    # override just those fields. Existing jobs keep their own snapshot.
-    settings = config.load_defaults()
+def _source_type(source: str) -> str:
+    return "url" if source.startswith(("http://", "https://")) else "file"
+
+
+def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) -> "config.Settings":
+    """One place for CLI flag -> settings overrides, shared by run, resume
+    and `jobs create`, so enqueueing a job cannot drift from running one."""
     if args.llm:
         settings.llm_mode = args.llm
     if args.captions:
         settings.caption_preset = args.captions
-    if args.camera:
+    if getattr(args, "camera", None):
         settings.camera.speaker_change = args.camera
     if args.gameplay_amount is not None:  # 0.0 is a legitimate value, not falsy-skippable
         settings.camera.gameplay_amount = args.gameplay_amount
-    job = queue.create_job(source_type, source, json.dumps(settings.to_json()))
+    return settings
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    # New jobs start from the user's saved global settings; CLI flags
+    # override just those fields. Existing jobs keep their own snapshot.
+    settings = _apply_setting_flags(config.load_defaults(), args)
+    job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
     return _execute(job, args.jsonl)
 
 
@@ -89,15 +97,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
     if args.llm or args.captions or args.camera or args.gameplay_amount is not None:
-        settings = config.Settings.from_json(json.loads(job.settings_json))
-        if args.llm:
-            settings.llm_mode = args.llm
-        if args.captions:
-            settings.caption_preset = args.captions
-        if args.camera:
-            settings.camera.speaker_change = args.camera
-        if args.gameplay_amount is not None:
-            settings.camera.gameplay_amount = args.gameplay_amount
+        settings = _apply_setting_flags(
+            config.Settings.from_json(json.loads(job.settings_json)), args
+        )
         # Updates the DB row AND the job-dir snapshot; the clip editor reads
         # the latter, so writing only one leaves the job disagreeing with
         # itself about its own settings.
@@ -144,8 +146,49 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
-    if getattr(args, "jobs_cmd", None) == "mark-cancelled":
+    sub = getattr(args, "jobs_cmd", None)
+    if sub == "create":
+        # Enqueue: the first half of cmd_run and nothing else. The row (and
+        # its settings snapshot) exists before any run does - that is what
+        # makes a job that has not started representable at all (T-08).
+        settings = _apply_setting_flags(config.load_defaults(), args)
+        job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
+        print(json.dumps({"job_id": job.id, "status": job.status}))
+        return 0
+    if sub == "next":
+        job = queue.next_pending()
+        print(json.dumps({"job_id": job.id if job else None}))
+        return 0
+    if sub == "reconcile":
+        print(json.dumps({"reconciled": queue.reconcile_stale_running()}))
+        return 0
+    if sub == "cancel-pending":
+        print(json.dumps(queue.cancel_pending(args.job_id)))
+        return 0
+    if sub == "mark-cancelled":
         print(json.dumps(queue.mark_cancelled(args.job_id)))
+        return 0
+    if args.jsonl:
+        # The Queue view's data source: SQLite is the queue's bookkeeping,
+        # and this is the one view that shows bookkeeping. The library rail
+        # stays filesystem-truth (list_job_dirs) - two views, two truths,
+        # deliberately.
+        for job in queue.list_jobs():
+            stages = queue.stage_statuses(job.id)
+            done = sum(1 for s in stages.values() if s == "done")
+            print(
+                json.dumps(
+                    {
+                        "id": job.id,
+                        "status": job.status,
+                        "error": job.error,
+                        "title": job.title,
+                        "source": job.source,
+                        "created_at": job.created_at,
+                        "stages_done": done,
+                    }
+                )
+            )
         return 0
     for job in queue.list_jobs():
         stages = queue.stage_statuses(job.id)
@@ -517,13 +560,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_resume.set_defaults(fn=cmd_resume)
 
-    p_jobs = sub.add_parser("jobs", help="list jobs")
+    p_jobs = sub.add_parser("jobs", help="list jobs (with --jsonl: one JSON object per job)")
     jobs_sub = p_jobs.add_subparsers(dest="jobs_cmd", required=False)
     p_mark = jobs_sub.add_parser(
         "mark-cancelled",
         help="bookkeeping after the shell hard-kills a job: status, marker, cleanup",
     )
     p_mark.add_argument("job_id")
+    p_create = jobs_sub.add_parser("create", help="enqueue a job without running it (T-08)")
+    p_create.add_argument("source")
+    p_create.add_argument("--llm", choices=["gemini", "ollama"], default=None)
+    p_create.add_argument("--captions", default=None, help="caption preset name")
+    p_create.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
+    p_create.add_argument(
+        "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
+        help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
+    )
+    jobs_sub.add_parser("next", help="print the next pending job id, or null")
+    jobs_sub.add_parser("reconcile", help="app-start bookkeeping for ghost 'running' rows")
+    p_cp = jobs_sub.add_parser("cancel-pending", help="cancel a job that has not started")
+    p_cp.add_argument("job_id")
     p_jobs.set_defaults(fn=cmd_jobs)
 
     p_set = sub.add_parser("settings", help="read/write global settings + caption presets")

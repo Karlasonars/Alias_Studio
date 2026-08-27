@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { JobResults, JobSummary, LogLine, PipelineEvent, SetupState } from './types'
+import type { JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
 import Loop from './components/Loop'
+import QueueView from './components/QueueView'
 import Settings from './components/Settings'
 import ThemeSwitcher from './components/ThemeSwitcher'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings' | 'queue'
 
 const LOG_LIMIT = 2000
 
@@ -51,10 +52,18 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null)
   const [cancelled, setCancelled] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
+  // Enqueue-while-running feedback: six silent QUEUE IT presses once
+  // enqueued six invisible jobs. `enqueueing` acknowledges the press the
+  // moment it happens; `queuedCount` is the real pending count, pushed
+  // from Rust's queue-state event whenever the queue changes.
+  const [enqueueing, setEnqueueing] = useState(0)
+  const [queuedCount, setQueuedCount] = useState(0)
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
+  const runningRef = useRef(false)
   const logIdRef = useRef(0)
   activeJobRef.current = activeJob
+  runningRef.current = running
 
   const appendLog = useCallback((payload: PipelineEvent) => {
     const text = formatLogLine(payload)
@@ -73,6 +82,33 @@ export default function App() {
 
   const refreshJobs = useCallback(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
+  }, [])
+
+  // Seed once from the instant cached snapshot, then ride the push: Rust
+  // emits queue-state at every mutation, so no view ever polls for it.
+  useEffect(() => {
+    // The listing can lag a spawn: SQLite flips a job to 'running' only
+    // when run_stages starts, seconds after the shell spawned it - so a
+    // snapshot taken around the spawn still shows that job as 'pending'.
+    // The shell knows the id it just started (active_job_id rides every
+    // push); a count that excludes it is honest - the same derivation the
+    // queue view uses for its UP NEXT list. Not a "minus one": if the
+    // snapshot already saw the flip, nothing is excluded.
+    const count = (s: QueueStateResult) =>
+      setQueuedCount(
+        s.jobs.filter((j) => j.status === 'pending' && j.id !== s.active_job_id).length
+      )
+    api.queueState().then(count).catch(() => {})
+    let disposed = false
+    let un: (() => void) | null = null
+    listen<QueueStateResult>('queue-state', ({ payload }) => count(payload)).then((u) => {
+      if (disposed) u()
+      else un = u
+    })
+    return () => {
+      disposed = true
+      un?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -101,11 +137,25 @@ export default function App() {
   useEffect(() => {
     let disposed = false
     listen<PipelineEvent>('pipeline-event', ({ payload }) => {
-      appendLog(payload)
       if (payload.event === 'job' && payload.job_id) {
+        // Starting a job is ONE transition with one meaning, however it
+        // was triggered - enqueue-while-idle, queue advance, START QUEUE,
+        // or rail resume - so the per-job screen reset lives HERE, where
+        // the transition is observed, not at each trigger. When only the
+        // explicit triggers reset, an auto-advanced job inherited the
+        // previous job's stage bars and log, ran with running=false (no
+        // Cancel button - T-07 unreachable for queued jobs), and a
+        // busy-enqueue would have wrongly taken the idle path.
         setActiveJob(payload.job_id)
         setResults(null)
-      } else if (payload.event === 'progress' && payload.stage) {
+        setStages({})
+        setLog([])
+        setRunError(null)
+        setCancelled(false)
+        setRunning(true)
+      }
+      appendLog(payload)
+      if (payload.event === 'progress' && payload.stage) {
         setStages((prev) => ({
           ...prev,
           [payload.stage!]: {
@@ -150,16 +200,37 @@ export default function App() {
 
   const startRun = useCallback(
     async (source: string, llm: string, captions: string, gameplayAmount: number) => {
-      setRunning(true)
-      setLog([])
-      setRunError(null)
-      setCancelled(false)
-      setStages({})
-      setResults(null)
-      setActiveJob(null)
-      await api.runJob(source, llm, captions, gameplayAmount)
+      // While a job is running this only enqueues - the running job's log
+      // and stage bars must not be cleared out from under it.
+      const wasIdle = !runningRef.current
+      if (wasIdle) {
+        setRunning(true)
+        setLog([])
+        setRunError(null)
+        setCancelled(false)
+        setStages({})
+        setResults(null)
+        setActiveJob(null)
+      }
+      setEnqueueing((n) => n + 1)
+      try {
+        await api.enqueueJob(source, llm, captions, gameplayAmount)
+        if (!wasIdle) {
+          // A busy-enqueue used to change nothing on screen - the rail
+          // refreshes only on run events, so six presses queued six
+          // invisible jobs. The count Studio shows arrives by push.
+          refreshJobs()
+        }
+      } catch (err) {
+        // A swallowed enqueue error is the same silence: surface it the
+        // way run errors are surfaced.
+        if (wasIdle) setRunning(false)
+        setRunError(`Could not add to the queue: ${String(err)}`)
+      } finally {
+        setEnqueueing((n) => n - 1)
+      }
     },
-    []
+    [refreshJobs]
   )
 
   const openJob = useCallback(async (jobId: string) => {
@@ -187,6 +258,8 @@ export default function App() {
     content = <Loop onBack={() => setView('studio')} />
   } else if (view === 'settings') {
     content = <Settings onBack={() => setView('studio')} />
+  } else if (view === 'queue') {
+    content = <QueueView onBack={() => setView('studio')} />
   } else if (view === 'review' && results) {
     content = (
       <Review
@@ -216,12 +289,15 @@ export default function App() {
         error={runError}
         cancelled={cancelled}
         log={log}
+        enqueueing={enqueueing > 0}
+        queued={queuedCount}
         onCancel={() => {
           api.cancelJob().catch(() => {})
         }}
         onRun={startRun}
         onOpenLoop={() => setView('loop')}
         onOpenSettings={() => setView('settings')}
+        onOpenQueue={() => setView('queue')}
         onOpenJob={openJob}
         onResume={(id, llm) => {
           setRunning(true)
