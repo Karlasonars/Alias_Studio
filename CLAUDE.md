@@ -59,20 +59,37 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   tests/                   15 files. No exact count here on purpose —
                            see §3
 
-app/src/                          React frontend — ~5,300 lines
-  App.tsx           (229)  view router: boot|onboarding|studio|review|loop|settings
-  api.ts             (81)  EVERY invoke() belongs here — see §5.4
-  types.ts          (338)  the Rust↔TS contract. Nothing enforces it at runtime
-  styles.css       (1342)  all styling, including themes
+app/src/                          React frontend
+  App.tsx           (321)  view router + the pipeline-event listener. The 'job'
+                           event is where a job START is observed — every path
+                           into a running job goes through it (§5.12)
+  api.ts             (88)  EVERY invoke() belongs here — see §5.4
+  types.ts          (405)  the Rust↔TS contract. Nothing enforces it at runtime
+  styles.css       (1441)  all styling, including themes
+  components/QueueView.tsx (191)  the queue. Reads SQLite via `--jsonl jobs`;
+                           the library rail reads the filesystem. Two views,
+                           two truths, deliberately
   components/ClipEditor/   nine files, 1151 lines — one 1175-line component until
                            T-03. Largest is now Controls.tsx (293). Split by state
                            ownership, not by visual region; §6 says why
-app/src-tauri/src/main.rs  (544)  the whole Rust layer. 17 commands. No product logic
+app/src-tauri/src/main.rs  (993)  the whole Rust layer. Was 544 before T-07 and
+                           T-08; it now holds RunState, the Job Object kill, the
+                           queue runner and the queue cache. See §6 — it is a
+                           danger zone now, not a thin shell
 ```
 
 **Three processes, one direction of control:** React → Rust (Tauri) → Python sidecar.
 The Rust layer holds no product logic; the frontend holds no product logic. Anything
 worth unit-testing belongs in Python.
+
+**That rule is doing more work than it looks like, and T-08 is where the line was
+drawn explicitly.** Rust owns *triggers* — it asks Python "what is next" and spawns
+the answer. Python owns every *decision*: what is eligible, in what order, what a
+failure means for the rest. The one judgement that legitimately sits in the shell is
+gesture semantics — what the user's action meant (a completion advances the queue, a
+cancel holds it; a cancelled exit is not a crash). If you find yourself teaching Rust
+which job to run or reading SQLite from it, the line has moved and a human should
+look.
 
 **Artifacts on disk are the source of truth.** SQLite records only what *should*
 exist. If the database and the disk disagree, the disk wins.
@@ -85,7 +102,8 @@ exist. If the database and the disk disagree, the disk wins.
 # Python pipeline
 cd pipeline
 uv sync
-uv run pytest -q                    # ~50 s. Needs ffmpeg on PATH:
+uv run pytest -q                    # ~292 tests (264 functions + parametrized),
+                                    # 18 files, ~50 s. Needs ffmpeg on PATH:
                                     # test_render_smoke encodes a synthetic clip.
                                     # No exact test count is written down anywhere
                                     # in these docs: it changed with every task and
@@ -200,13 +218,14 @@ file that will tell you whether you were right.
 
 ## 5. Invariants
 
-**Six of these ten are enforced by a test. Four are not, and you need to know which.**
+**Seven of these twelve are enforced by a test. Five are not, and you need to know which.**
 
 | Invariant | Where the guard lives |
 |---|---|
 | 5.1, 5.3, 5.4, 5.5, 5.6 | `test_house_rules.py` |
 | 5.2 | `test_settings.py` — which `-k house_rules` **deselects**, and which T-22 shows is weaker than it reads |
-| **5.7, 5.8, 5.9, 5.10** | **Nowhere. On these you are on your own.** |
+| 5.11 | `test_secret_leaks.py` |
+| **5.7, 5.8, 5.9, 5.10, 5.12** | **Nowhere. On these you are on your own.** |
 
 **A guard can be narrower than the rule above it.** The live example is §5.3's: it
 covers `read_text`/`write_text` and cannot see `open()`. A green suite means "nothing
@@ -371,6 +390,49 @@ adjacent and became T-24.
 Every rendered clip is checked for streams and sane duration before it is reported as
 done.
 
+### 5.11 A secret is never in a URL
+
+API keys go in headers. Never in a query parameter, never in a path.
+
+This is not style. `httpx` puts the full request URL into the text of every
+`HTTPStatusError`, the scoring stage folds that text into its error message, and the
+app renders that message in the live console. Nobody wrote a line that logs a key —
+the leak came from composing two entirely reasonable things, and the owner's Gemini
+key ended up on screen and in his screenshots. It had to be rotated.
+
+`test_secret_leaks.py` guards it by building the same `httpx.Request` the code would
+issue, so a key passed as a parameter genuinely lands in the URL. It asserts the key
+is absent from the raised error text and present in the header.
+
+The guard covers the Gemini paths. **Instagram is not fixed**: `access_token` and
+`client_secret` still ride as query parameters at six call sites in
+`insights/instagram.py`. No `IgError` quotes a URL today, so nothing leaks yet —
+which is exactly the state `visuals.py` was in before someone would have added error
+output to it. T-32.
+
+Redaction is a belt, not the fix. If a secret can be in a URL, some layer will
+eventually print that URL.
+
+### 5.12 A job start is one transition, wherever it came from
+
+A job can start four ways: the user enqueues while idle, the queue advances on its
+own, START QUEUE, or a rail resume. All four must leave the screen in the same
+state — this job's stage bars, this job's log, no stale error, no stale cancelled
+notice, and the cancel affordance available.
+
+They did not. The reset lived in the click handler for one of the four paths, so an
+auto-advanced job inherited the previous job's screen: six stages already green while
+the second was still transcribing, and — because `running` never returned to true —
+**no Cancel button at all.** T-07's kill was unreachable for exactly the jobs the
+queue exists to run, and the suite was green throughout.
+
+Put the reset where the transition is *observed* (`App.tsx`'s `'job'` event), not
+where each trigger lives. The same reasoning applies to anything else that must be
+true whenever a job starts.
+
+Note the asymmetry: enqueueing is **not** a start. A busy enqueue must never clear
+the running job's screen. Both halves have been broken once each.
+
 ---
 
 ## 6. Danger zones
@@ -411,6 +473,16 @@ still no frontend test infrastructure to catch it: `tsc --noEmit` is the whole n
 
 **`pipeline/publikclip_pipeline/insights/calibration.py` (908 lines).** Largest file in
 the pipeline, and about to carry two more platforms. Same advice.
+
+**`app/src-tauri/src/main.rs` — 993 lines, and no longer a thin shell.** It was 544
+before T-07 and T-08. It now holds `RunState` (the active run and the Windows Job
+Object handle that kills the process tree), the queue runner, the queue cache and the
+cancel latch. Two things follow. First, it is a split candidate on the same grounds
+`ClipEditor.tsx` was. Second and more urgent: **the kill path has no automated test
+of any kind.** `cargo check` proves it compiles. Nothing proves it kills anything.
+Any change to the spawn path can silently un-break the process tree kill, and the
+only thing that would notice is a person watching Task Manager. Read §7's hand-test
+clause before touching `stream_pipeline` or `start_job_locked`.
 
 **`pyproject.toml` CUDA index config.** `uv run` re-syncs from this file on every
 launch, so a side-loaded CUDA torch build is silently replaced by the CPU one. The
@@ -459,6 +531,41 @@ A task is done when **all** of these hold:
 - [ ] Comments explain **why**, not what — document the failure the code prevents.
       Match the surrounding file's comment density and idiom.
 - [ ] No new file over ~400 lines without saying why in the PR.
+- [ ] **If you touched `app/` or the Rust shell: the hand test, and it is not a
+      formality.** See below.
+
+### The frontend has no tests. None.
+
+There is no vitest, no jest, no `.test.tsx`, and `app/package.json` has no `test`
+script. `npx tsc --noEmit` is the entire automated net for ~5,300 lines of React, and
+`cargo check` is the entire net for 993 lines of Rust. Both prove the code compiles.
+Neither proves it does anything.
+
+This is not an abstract risk. T-08 shipped to review with **289 green tests and green
+CI**, and one afternoon of a person clicking found seven defects, every one invisible
+to the suite:
+
+1. enqueueing while busy changed nothing on screen — six duplicate jobs queued
+2. the queue view rendered inside a 264 px column
+3. it polled a `uv run` subprocess every 2 s, stacking processes faster than they
+   could answer
+4. the rail footer had no layout rule at all; a fourth button broke it
+5. the queue view was a flat history list — a waiting job was indistinguishable
+   from one cancelled days ago, so the owner could not run the checklist
+6. an auto-advanced job inherited the previous job's stage bars
+7. and, worst, `running` never returned to true, so **every job after the first had
+   no Cancel button** — T-07's process-tree kill unreachable for exactly the jobs
+   the queue exists to run
+
+So: a UI or shell task carries a hand-test checklist in its PR, written for someone
+who has not read the thread — what to click, and what must appear. Say plainly which
+steps you ran and which you could not. **Do not describe a step you did not run.**
+Several of these need a completed job's artifacts, which §3 forbids you from
+producing; those belong to whoever has a machine with models, and the PR should say
+so rather than quietly omitting them.
+
+Building the missing test infrastructure is T-36, and it is worth more than the next
+three features.
 
 ---
 

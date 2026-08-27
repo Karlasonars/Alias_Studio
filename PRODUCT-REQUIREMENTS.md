@@ -915,7 +915,7 @@ Nosaukta darbu grupa ar piesaistītu profilu un eksporta mērķi.
 
 **E2-F07 · Darba atcelšana** · `P0` · visi
 
-> **Jauna prasība v1.2** (nepilnība E2). `main.rs` reģistrē 17 Tauri komandas; nevienas atcelšanas. Sākts darbs iet līdz galam vai avarē. Apstrādes ekrāns [26.2](#262-apstrādes-skats) rāda pogu "Atcelt", kurai šobrīd nav aizmugures.
+> **Jauna prasība v1.2** (nepilnība E2). `main.rs` reģistrē 17 Tauri komandas; nevienas atcelšanas. Sākts darbs iet līdz galam vai avarē. Apstrādes ekrānā [26.2](#262-apstrādes-skats) **atcelšanas pogas nav vispār** — to vajag uzbūvēt, ne pieslēgt. *(Labojums 2026-08-27: agrāk šeit rakstīja, ka poga eksistē bez aizmugures. `app/src/` nebija ne `cancel`, ne `stop`, ne `abort`. Audita apgalvojums bija nepārbaudīts, un `AGENT-WORKPLAN.md` to mantoja no šejienes — sk. T-07.)*
 
 *Pieņemšanas kritēriji:*
 - Jauna Tauri komanda `cancel_job`, kas nogalina sānvada procesu tīri.
