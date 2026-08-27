@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
+import type { HardwareProfile, JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
@@ -58,6 +58,7 @@ export default function App() {
   // from Rust's queue-state event whenever the queue changes.
   const [enqueueing, setEnqueueing] = useState(0)
   const [queuedCount, setQueuedCount] = useState(0)
+  const [hardware, setHardware] = useState<HardwareProfile | null>(null)
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
   const runningRef = useRef(false)
@@ -82,6 +83,12 @@ export default function App() {
 
   const refreshJobs = useCallback(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
+  }, [])
+
+  // A plain file read (never a probe): python rewrites the profile at the
+  // end of every successful job, so re-read it whenever a run ends.
+  const refreshHardware = useCallback(() => {
+    api.hardwareProfile().then(setHardware).catch(() => {})
   }, [])
 
   // Seed once from the instant cached snapshot, then ride the push: Rust
@@ -117,7 +124,8 @@ export default function App() {
       setView(s.onboarded ? 'studio' : 'onboarding')
     })
     refreshJobs()
-  }, [refreshJobs])
+    refreshHardware()
+  }, [refreshJobs, refreshHardware])
 
   // Instagram loop: opportunistic sync on launch + hourly while open
   // (decision #12 — no background process, the app's own uptime is the
@@ -166,6 +174,7 @@ export default function App() {
       } else if (payload.event === 'result') {
         setRunning(false)
         refreshJobs()
+        refreshHardware()
         if (payload.ok && activeJobRef.current) {
           api.jobResults(activeJobRef.current).then((r) => {
             setResults(r)
@@ -196,7 +205,7 @@ export default function App() {
       disposed = true
       unlistenRef.current?.()
     }
-  }, [refreshJobs, appendLog])
+  }, [refreshJobs, appendLog, refreshHardware])
 
   const startRun = useCallback(
     async (source: string, llm: string, captions: string, gameplayAmount: number) => {
@@ -291,6 +300,7 @@ export default function App() {
         log={log}
         enqueueing={enqueueing > 0}
         queued={queuedCount}
+        hardware={hardware}
         onCancel={() => {
           api.cancelJob().catch(() => {})
         }}

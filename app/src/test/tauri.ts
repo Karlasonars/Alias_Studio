@@ -51,6 +51,7 @@ export function idleAppCommands(): void {
   commands.get_setup_state = () => ({ has_gemini_key: true, onboarded: true })
   commands.list_job_dirs = () => []
   commands.ig_status = () => ({ connected: false })
+  commands.get_hardware_profile = () => null
   commands.queue_state = () => ({
     jobs: [],
     paused: false,

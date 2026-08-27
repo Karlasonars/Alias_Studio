@@ -548,9 +548,12 @@ because at that point nothing automated tested the frontend at all. **T-36** clo
 that: the same defect is now pinned by a component test.
 
 Deferred, each with a reason: drag-reorder needs a `position` column and therefore
-the first schema migration on live DBs (**T-33**); a total-time estimate is *blocked*
-on T-20, which is where measured stage weights get recorded, not orphaned;
-keep-awake (**T-34**).
+the first schema migration on live DBs (**T-33**); a total-time estimate was recorded
+here as *blocked on T-20, "which is where measured stage weights get recorded"* —
+**that premise was wrong and T-10 corrected it**: stage_runs had carried
+started_at/finished_at for every stage of every job all along, and T-10 now folds
+them into `hardware_profile.json` as per-stage medians per hardware key. T-20 is a
+UI task and the queue's total-time estimate is unblocked; keep-awake (**T-34**).
 
 ### T-31 · Security — the Gemini key leaked into the UI    [DONE 2026-08-27]
 
@@ -693,18 +696,25 @@ progress, and a status that refreshes when the user installs it in another windo
 
 This is the only free way into the product. Treat it accordingly.
 
-### T-10 · E1-F03 + E13-F01 — Hardware profile                  [P0]
+### T-10 · E1-F03 + E13-F01 — Hardware profile                  [DONE 2026-08-27]
 
 ```
-Blocked by  T-09
-Touches     pipeline/publikclip_pipeline/hardware.py (a persisted profile),
-            app/src/components/Onboarding.tsx, app/src/components/Studio.tsx
-Proves it   tests/test_performance.py additions: measured ratio persists and is used
-Watch out   hardware.summary() already exists — surface it, do not rewrite it
+Merged      hardware_profile.py (new) + `publikclip hardware` verb; the shell
+            READS ~/.publikclip/hardware_profile.json and never probes
+Proves it   tests/test_hardware_profile.py (6) — the trap pin: a measurement
+            under one hardware key is never served under another
+Watch out   the probes in hardware.py were untouched, as required. summary()
+            finally has callers (it was a §5.2-shaped violation with zero)
 ```
 
-Show the GPU, and an honest "60 min video ≈ N min" from a measured realtime ratio that
-updates after each job.
+The timing data predated the task: stage_runs had per-stage durations for every
+job ever run, unread. T-10 reads them — per-stage ratios, median of the last 5
+per stage, keyed to the hardware configuration (the device fields; NOT vram_gb
+or `forced`, which are identity and cause) — and shows the GPU plus an honest
+"60 min video ≈ N min" in onboarding and the studio rail, with "first run — no
+estimate yet" when nothing is measured under the current key. A forced
+PUBLIKCLIP_DEVICE is shown, never invisible. This also corrected T-08's
+deferral note: T-20 is a UI task now and the queue estimate is unblocked.
 
 ### T-11 · E1-F01 — Setup flow                                  [P0]
 
@@ -795,12 +805,15 @@ macOS is the only bundle target and the only platform with no CI. Mirror
 ### T-20 · E1-F06 — ETA and stage names                         [P1]
 
 ```
-Blocked by  T-10
+Blocked by  T-10 (merged) — and T-10 made this a UI task: per-stage medians per
+            hardware key are already in hardware_profile.json, so "record
+            measured stage weights" is DONE, not part of this
 Touches     pipeline stages (progress events), app/src/App.tsx,
             app/src/components/Studio.tsx
 Watch out   structured progress ALREADY EXISTS — {event:'progress', stage, fraction,
-            message}, consumed by App.tsx. Do not rebuild the protocol. Add the ETA,
-            the human-readable stage names in one place, and measured stage weights
+            message}, consumed by App.tsx. Do not rebuild the protocol. Add the ETA
+            and the human-readable stage names in one place; read the weights from
+            the profile file rather than re-measuring anything
 ```
 
 **Phase 1 exit:** 20 beta users complete a job; crashes < 5 %; zero data-loss

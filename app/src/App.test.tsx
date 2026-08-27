@@ -76,6 +76,29 @@ describe('a job start is one transition, wherever it came from (§5.12)', () => 
   })
 })
 
+describe('the studio rail shows the measured hardware expectation (T-10)', () => {
+  it('renders the estimate from the profile file, or admits there is none', async () => {
+    commands.get_hardware_profile = () => ({
+      summary: {
+        torch_device: 'cuda',
+        gpu: 'NVIDIA GeForce RTX 4070',
+        vram_gb: 12,
+        whisper_device: 'cuda',
+        whisper_compute: 'float16',
+        onnx_providers: ['CUDAExecutionProvider', 'CPUExecutionProvider'],
+        cpu_threads: 16,
+        forced: null
+      },
+      key: 'k',
+      estimate_ratio: 0.15,
+      estimate_jobs: 3
+    })
+    await mountStudio()
+    expect(screen.getByText(/RTX 4070 · 12 GB/)).toBeTruthy()
+    expect(screen.getByText('60 min video ≈ 9 min')).toBeTruthy()
+  })
+})
+
 describe('enqueue while a job is running answers on screen [defect 1]', () => {
   it('acknowledges the press, then shows the true waiting count', async () => {
     await mountStudio()

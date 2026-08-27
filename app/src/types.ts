@@ -233,6 +233,28 @@ export interface SetupState {
   onboarded: boolean
 }
 
+/** hardware_profile.json, written by python (job end + `hardware` verb),
+ *  read by the shell as a plain file — never probed per view (T-10). */
+export interface HardwareSummary {
+  torch_device: string
+  gpu: string
+  vram_gb: number
+  whisper_device: string
+  whisper_compute: string
+  onnx_providers: string[]
+  cpu_threads: number
+  forced: string | null
+}
+
+export interface HardwareProfile {
+  summary: HardwareSummary
+  key: string
+  /** processing seconds per source second under the CURRENT key; null
+   *  until every stage has a measurement under it — honest, not blank */
+  estimate_ratio: number | null
+  estimate_jobs: number
+}
+
 /** save_gemini_key verifies with one cheap call before accepting (E1-F02).
  *  "rejected" means Google refused the key and nothing was written;
  *  "unverified" means the check itself was impossible (offline) — the key
