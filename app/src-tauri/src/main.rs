@@ -78,7 +78,9 @@ const CANCELLED_MARKER: &str = "cancelled";
 mod job_object {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     pub struct JobHandle(HANDLE);
@@ -108,6 +110,30 @@ mod job_object {
             unsafe {
                 TerminateJobObject(self.0, 1);
             }
+        }
+
+        /// adopt(), then tie the tree's life to this handle: when the app
+        /// exits (the handle closes), the members die. Job runs deliberately
+        /// do NOT get this — see the T-07 comment above this module. The
+        /// setup downloader deliberately DOES: a download that outlives the
+        /// app is invisible network and disk use nobody asked to keep, and
+        /// E1-F01's own proof is that killing the app stops setup and the
+        /// next launch resumes from what reached disk.
+        pub fn adopt_kill_on_close(child: &std::process::Child) -> Option<Self> {
+            let handle = Self::adopt(child)?;
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                // Best-effort: if the flag cannot be set, terminate() still
+                // works and only the app-exit-kills-setup belt degrades.
+                SetInformationJobObject(
+                    handle.0,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const core::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+            }
+            Some(handle)
         }
     }
 
@@ -411,6 +437,10 @@ fn start_job_locked(
     args: Vec<String>,
     job_id: String,
 ) -> Result<(), String> {
+    // A job outranks background setup downloads (E1-F01): both may write
+    // the same model caches, and two writers on one .part file corrupt it.
+    // The job's own lazy fetches resume whatever partials setup leaves.
+    kill_setup(app);
     let (program, base_args) = pipeline_invocation();
     let mut full = base_args;
     full.extend(args);
@@ -813,6 +843,133 @@ async fn probe_hardware() -> Result<Value, String> {
     one_shot_json(&["hardware".to_string()]).ok_or_else(|| "hardware probe failed".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// E1-F01 setup downloads. The shell owns only the trigger and the gesture
+// semantics (a job start outranks background setup); every decision — what
+// is missing, what to fetch, what a failure means — is python's, in
+// publikclip_pipeline/setup.py. Progress rides its own `setup-event`
+// channel so a setup run can never be mistaken for a job by the studio's
+// pipeline-event listeners.
+
+struct SetupRun {
+    child_pid: u32,
+    #[cfg(target_os = "windows")]
+    job: Option<job_object::JobHandle>,
+}
+
+struct SetupState(Mutex<Option<SetupRun>>);
+
+/// `publikclip setup status` — filesystem-only on the python side. The
+/// one-shot still pays uv's per-launch re-sync (~4 s warm), so the caller
+/// shows a checking state; the answer itself is disk truth, never a
+/// remembered counter, which is what makes a killed setup resume honest.
+#[tauri::command]
+async fn setup_status() -> Result<Value, String> {
+    one_shot_json(&["setup".to_string(), "status".to_string()])
+        .ok_or_else(|| "setup status failed".to_string())
+}
+
+#[tauri::command]
+fn run_setup(app: AppHandle, state: tauri::State<SetupState>) -> Result<(), String> {
+    let mut guard = state.0.lock().unwrap();
+    if guard.is_some() {
+        return Ok(()); // already downloading; its stream is already visible
+    }
+    let (program, base_args) = pipeline_invocation();
+    let mut full = base_args;
+    full.extend(["--jsonl".to_string(), "setup".to_string(), "run".to_string()]);
+    let mut cmd = quiet_command(&program);
+    cmd.args(&full).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        // Same tree-kill story as jobs; UNVERIFIED on real macOS until T-19.
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|err| format!("could not start setup: {err}"))?;
+    #[cfg(target_os = "windows")]
+    let job = job_object::JobHandle::adopt_kill_on_close(&child);
+    *guard = Some(SetupRun {
+        child_pid: child.id(),
+        #[cfg(target_os = "windows")]
+        job,
+    });
+    let app = app.clone();
+    std::thread::spawn(move || stream_setup_child(&app, child));
+    Ok(())
+}
+
+/// Kill a background setup download. Called when a job starts: the job's
+/// own lazy fetches cover anything still missing — and they RESUME the
+/// partial files setup left, so no bytes are lost, only the head start.
+fn kill_setup(app: &AppHandle) {
+    let state = app.state::<SetupState>();
+    let taken = state.0.lock().unwrap().take();
+    if let Some(run) = taken {
+        #[cfg(target_os = "windows")]
+        match &run.job {
+            Some(job) => job.terminate(),
+            None => {
+                let _ = quiet_command("taskkill")
+                    .args(["/T", "/F", "/PID", &run.child_pid.to_string()])
+                    .output();
+            }
+        }
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(run.child_pid as i32, libc::SIGKILL);
+        }
+        let _ = app.emit("setup-event", json!({"event": "interrupted", "by": "job"}));
+    }
+}
+
+fn stream_setup_child(app: &AppHandle, mut child: std::process::Child) {
+    let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_thread = child.stderr.take().map(|stderr| {
+        let tail = stderr_tail.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let mut buf = tail.lock().unwrap();
+                buf.push_str(&line);
+                buf.push('\n');
+                let excess = buf.len().saturating_sub(4000);
+                if excess > 0 {
+                    buf.replace_range(0..excess, "");
+                }
+            }
+        })
+    });
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                let _ = app.emit("setup-event", value);
+            }
+        }
+    }
+    let status = child.wait();
+    if let Some(t) = stderr_thread {
+        let _ = t.join();
+    }
+    // A deliberate kill (job start) already take()d the run and announced
+    // itself; only an exit that was still ours gets crash reporting. The
+    // shared mutex is what makes this race-free.
+    let was_ours = app.state::<SetupState>().0.lock().unwrap().take().is_some();
+    if !was_ours {
+        return;
+    }
+    if let Ok(status) = &status {
+        if !status.success() {
+            let detail = stderr_tail.lock().unwrap().trim().to_string();
+            let _ = app.emit(
+                "setup-event",
+                json!({"event": "exited", "code": status.code(), "stderr": detail}),
+            );
+        }
+    }
+}
+
 #[tauri::command]
 fn get_setup_state() -> Result<Value, String> {
     let secrets = home_dir().join("secrets.json");
@@ -1044,6 +1201,7 @@ fn main() {
             paused: false,
         })))
         .manage(QueueCache(Mutex::new(QueueCacheInner { gen: 0, jobs: None })))
+        .manage(SetupState(Mutex::new(None)))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1058,6 +1216,8 @@ fn main() {
             job_results,
             list_job_dirs,
             save_gemini_key,
+            setup_status,
+            run_setup,
             get_setup_state,
             get_hardware_profile,
             probe_hardware,

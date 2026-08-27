@@ -3,6 +3,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { api } from '../api'
 import { hardwareLabel, sixtyMinEstimate } from '../hw'
 import type { HardwareProfile } from '../types'
+import SetupModels from './SetupModels'
 
 /**
  * Three beats: what this is → pick the brain (Gemini key or local Ollama) →
@@ -290,11 +291,14 @@ export default function Onboarding({ onDone }: Props) {
           <p className="ob-kicker">02 / one honest warning</p>
           <h2 className="ob-h2">First run downloads the models</h2>
           <p className="ob-body">
-            About <span className="mono">2.5 GB</span> of open speech and audio models,
-            fetched once into <span className="mono">~/.publikclip</span>. An hour-long
-            podcast then takes a while on-device — the progress bar never lies to you,
-            and every stage checkpoints, so you can quit and resume anytime.
+            The open speech and audio models land once in{' '}
+            <span className="mono">~/.publikclip</span> — real sizes below, shown{' '}
+            <em>before</em> anything downloads. Grab them now, or skip: they
+            fetch during your first job instead. Either way every download resumes
+            where it stopped, every stage checkpoints, and the progress bar never
+            lies to you.
           </p>
+          <SetupModels />
           {/* The honest hardware sentence (E1-F03): the GPU or its absence,
               the forced device when PUBLIKCLIP_DEVICE is set, and an
               estimate ONLY once one has been measured — never invented. */}
