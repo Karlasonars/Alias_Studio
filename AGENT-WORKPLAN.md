@@ -469,35 +469,207 @@ Owner chose `com.alias.studio`, which drops the segment rather than working arou
 it. **The gate is the lesson: a task that says "stop on a warning" is worth more
 than one that says "use this value", because the second one ships the warning.**
 
-### T-07 · E2-F07 — Job cancellation                            [P0]
+### T-07 · E2-F07 — Job cancellation                      [DONE 2026-08-27]
 
 ```
-Blocked by  nothing (T-02 is done)
-Touches     app/src-tauri/src/main.rs (new cancel_job command), app/src/api.ts,
-            app/src/components/Studio.tsx, pipeline/publikclip_pipeline/jobs/queue.py
-            (a 'cancelled' status)
-Proves it   a new tests/test_cancel.py: checkpoints survive, partial outputs do not
-Watch out   cancellation must NOT delete checkpoints — resume from the last completed
-            stage has to keep working (CLAUDE.md §4)
+Merged      05b5d62  the boundary, the bookkeeping, tests/test_cancel.py
+            62a6ab5  RunState, the Job Object kill, the Cancel button
+Proves it   CI proves the suite and the compile. The kill is proved ONLY by
+            the hand test, which the owner ran: cancel mid-ASR and mid-render,
+            Task Manager clean, resume completed, crash-vs-cancel distinct
 ```
 
-There is no way to stop a started job. The processing screen shows a Cancel button
-with nothing behind it.
+**Two mechanisms, because E2-F07 carries a criterion the entry never quoted:
+cancellation takes effect in under 3 seconds.** A boundary-only cancel cannot meet
+that during a 20-minute ASR pass, so there is a cooperative check *and* a hard kill.
 
-### T-08 · E2-F04 — Job queue                                   [P0]
+- The boundary: `run_stages` reads `<job_dir>/cancel.requested` at the top of each
+  iteration — after the previous stage's atomic checkpoint — and exits 0 through
+  `JobCancelled`. Checkpoints survive by construction. Exit 0 matters: a non-zero
+  exit lands in the crash handler and a deliberate cancel would read as a crash.
+- The kill: **a Windows Job Object, not `taskkill /T`.** The tree is
+  `alias-studio-app → uv → python → ffmpeg`, and killing uv's pid alone orphans the
+  rest. Job Object membership is inherited at creation, so an ffmpeg spawned a
+  millisecond after adoption is already a member — `taskkill /T`'s pid-snapshot race
+  has no equivalent. macOS uses `process_group` + `killpg` and is **unverified**;
+  T-19 is what would verify it.
+
+The entry said the processing screen "shows a Cancel button with nothing behind it".
+**It did not — there was no cancel, stop or abort anywhere in `app/src`.** The same
+false sentence is at `PRODUCT-REQUIREMENTS.md:918`, which is where this entry
+inherited it.
+
+Three things were reported and deliberately not fixed, and two are still open:
+`registry.ensure()` never retro-verifies (E1-F04's own criteria own that);
+`registry.py`'s PANNs comment inverts the failure (one-line fix, unfiled); and the
+four `artifacts_ok` methods that trust `exists()` — now **T-29**.
+
+### T-08 · E2-F04 — Job queue                             [DONE 2026-08-27]
 
 ```
-Blocked by  T-07
-Touches     app/src-tauri/src/main.rs (the runner), app/src/api.ts,
-            app/src/App.tsx, app/src/components/ (a Queue view),
-            pipeline/publikclip_pipeline/jobs/queue.py
-Proves it   tests/test_queue_persistence.py: queue survives a restart; one failure
-            does not stop the rest
-Watch out   the data model already exists — jobs.status is pending|running|done|failed
-            and create_job() writes 'pending'. Do not invent a second one
+Merged      893e1cc  next_pending, jobs create, reconcile, cancel_pending
+            29ef857  the runner, the Queue view
+            c3cb8f9 · d1fc7cb · 647a263 · a8648cf · 57cfc1a · 9925b5f
+                     six fix commits, every one from the hand test
+Proves it   tests/test_queue_persistence.py for the policy; the eleven-step
+            hand test for everything the suite cannot reach
 ```
 
-One job at a time; the GPU is a single resource. Parallelism is not in scope.
+**Create and run stopped being one act.** `jobs create` writes the `pending` row the
+schema always had and nothing else; the runner starts queued jobs with the existing
+`resume` verb, so resume's contract did not change. `run_job` was **removed** rather
+than left beside the new path — a second way into a running job is how `RunState`
+acquires a second writer, and the kill path has no test that would notice.
+
+The line, drawn and defended: Python owns every decision (`next_pending` is the whole
+scheduling policy, in one query); Rust owns the trigger and gesture semantics —
+completion and crash advance, cancel and launch hold. See §5's note in `CLAUDE.md`.
+
+Decisions worth not relitigating:
+
+- **Cancel holds the queue.** Guessing "just this job" wrongly burns 40 unattended
+  GPU-minutes; guessing "everything" wrongly costs one click. `idle ∧ pending` *is*
+  the held state — there is no hold flag — and the START QUEUE button is both the
+  re-arm and the visible evidence it held.
+- **Launch never auto-starts.** Same asymmetry.
+- **Reconcile marks a ghost `failed` with an `interrupted:` error, not a new status.**
+  The label is mildly wrong and the message is honest; an `interrupted` status would
+  be enum creep with one consumer. If a view ever needs the distinction rendered
+  apart, **promote a real status — do not sniff the error string.**
+- No automatic retry. Resume already reuses every completed stage; that is the retry
+  button, and an unattended retry of a 40-minute GPU job is a real cost.
+
+**The reason this entry is long: the suite was green and the feature was broken.**
+289 tests and green CI, and one afternoon of hand-testing found seven defects — the
+list is in `CLAUDE.md` §7. The worst was that `running` never returned to true after
+an auto-advance, so every job but the first had no Cancel button: T-07 unreachable
+for exactly the jobs the queue exists to run. Nothing automated could have caught it,
+because nothing automated tests the frontend at all. That is **T-36**.
+
+Deferred, each with a reason: drag-reorder needs a `position` column and therefore
+the first schema migration on live DBs (**T-33**); a total-time estimate is *blocked*
+on T-20, which is where measured stage weights get recorded, not orphaned;
+keep-awake (**T-34**).
+
+### T-31 · Security — the Gemini key leaked into the UI    [DONE 2026-08-27]
+
+```
+Merged      PR #16  scoring/llm.py + edits/visuals.py → x-goog-api-key header
+Proves it   tests/test_secret_leaks.py (3) — builds the real httpx.Request, so a
+            key passed as a parameter genuinely lands in the URL
+```
+
+A Gemini 503 put the owner's API key on screen, verbatim, in the live console. Nobody
+wrote a line that logs a key: `llm.py` passed it as `params={"key": …}`, `httpx` puts
+the full URL in `HTTPStatusError`, the retry path folded that into `LlmError`, and
+`scoring/stage.py` emitted it to the JSONL stream the UI renders. **Two reasonable
+things composed into a leak.** The key was in his screenshots and had to be rotated.
+
+Fixed at the root — header auth, so no layer that quotes a URL can leak it — with
+redaction as a belt. `edits/visuals.py` had the same pattern and had never surfaced
+only because its errors are swallowed. Pexels was already clean. Now **§5.11**.
+
+### T-29 · Four `artifacts_ok` methods trust `exists()`   [P1, found in T-07]
+
+```
+Blocked by  nothing
+Touches     ingest/stage.py:34, events/stage.py:64, camera/stage.py:85,
+            render/stage.py:141 and _previous_outputs:58
+Proves it   a truncated artifact under a still-valid checkpoint must invalidate it
+Watch out   verify_output() (renderer.py:313) already exists — this is §5.10's
+            pattern applied where it was skipped, not a new idea
+```
+
+Each of those stages writes a file non-atomically and then checks only that it
+exists. A process killed mid-rewrite under a still-valid older checkpoint can get a
+truncated file served as done. Pre-existing — any crash does it — but cancellation
+turned a rare event into a routine one, which is why T-07 closed the render instance
+inside `mark_cancelled` and reported the rest.
+
+### T-30 · Delete a finished job                          [P1, raised from use]
+
+```
+Blocked by  nothing
+Proves it   terminal-only guard; row and dir both gone; already-missing dir;
+            partial failure leaves the row intact
+Watch out   artifacts on disk are the truth (§2). Deleting a job destroys its
+            rendered clips. The confirmation must say how many and how many MB
+```
+
+Nothing can ever be removed. After a week of testing the library is a wall of dead
+rows. Only terminal jobs (done, failed, cancelled) — pending has cancel already,
+running has T-07. No bulk delete, no trash, no auto-cleanup by age (§8).
+
+### T-32 · Instagram tokens ride in query parameters      [P1, found in T-31]
+
+```
+Blocked by  nothing
+Touches     insights/instagram.py — six access_token sites, plus client_secret
+Proves it   extend tests/test_secret_leaks.py to the Ig paths
+Watch out   the Graph data calls accept Bearer headers and should move. The OAuth
+            exchange endpoints are parameter-based by Meta's design and need
+            individual care — do not force them and call it done
+```
+
+No `IgError` quotes a URL today, so nothing leaks *yet*. That is precisely the state
+`visuals.py` was in. §5.11.
+
+### T-33 · Reorder the queue, and the first schema migration  [P2]
+
+```
+Blocked by  T-08 (merged)
+Watch out   this is the first migration against live databases. It deserves its own
+            PR for that reason alone, not for the drag handle
+```
+
+E2-F04 lists drag-reorder. It needs an explicit `position` column. The workaround
+exists today: resume any job from the rail while idle.
+
+### T-34 · Keep the machine awake during a job            [P2]
+
+PRD marks it optional. OS power APIs or a Tauri plugin.
+
+### T-35 · `PUBLIKCLIP_BUNDLED_FFMPEG` has readers and no writer  [P2]
+
+Read at `ffmpeg_bin.py:73` ("set by the app shell") and documented at
+`SPECIFICATION.md:780`. **Nothing in the tree sets it.** Harmless under §5.9 — the
+resolution order falls through — but if the shell was meant to set it, every
+installed user downloads an ffmpeg that is already on their disk. Find out which,
+then either wire it or delete the reader and the doc line.
+
+### T-36 · The frontend has no tests                      [P1, and it is the big one]
+
+```
+Blocked by  nothing
+Proves it   itself — a test runner that catches one of T-08's seven defects
+Watch out   this is scaffolding, and §8 forbids scaffolding for features nobody
+            asked for. It does NOT forbid test infrastructure for code that
+            exists and is shipping broken
+```
+
+No vitest, no jest, no `.test.tsx`, no `test` script. `tsc --noEmit` for ~5,300 lines
+of React and `cargo check` for 993 lines of Rust: both prove compilation, neither
+proves behaviour. T-08's seven hand-found defects are the evidence and the
+specification — pick the two or three that a component test could have caught, and
+make the runner earn its place by catching them.
+
+`CLAUDE.md` §7 carries the same list and the hand-test rule that stands in until this
+lands.
+
+### T-37 · `score` fails with `OSError(22)` on some sources  [P?, needs reproduction]
+
+```
+Blocked by  nothing — but it needs a repro before it needs a fix
+```
+
+Seen once on a real job: `failed — score: OSError(22, 'Invalid argument')`. Errno 22
+on Windows usually means an illegal path character, and that job's title contains a
+comma. Unconfirmed and possibly transient. **Reproduce first.** If it turns on the
+title, it is P0 — it means a class of ordinary videos cannot be processed. A second
+job the same day failed with `score: No candidate produced a scoreable transcript`,
+which may be unrelated and may not be.
+
+Both also surface as raw Python `repr` in the UI, which is T-13's whole subject.
 
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
@@ -627,7 +799,9 @@ Watch out   structured progress ALREADY EXISTS — {event:'progress', stage, fra
 ```
 
 **Phase 1 exit:** 20 beta users complete a job; crashes < 5 %; zero data-loss
-incidents; `guards.yml` green on every PR.
+incidents; `guards.yml` green on every PR — **and `windows.yml` green too**, which it
+was not for 37 commits across 9 merged PRs until T-26 (see that entry). Make it a
+required status check, or this repeats.
 
 ---
 
@@ -664,10 +838,10 @@ reading code the first just wrote.
 
 | File | Lines | Wanted by | Note |
 |---|---|---|---|
-| `app/src-tauri/src/main.rs` | 544 | T-07, T-08, T-09, T-16 | 17 commands, flat handler; grows with every task |
+| `app/src-tauri/src/main.rs` | **993** | T-09, T-16, T-30 | Was 544. T-07 and T-08 nearly doubled it: RunState, the Job Object kill, the queue runner and cache. A split candidate, and its kill path has no automated test at all — `CLAUDE.md` §6 |
 | `app/src/components/ClipEditor/` | 1151 in 9 files | all of E6 | Split by state ownership (T-03). Add along those seams |
-| `app/src/api.ts` | 81 | T-07, T-08, T-09 | Every new command lands here. 6 stray `invoke()` remain, 4 of them duplicating a wrapper that exists |
-| `pipeline/.../jobs/queue.py` | 355 | T-07, T-08, T-12, T-14 | The checkpoint contract lives here — read `CLAUDE.md` §4 |
+| `app/src/api.ts` | 88 | T-09, T-30 | Every new command lands here. 6 stray `invoke()` remain, 4 of them duplicating a wrapper that exists |
+| `pipeline/.../jobs/queue.py` | 534 | T-12, T-14, T-29, T-30 | The checkpoint contract AND the queue policy live here — read `CLAUDE.md` §4 |
 | `pipeline/.../insights/calibration.py` | 908 | all of E11 | Split before v1.1 |
 | `pipeline/.../settings_schema.py` | 487 | E12-F01, then anything adding a setting | Do E12-F01 first |
 | `app/src/components/Onboarding.tsx` | 122 | T-09, T-10, T-11 | Three tasks in a row; keep them in that order |
