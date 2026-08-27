@@ -235,63 +235,48 @@ file — but two thresholds for one rule will eventually disagree. Raise the
 house-rules copy to match, or delete it and accept that the guard only runs in the
 full suite. Decide, do not leave both.
 
-### T-03 · Split `ClipEditor.tsx`                               [P1, before E6]
+### T-03 · Split `ClipEditor.tsx`                          [DONE 2026-08-27]
 
 ```
-Blocked by  T-01
-Touches     app/src/components/ClipEditor.tsx (1175 lines) → a ClipEditor/ directory
-Do not      change any behaviour; this is a pure move
-Proves it   npx tsc --noEmit clean; the editor still opens, saves and re-renders
-Watch out   the onMove/onUp persist pattern must survive the split intact
+Merged      three commits: wiring, the pure move, one disclosed change
+Proves it   tsc clean at each commit; a whitespace-normalized line-multiset diff of
+            the monolith against the nine files; INVOKE_OUTSIDE_API_BASELINE 12 → 6
 ```
 
-Three v1.0 features land in this file ([E6-F01], [E6-F02], [E6-F04]). It is already
-22 % of the frontend. Split first, or the three tasks after it are unreviewable.
+1175 lines became nine files under `app/src/components/ClipEditor/`, largest
+`Controls.tsx` at 293. The move commit carries no semantic edits because the wiring
+landed first and the one behaviour-adjacent change sits alone at the end — so the
+move could be reviewed as a move.
 
-**The "suggested shape" that used to sit here — `Timeline` / `PreviewPane` /
-`ControlsPanel` — was written without reading the component, and reading it says
-otherwise.** It is one function: 1071 lines, 15 `useState`, 7 `useEffect`, 10
-`useRef`. Those names cut across visual regions; the state does not run along those
-seams. **Split by state ownership or you will drill twenty props.** Propose the
-boundaries and stop before moving anything.
+**The "suggested shape" this entry used to carry — `Timeline` / `PreviewPane` /
+`ControlsPanel` — was written without reading the component, and was wrong.** The
+state does not run along visual seams: `selectedOverlay` alone is read by three
+children across two of the proposed regions. The agent read the file first and split
+by state ownership instead. Recorded because the guess cost nothing *only* because
+someone checked it before executing it.
 
-Five landmines, all of which typecheck fine after being broken:
+**The landmines survived the split and are still live**, now spread across nine files
+instead of hidden in one. They are documented in `CLAUDE.md` §6; the two that bite
+hardest are `useClipEdit.ts` assigning `editRef`/`ctxRef` during render, and
+`usePlayer.ts`'s rAF dependency array being `[win, span]` on purpose. The `timeLabel`
+state became a rAF-written ref, so the ~10 Hz whole-tree re-render is gone and React
+no longer owns that node's content. The §6 persist asymmetry moved byte-for-byte and
+is still unresolved.
 
-1. **Two refs are assigned during render, not in an effect** (lines 130 and 132:
-   `editRef.current = edit`, `ctxRef.current = ctx`). The rAF loop reads them to get
-   the latest values without re-subscribing. The ref must travel with the state and
-   stay assigned in the same render pass — break it and the preview plays against a
-   stale edit. No error, wrong frames.
-2. **The rAF effect's dependency array is `[win, span]` and that is deliberate** — it
-   does not depend on `edit`, because it reads `editRef`. Move the loop into a child
-   that takes `edit` as a prop and the natural dependency array restarts the loop on
-   every state change: every drag frame, every keystroke. Visible stutter, nothing red.
-3. **`setTimeLabel` runs on every animation frame** (line 247), so the component
-   re-renders ~10×/s during playback. Survivable in one component; after a split with
-   prop drilling it is every child. Put `timeLabel` in its own leaf — and note in the
-   PR that doing so is a performance change inside a task defined as a pure move.
-4. **Three `window` listeners across two effects** — `keydown` (297), `mousemove` ×2
-   and `mouseup` (361–363). They must land in exactly one component. `StrictMode` is
-   on, so a double mount double-attaches; dev shows it, CI does not.
-5. **The persist asymmetry.** See CLAUDE.md §6. Do not "fix" it here.
+**The manual checklist has never been run.** It needs an existing job's artifacts,
+which only a real pipeline run produces, and §3 forbids that. Whoever first has a
+machine with a completed job should run it before E6 starts:
 
-**There is no frontend test infrastructure at all** — no vitest, no jest, no
-`.test.tsx`, and `package.json` has four scripts, none of them `test`. `tsc --noEmit`
-is the entire net, and it will happily typecheck an animation loop reading stale
-state. §7's "one new test fails without your change" does not apply; say so and carry
-a manual checklist instead: open the editor, drag both bounds, scrub, play through a
-dead-space cut, drag an overlay on the timeline and on the monitor, change a caption
-preset, render. Two more steps, because the obvious list misses landmines 1 and 2:
-**type in the title field while playback is running** (if the rAF loop restarts on
-every state change, the stutter is immediate), and **move a bound, then play without
-persisting** (the preview must follow the new bound, not the stale one). Adding a test runner is its own task and its own PR.
+open the editor · drag both bounds · scrub · play through a dead-space cut · drag an
+overlay on the timeline and on the monitor (the monitor drag must persist on release,
+the timeline drags must not) · change a caption preset · render · **type in the
+description textarea during playback** — titles are chosen by buttons, so the textarea
+is the only free-typing surface and that is where landmine 1 lives · **move a bound,
+then play without persisting** — the out-point must honour the un-persisted bound.
 
-Move the 6 `invoke()` calls into `api.ts` — that lowers
-`INVOKE_OUTSIDE_API_BASELINE` from 12 to 6. Note that three of them are
-`save_clip_edits` with an identical argument shape (373, 378, 387) but three
-different intents: 373 is inside `persist()`, the other two are pre-flight saves
-before render and before suggest. Collapsing them is slightly more than a move —
-worth one sentence in the PR either way.
+`Monitor` and `Timeline` still take ~11 props each, deliberately: the price of
+byte-for-byte inline handlers. That is the next refactor, once behaviour is proven —
+not a defect to fold into an E6 task.
 
 ---
 
@@ -300,29 +285,66 @@ worth one sentence in the PR either way.
 Goal: a closed beta of 20–30 people who can report problems. Order below is the
 dependency order; follow it.
 
-### T-04 · E16-F01 — Installer config parity                    [P0]
+### T-04 · E16-F01 — Installer config parity              [DONE 2026-08-27]
 
 ```
-Blocked by  nothing (T-02 is done)
-Touches     app/src-tauri/tauri.conf.json, .github/workflows/windows.yml
-Proves it   a local `npx tauri build` produces the same artifacts CI does
+Merged      76d42da  build: make tauri.conf.json the single source of installer targets
+Proves it   windows.yml's own `throw "no NSIS installer produced"` — green before the
+            change only because of the CLI flag, green after only because of the config
 ```
 
-`bundle.targets` is `["dmg"]` while CI passes `--bundles nsis`. Make the config
-carry both and drop the CI flag, so local and CI builds stop diverging.
+`bundle.targets` was `["dmg"]` while CI passed `--bundles nsis`, so a bare
+`npx tauri build` on Windows produced nothing — while `CLAUDE.md` §3 tells you to
+build exactly that way. Config now carries both targets; the flag is gone.
 
-### T-05 · E1-F04 — Pin model checksums                         [P0]
+Verified rather than assumed, and this is why the task was worth doing carefully:
+`Settings::package_types()` intersects configured targets with a per-platform
+allowlist and **silently drops** what the host cannot build — no warning, no error.
+Windows gets `[Nsis]`, native macOS gets `[Dmg]`. Had it errored instead, adding
+`nsis` would have broken every macOS build and set a trap for T-19. Do not look for
+an "ignoring dmg" line in build logs as evidence; dmg is filtered a call earlier,
+silently. The evidence is the exit code and the artifact.
+
+### T-05 · E1-F04 — Pin model checksums                   [DONE 2026-08-27]
 
 ```
-Blocked by  nothing (T-02 is done)
-Touches     pipeline/publikclip_pipeline/models/specs.py, models/registry.py
-Proves it   test_house_rules.py::test_model_specs_pin_a_sha256 baseline drops 5 → 0
-Watch out   the PANNs note in SPECIFICATION.md §11 — the ~312 MB file is the correct
-            one; the 514 MB response is the corrupt one, not the other way round
+Merged      d475218  models: pin the five unpinned weights against publisher hashes
+Proves it   UNPINNED_MODELS_BASELINE 5 → 0. At zero the two-sided pin stops being a
+            ratchet and becomes a plain rule: a new ModelSpec without a sha256 fails
 ```
 
-Download each weight once, checksum it, pin it. Five of six specs are currently
-unverified against exactly the truncation failure the sixth was pinned for.
+All six weights are now pinned. **The trap this task existed to avoid:** hashing your
+own download pins whatever you received, corruption included — it then rejects every
+future *good* download and accepts the bad one forever. Every pin here was checked
+against an identity the publisher records, before anything was pinned:
+
+- `campplus` — Hugging Face stores it in LFS, where the object id **is** its sha256.
+  The pinned value is literally the publisher's own hash.
+- the four `raw.githubusercontent.com` weights — GitHub publishes no sha256, but it
+  publishes the git blob SHA-1, which is recomputable from bytes you hold
+  (`sha1(b"blob %d\0" + content)`). Identity checked against that first, sha256
+  computed only from bytes that matched.
+
+Same check answered the LFS question for free: an LFS pointer's blob hash covers
+~130 bytes of pointer text and could never equal a blob hash recomputed over a
+multi-MB binary. All four matched over the binaries, so none is LFS.
+
+**Two findings left deliberately unfixed:**
+
+- `registry.ensure()` returns the moment the file exists, before any hash runs. These
+  pins protect future downloads only; a user already holding a corrupt weight keeps
+  loading it. `E1-F04`'s own acceptance criteria ask for detect-and-redownload, so
+  that belongs with the model-manager work, not here.
+- **`specs.py` and `registry.py` contradicted each other about the PANNs failure, and
+  `specs.py` is right.** Zenodo's record API reports `size: 327428481` (~312 MB) for
+  the complete file, so the ~490 MB response was the corrupt one.
+  `registry.py`'s comment — "a 466 MB PANNs checkpoint silently landing at 312 MB" —
+  inverts the failure and will mislead the next person into fixing the pin backwards.
+  Neither comment was edited; fixing that comment is a one-line task nobody has filed.
+
+One limit worth not over-reading: this chain proves the bytes are the object the
+publisher records. It does not prove they are benign. A compromised upstream repo
+would be pinned faithfully.
 
 ### T-06 · T10-A — Encoding sweep                             [DONE 2026-08-26]
 
@@ -361,6 +383,91 @@ Watch out   Three things, all found while planning this task, none of them
 
 Mechanical, low-risk, and it removes a whole class of silent corruption. Good first
 real task for a new agent.
+
+### T-26 · E16-F01 follow-on — the rebrand left `windows.yml` behind  [DONE 2026-08-27]
+
+```
+Merged      a83786a  ci: derive the install directory from tauri.conf.json
+Proves it   the windows job green through install-and-launch for the first time
+            since e090989 — red on main, green on the branch
+```
+
+`windows.yml` hardcoded `$LOCALAPPDATA\publikclip`, a copy of the then-current
+`productName`. `e090989` renamed the product in 16 files and did not touch the
+workflow. **The job was red on every pull request for 37 commits across 9 merged
+PRs** and nobody noticed, because the ruleset required only `guards`.
+
+Verified from the pinned bundler (`@tauri-apps/cli-v2.11.4`): the NSIS install path
+is `$LOCALAPPDATA\${PRODUCTNAME}` — **productName**, not `mainBinaryName`, not the
+identifier. Install mode defaults to `currentUser` because we configure no `nsis`
+block; if it ever becomes `perMachine` the base becomes `$PROGRAMFILES64` and this
+derivation must follow. The workflow now reads `productName` from `tauri.conf.json`,
+so no second copy of the name exists there to go stale again.
+
+This task and T-27 are the same defect twice: **a copy of a name, in a place nobody
+re-reads.** That is the shape to watch for, not the specific file.
+
+### T-27 · E16-F02 — Rebrand to "Alias Studio"            [DONE 2026-08-27]
+
+```
+Merged      f500ff6  display only (20 files, 39 replacements)
+            b45d32c  identity: productName, identifier, Cargo and npm package names
+Proves it   commit 2's windows run green with windows.yml's install step untouched —
+            the T-26 derivation followed productName rather than coinciding with it
+```
+
+Split into display and identity because **`productName` is an identity value, not a
+display one**: NSIS derives the install directory *and* the uninstall registry key
+from it, so renaming it means no upgrade continuity and an orphaned old install.
+Free today, expensive the day v0.9 ships.
+
+Two judgement calls worth keeping:
+
+- `insights/instagram.py:113` looked like a display string and is one — it is the
+  HTML body the local `127.0.0.1` callback server shows the user's own browser. Meta
+  receives the redirect, never this response. **A display string that is also a wire
+  value would not have been bucket A**, which is why it was checked rather than swept.
+- `prepare-resources.mjs:4` was listed as a cosmetic comment and was **left alone**:
+  the word sits inside the literal packaged-build spawn command, making it a console-
+  script contract. The agent overrode its own inventory. That is the inventory doing
+  its job, not failing.
+
+Attribution to the upstream project (`Studio.tsx`, `README`, `SPECIFICATION`, the
+PRD, `VENDORED-LICENSES`) was kept verbatim — renaming it would falsify AGPL
+attribution. Historical references ("the rename to Publikclip Extra") were kept for
+the same reason: they describe what happened.
+
+**Bucket C is untouched and is a task nobody has filed yet:** the
+`publikclip_pipeline` package, the `publikclip` console script and its `main.rs`
+spawn contract, `PUBLIKCLIP_HOME`/`_FFMPEG`/`_BUNDLED_FFMPEG`/`_DEVICE`/
+`_GEMINI_API_KEY`, `~/.publikclip` and the assetProtocol scope, the
+`publikclip-theme` localStorage key. Each has stored state or a cross-process
+contract behind it and needs a migration step. 179 lines in 44 files still say
+`publikclip`; every one is bucket C, attribution, or history.
+
+`PUBLIKCLIP_BUNDLED_FFMPEG` surfaced along the way: **read at `ffmpeg_bin.py:73`
+and set nowhere in the tree.** Harmless under §5.9, but if the app shell was meant to
+set it, every installed user re-downloads an ffmpeg that is already on their disk.
+Unfiled.
+
+### T-28 · E16-F02 follow-on — the identifier                [DONE 2026-08-27]
+
+```
+Merged      ee111c9  identifier → com.alias.studio
+Proves it   the windows job green AND invisible — install log byte-identical to
+            T-27's apart from the pid, confirming nothing in that job reads it
+```
+
+T-27 shipped `com.publikhq.aliasstudio` from a superseded task version. The
+correction was one line — but the agent **stopped before committing**, because
+`build.rs:181-186` warns on any identifier ending in `.app` and the owner's chosen
+value did. A warning, not an error: CI would have stayed green and printed it in
+every build log forever, and on macOS the per-app data directory would have been a
+folder named `com.aliasstudio.app` that Finder treats as an application bundle.
+
+Owner chose `com.alias.studio`, which drops the segment rather than working around
+it. **The gate is the lesson: a task that says "stop on a warning" is worth more
+than one that says "use this value", because the second one ships the warning.**
 
 ### T-07 · E2-F07 — Job cancellation                            [P0]
 
@@ -530,7 +637,8 @@ Full requirement lists live in `PRODUCT-REQUIREMENTS.md` §34.3 and §34.4. Orde
 constraints that are not obvious from the PRD:
 
 **Before v1.0 work starts:**
-- T-03 (split `ClipEditor.tsx`) must be merged, or E6 is unreviewable.
+- T-03 (split `ClipEditor.tsx`) is merged. Its manual checklist has still never
+  been run — see the entry. Run it before the first E6 task, not after.
 - `E12-F01` (settings levels) changes `settings_schema.py`'s shape — do it before
   anything that adds a setting, or every later task collides there.
 
@@ -557,8 +665,8 @@ reading code the first just wrote.
 | File | Lines | Wanted by | Note |
 |---|---|---|---|
 | `app/src-tauri/src/main.rs` | 544 | T-07, T-08, T-09, T-16 | 17 commands, flat handler; grows with every task |
-| `app/src/components/ClipEditor.tsx` | 1175 | T-03, then all of E6 | Split first (T-03) |
-| `app/src/api.ts` | 65 | T-07, T-08, T-09 | Every new command lands here |
+| `app/src/components/ClipEditor/` | 1151 in 9 files | all of E6 | Split by state ownership (T-03). Add along those seams |
+| `app/src/api.ts` | 81 | T-07, T-08, T-09 | Every new command lands here. 6 stray `invoke()` remain, 4 of them duplicating a wrapper that exists |
 | `pipeline/.../jobs/queue.py` | 355 | T-07, T-08, T-12, T-14 | The checkpoint contract lives here — read `CLAUDE.md` §4 |
 | `pipeline/.../insights/calibration.py` | 908 | all of E11 | Split before v1.1 |
 | `pipeline/.../settings_schema.py` | 487 | E12-F01, then anything adding a setting | Do E12-F01 first |

@@ -61,10 +61,12 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
 
 app/src/                          React frontend — ~5,300 lines
   App.tsx           (229)  view router: boot|onboarding|studio|review|loop|settings
-  api.ts             (65)  EVERY invoke() belongs here — see §5.4
+  api.ts             (81)  EVERY invoke() belongs here — see §5.4
   types.ts          (338)  the Rust↔TS contract. Nothing enforces it at runtime
   styles.css       (1342)  all styling, including themes
-  components/ClipEditor.tsx (1175)  the biggest component. Split before growing it
+  components/ClipEditor/   nine files, 1151 lines — one 1175-line component until
+                           T-03. Largest is now Controls.tsx (293). Split by state
+                           ownership, not by visual region; §6 says why
 app/src-tauri/src/main.rs  (544)  the whole Rust layer. 17 commands. No product logic
 ```
 
@@ -303,12 +305,20 @@ see. "Everywhere" in the heading is the rule; the guard is narrower than the rul
 
 ### 5.4 Every `invoke()` lives in `api.ts`
 
-`app/src/api.ts` is the single list of Tauri calls — but it covers only 13 of the 17
-Tauri commands (missing: `run_edit_render`, `save_clip_edits`, `save_pexels_key`,
-`ig_connect`). **12** direct `invoke()` calls currently sit outside it: `ClipEditor.tsx`
-(6), `IgModal.tsx` (3), `KeyModal.tsx` (3). `test_no_invoke_outside_api_ts` is a ratchet
-on that count. Add new commands to `api.ts` and nowhere else; if you touch a component
-with a stray call, move it and lower the baseline.
+`app/src/api.ts` is the single list of Tauri calls. It covers 15 of the 17 Tauri
+commands; `save_pexels_key` and `ig_connect` have no wrapper at all. **6** direct
+`invoke()` calls sit outside it: `IgModal.tsx` (3), `KeyModal.tsx` (3). T-03 moved
+`ClipEditor`'s six in and lowered the baseline from 12.
+
+**Only two of the remaining six lack a wrapper.** The other four — `ig_status`
+twice, `get_setup_state`, `save_gemini_key` — call a command `api.ts` already
+wraps, so those are not "add it to api.ts", they are "use the function that is
+already there". A smaller job than the count makes it look, and worth knowing
+before someone scopes it as four new wrappers.
+
+`test_no_invoke_outside_api_ts` is a **two-sided pin, not a ratchet** — `==` at
+line 248, `<=` at line 256. Fix one call site without lowering the constant and the
+suite goes red, exactly as in §5.3. Add new commands to `api.ts` and nowhere else.
 
 ### 5.5 `0.0` is a legitimate value and falsy in Python
 
@@ -385,8 +395,19 @@ themselves AGPL-3.0. Modify only when you must, and record it in
 `VENDORED-LICENSES.md` in the same commit. Guard tests skip this tree; that is not
 permission to lower its standards.
 
-**`app/src/components/ClipEditor.tsx` (1175 lines).** Split it before adding to it.
-Three planned features land here and the file is already 22 % of the frontend.
+**`app/src/components/ClipEditor/` — split in T-03, and the split is load-bearing.**
+Nine files, largest 293 lines. The boundaries follow **state ownership, not visual
+regions**: the plan that used to sit in the workplan proposed `Timeline` /
+`PreviewPane` / `ControlsPanel` and was wrong — `selectedOverlay` alone is read by
+three children that would have straddled two of those regions.
+
+Three v1.0 features land here (`E6-F01`, `E6-F02`, `E6-F04`). Add them along the
+seams that exist, and read `useClipEdit.ts` before touching anything that renders
+during playback: it assigns `editRef` and `ctxRef` **during render**, deliberately,
+so the rAF loop in `usePlayer.ts` reads current values without re-subscribing. That
+loop's dependency array is `[win, span]` and does **not** include `edit`. Break
+either and the preview plays against stale state — no error, wrong frames. There is
+still no frontend test infrastructure to catch it: `tsc --noEmit` is the whole net.
 
 **`pipeline/publikclip_pipeline/insights/calibration.py` (908 lines).** Largest file in
 the pipeline, and about to carry two more platforms. Same advice.
@@ -399,7 +420,7 @@ alone does not fix an installed build.
 **Drag interactions.** Update local state continuously in `onMove`, call `persist()`
 once in `onUp`. Follow that pattern for any new slider or handle.
 
-`ClipEditor.tsx` follows it for the monitor drag only (`onUp` at line 354 persists
+`ClipEditor/index.tsx` follows it for the monitor drag only (`onUp` at line 124 persists
 only when `monitorDragRef` is set). Timeline bound and overlay drags update state and
 are never persisted on mouseup — they survive on whatever calls `persist()` next, or
 on `doRender()` saving on its way out. Whether that is intended or a bug is
