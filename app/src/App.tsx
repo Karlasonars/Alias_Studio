@@ -87,8 +87,17 @@ export default function App() {
   // Seed once from the instant cached snapshot, then ride the push: Rust
   // emits queue-state at every mutation, so no view ever polls for it.
   useEffect(() => {
+    // The listing can lag a spawn: SQLite flips a job to 'running' only
+    // when run_stages starts, seconds after the shell spawned it - so a
+    // snapshot taken around the spawn still shows that job as 'pending'.
+    // The shell knows the id it just started (active_job_id rides every
+    // push); a count that excludes it is honest - the same derivation the
+    // queue view uses for its UP NEXT list. Not a "minus one": if the
+    // snapshot already saw the flip, nothing is excluded.
     const count = (s: QueueStateResult) =>
-      setQueuedCount(s.jobs.filter((j) => j.status === 'pending').length)
+      setQueuedCount(
+        s.jobs.filter((j) => j.status === 'pending' && j.id !== s.active_job_id).length
+      )
     api.queueState().then(count).catch(() => {})
     let disposed = false
     let un: (() => void) | null = null
@@ -128,11 +137,25 @@ export default function App() {
   useEffect(() => {
     let disposed = false
     listen<PipelineEvent>('pipeline-event', ({ payload }) => {
-      appendLog(payload)
       if (payload.event === 'job' && payload.job_id) {
+        // Starting a job is ONE transition with one meaning, however it
+        // was triggered - enqueue-while-idle, queue advance, START QUEUE,
+        // or rail resume - so the per-job screen reset lives HERE, where
+        // the transition is observed, not at each trigger. When only the
+        // explicit triggers reset, an auto-advanced job inherited the
+        // previous job's stage bars and log, ran with running=false (no
+        // Cancel button - T-07 unreachable for queued jobs), and a
+        // busy-enqueue would have wrongly taken the idle path.
         setActiveJob(payload.job_id)
         setResults(null)
-      } else if (payload.event === 'progress' && payload.stage) {
+        setStages({})
+        setLog([])
+        setRunError(null)
+        setCancelled(false)
+        setRunning(true)
+      }
+      appendLog(payload)
+      if (payload.event === 'progress' && payload.stage) {
         setStages((prev) => ({
           ...prev,
           [payload.stage!]: {
