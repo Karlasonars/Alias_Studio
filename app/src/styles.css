@@ -956,7 +956,19 @@ body {
 .ig-connected { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; }
 .ig-user { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
 .ig-hint { font-size: 13px; color: var(--dim); line-height: 1.7; }
-.rail-foot { margin-top: auto; padding: 14px 22px 68px; border-top: 1px solid var(--line); }
+/* Explicit layout, not accident: this rule once had no layout at all, so
+   the buttons flowed inline and landed one-per-line only because 264px was
+   too narrow for two — adding a fourth button put two on a line. The number
+   of entries must never be load-bearing. */
+.rail-foot {
+  margin-top: auto;
+  padding: 14px 22px 68px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
 
 /* ---------- theme switcher ---------- */
 .theme-switcher {

@@ -108,8 +108,11 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, e
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
           </button>
+          {/* ▤ U+25A4: same Unicode block as ◈ (Geometric Shapes), so it
+              rides the same font fallback — ⧉ U+29C9 sits in a block the
+              Windows fallback never routes anywhere and drew a box. */}
           <button className="btn-ghost" onClick={onOpenQueue}>
-            ⧉ queue
+            ▤ queue
           </button>
           <button className="btn-ghost" onClick={onOpenSettings}>
             ⚙ settings
