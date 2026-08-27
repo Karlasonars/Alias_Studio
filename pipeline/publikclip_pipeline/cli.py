@@ -120,6 +120,15 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     ffmpeg_bin.ensure_capable(progress=lambda f, m: emit("setup", f, m))
     try:
         results = queue.run_stages(job, _stages(), emit)
+    except queue.JobCancelled:
+        # Deliberate stop, exit 0: a non-zero exit would land in the shell's
+        # 'exited' crash handler and a cancel would read as a crash even with
+        # every line of it working (T-07).
+        if jsonl:
+            print(json.dumps({"event": "cancelled", "job_id": job.id}), flush=True)
+        else:
+            print(f"job {job.id} cancelled - checkpoints kept", file=sys.stderr)
+        return 0
     except queue.StageError as err:
         _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": str(err)})
         return 1
@@ -135,6 +144,9 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
+    if getattr(args, "jobs_cmd", None) == "mark-cancelled":
+        print(json.dumps(queue.mark_cancelled(args.job_id)))
+        return 0
     for job in queue.list_jobs():
         stages = queue.stage_statuses(job.id)
         done = sum(1 for s in stages.values() if s == "done")
@@ -506,6 +518,12 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.set_defaults(fn=cmd_resume)
 
     p_jobs = sub.add_parser("jobs", help="list jobs")
+    jobs_sub = p_jobs.add_subparsers(dest="jobs_cmd", required=False)
+    p_mark = jobs_sub.add_parser(
+        "mark-cancelled",
+        help="bookkeeping after the shell hard-kills a job: status, marker, cleanup",
+    )
+    p_mark.add_argument("job_id")
     p_jobs.set_defaults(fn=cmd_jobs)
 
     p_set = sub.add_parser("settings", help="read/write global settings + caption presets")
