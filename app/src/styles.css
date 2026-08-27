@@ -162,6 +162,17 @@ body {
 .led-half { background: var(--amber); box-shadow: 0 0 8px rgba(var(--amber-rgb), 0.6); }
 .led-off { background: var(--led-off); }
 .led-err { background: var(--red); box-shadow: 0 0 8px rgba(255, 92, 73, 0.7); }
+/* running: the one state that pulses — pending/done/cancelled once shared
+   a single LED look and the queue view became unreadable for it. */
+.led-run {
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(var(--amber-rgb), 0.6);
+  animation: led-pulse 1.2s ease-in-out infinite;
+}
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 /* ---------- onboarding ---------- */
 .onboarding {
@@ -1382,12 +1393,31 @@ body {
 .queue-head-title { flex: 1; }
 .queue-head-title .input-heading { margin-bottom: 10px; }
 .queue-head-actions { display: flex; align-items: center; gap: 12px; padding-bottom: 6px; }
-/* Four children per row (led, title, status, ✕), so the grid says four —
-   .deck-row is a two-column grid and wraps anything more onto extra rows. */
+/* Three sections — NOW / UP NEXT / HISTORY — because a flat list of every
+   job ever run buried the queue: what is running, what is next and how
+   many wait must be answerable without reading. */
+.queue-label {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--faint);
+  padding-bottom: 8px;
+}
+.queue-now {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 320px) 1fr;
+  gap: 14px;
+  align-items: center;
+  max-width: 860px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+}
 .queue-table { display: flex; flex-direction: column; border: 1px solid var(--line); max-width: 860px; }
+/* Each row variant declares columns for exactly its children — .deck-row
+   is a two-column grid and wraps anything more onto extra rows. */
 .queue-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, 260px) 1fr auto;
   gap: 14px;
   align-items: center;
   padding: 12px 16px;
@@ -1395,6 +1425,12 @@ body {
   border-bottom: 1px solid var(--line);
 }
 .queue-row:last-child { border-bottom: 0; }
+.queue-row-next { grid-template-columns: 28px 16px minmax(0, 1fr) auto auto; }
+.queue-row-hist { grid-template-columns: 16px minmax(0, 280px) 1fr auto; opacity: 0.65; }
+.queue-pos { font-size: 11px; color: var(--amber); }
+.queue-time { font-size: 10px; color: var(--faint); white-space: nowrap; }
+/* History is bounded so it can never push the queue off screen. */
+.queue-history { max-height: 320px; overflow-y: auto; }
 .queue-row-name {
   font-size: 13px;
   overflow: hidden;
