@@ -682,19 +682,28 @@ which may be unrelated and may not be.
 ```
 Blocked by  nothing
 Touches     events/ser.py (the blanket except at line 62 is what hides the cause)
-Proves it   a job's curves.json says arousal_source=ser; and scoring stops
-            discounting shock ×0.6 (rubric.py:283)
+Proves it   a job's curves.json says arousal_source=ser; then a same-audio
+            comparison of the two arousal curves — see below
 Watch out   fix the loader BEFORE adding its ~378 MB to setup's download list —
-            T-11 deliberately excluded it (setup.py docstring + a test pin)
+            T-11 deliberately excluded it (setup.py docstring + a test pin).
+            Do NOT claim past scores were wrong until the comparison says so
 ```
 
 Every job on the reference machine — 15 of 15 — fell back to `dsp-proxy`: the
 speechbrain `foreign_class` load fails before the weights ever download (the HF
-cache holds exactly one 6 KB file of the repo), `except Exception: return None`
-swallows the reason, and `rubric.py:283` then discounts every shock score ×0.6.
-The product has been running on the fallback since day one and nothing said so.
-Diagnose the load failure (likely Windows/speechbrain fetch semantics), then
-add the model to setup's list only once it demonstrably loads.
+cache holds exactly one 6 KB file of the repo), and `except Exception: return
+None` swallows the reason. The scoring consequence is a **hypothesis, not a
+measured error**: the ×0.6 shock penalty (`SHOCK_NO_AROUSAL`, rubric.py:93,
+applied at :142) triggers on the measured `arousal_pct`, whatever produced it —
+so past scores are wrong only **if** the DSP proxy systematically under-reports
+arousal where SER would not. Nobody has compared the two signals on the same
+audio; that comparison is the first thing to run once the loader works, and it
+is what says whether any past score actually misfired.
+
+What did NOT fail: rubric.py has appended `ser_model (dsp proxy used)` to every
+score's `missing` list since day one (rubric.py:283). The audit trail worked;
+nobody read it. That — degradation recorded but never surfaced — is why this
+lasted, and it is the standing argument for showing `missing` in the UI.
 
 Both also surface as raw Python `repr` in the UI, which is T-13's whole subject.
 

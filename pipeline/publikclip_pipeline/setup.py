@@ -34,12 +34,13 @@ Deliberately NOT fetched here:
     user's saved settings enable laughter_specialist. Downloading a model
     the user has switched off, on their metered connection, to make a
     progress list look complete is the wrong trade.
-  - speechbrain SER (~378 MB): events falls back to the DSP arousal proxy
-    when it cannot load — and on the machine measured above it has NEVER
-    loaded (every job on disk says arousal_source=dsp-proxy; the cache
-    holds exactly one 6 KB file of it). Prefetching 378 MB for a model
-    the loader cannot use would be pure waste; fixing the loader is its
-    own task, and setup should adopt it only once it demonstrably loads.
+  - speechbrain SER (~378 MB): its loader fails before the weights ever
+    download (foreign_class dies after fetching one 6 KB interface file),
+    so events falls back to the DSP arousal proxy — observed on every job
+    on the 2026-08-27 reference machine, and recorded honestly by scoring
+    in each score's `missing` list all along. Prefetching 378 MB for a
+    model the loader cannot use would be pure waste; fixing the loader is
+    T-38, and setup should adopt it only once it demonstrably loads.
   - non-English alignment models: the language is detected mid-transcribe
     (asr/stage.py), so only the English default is prefetched; another
     language lazily fetches its own aligner exactly as today.
