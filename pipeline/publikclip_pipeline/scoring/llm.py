@@ -96,6 +96,17 @@ def _retry_delay_seconds(error_body: dict) -> float | None:
     return None
 
 
+def _redact(text: str, secret: str | None) -> str:
+    """A leaked 503 once printed the full request URL - API key included -
+    into the UI log: httpx embeds request URLs in its error messages, and
+    the key used to be a query parameter. The key now travels in a header
+    (never part of the URL), and this is the belt on top: no secret may
+    survive into an LlmError message, whatever some layer folds into it."""
+    if secret and secret in text:
+        return text.replace(secret, "[redacted]")
+    return text
+
+
 def _strip_fences(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -147,7 +158,10 @@ class GeminiClient:
             try:
                 res = httpx.post(
                     GEMINI_URL.format(model=self.model),
-                    params={"key": self._key},
+                    # Header, never a query parameter: httpx puts the full
+                    # request URL in its error text, which reaches the UI
+                    # log - a `?key=` there once leaked a real key on a 503.
+                    headers={"x-goog-api-key": self._key},
                     json=body,
                     timeout=LLM_TIMEOUT,
                 )
@@ -168,7 +182,7 @@ class GeminiClient:
                         detail = error_body["message"]
                     except Exception:  # noqa: BLE001
                         error_body, detail = {}, "rate limited"
-                    last_err = LlmError(f"Gemini 429: {detail}")
+                    last_err = LlmError(f"Gemini 429: {_redact(detail, self._key)}")
                     retry_delay = _retry_delay_seconds(error_body)
                     if retry_delay is None:
                         raise last_err
@@ -194,7 +208,10 @@ class GeminiClient:
                 # 503 is a much worse outcome than waiting under a minute.
                 if attempt < attempts - 1:
                     time.sleep(min(30, 2 ** attempt))
-        raise LlmError(f"Gemini call failed after {attempts} attempts: {last_err}", fatal=False)
+        raise LlmError(
+            _redact(f"Gemini call failed after {attempts} attempts: {last_err}", self._key),
+            fatal=False,
+        )
 
 
 class OllamaClient:
