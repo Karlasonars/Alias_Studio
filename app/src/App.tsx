@@ -52,6 +52,12 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null)
   const [cancelled, setCancelled] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
+  // Enqueue-while-running feedback: six silent QUEUE IT presses once
+  // enqueued six invisible jobs. `enqueueing` acknowledges the press the
+  // moment it happens; `queuedCount` is the real pending count, asked from
+  // the queue after each change the frontend can observe.
+  const [enqueueing, setEnqueueing] = useState(0)
+  const [queuedCount, setQueuedCount] = useState(0)
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
   const runningRef = useRef(false)
@@ -76,6 +82,13 @@ export default function App() {
 
   const refreshJobs = useCallback(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
+  }, [])
+
+  const refreshQueueCount = useCallback(() => {
+    api
+      .queueState()
+      .then((s) => setQueuedCount(s.jobs.filter((j) => j.status === 'pending').length))
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -108,6 +121,9 @@ export default function App() {
       if (payload.event === 'job' && payload.job_id) {
         setActiveJob(payload.job_id)
         setResults(null)
+        // A start means a pending row just left the queue - keep the
+        // "N waiting" count truthful instead of letting it go stale.
+        refreshQueueCount()
       } else if (payload.event === 'progress' && payload.stage) {
         setStages((prev) => ({
           ...prev,
@@ -149,7 +165,7 @@ export default function App() {
       disposed = true
       unlistenRef.current?.()
     }
-  }, [refreshJobs, appendLog])
+  }, [refreshJobs, appendLog, refreshQueueCount])
 
   const startRun = useCallback(
     async (source: string, llm: string, captions: string, gameplayAmount: number) => {
@@ -165,11 +181,26 @@ export default function App() {
         setResults(null)
         setActiveJob(null)
       }
-      await api.enqueueJob(source, llm, captions, gameplayAmount).catch(() => {
+      setEnqueueing((n) => n + 1)
+      try {
+        await api.enqueueJob(source, llm, captions, gameplayAmount)
+        if (!wasIdle) {
+          // A busy-enqueue used to change nothing on screen - the rail
+          // refreshes only on run events, so six presses queued six
+          // invisible jobs. Refresh the rail and the count Studio shows.
+          refreshJobs()
+          refreshQueueCount()
+        }
+      } catch (err) {
+        // A swallowed enqueue error is the same silence: surface it the
+        // way run errors are surfaced.
         if (wasIdle) setRunning(false)
-      })
+        setRunError(`Could not add to the queue: ${String(err)}`)
+      } finally {
+        setEnqueueing((n) => n - 1)
+      }
     },
-    []
+    [refreshJobs, refreshQueueCount]
   )
 
   const openJob = useCallback(async (jobId: string) => {
@@ -228,6 +259,8 @@ export default function App() {
         error={runError}
         cancelled={cancelled}
         log={log}
+        enqueueing={enqueueing > 0}
+        queued={queuedCount}
         onCancel={() => {
           api.cancelJob().catch(() => {})
         }}

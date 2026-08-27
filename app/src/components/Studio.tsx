@@ -27,6 +27,8 @@ interface Props {
   error: string | null
   cancelled: boolean
   log: LogLine[]
+  enqueueing: boolean
+  queued: number
   onCancel: () => void
   onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
   onOpenLoop: () => void
@@ -36,7 +38,7 @@ interface Props {
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, cancelled, log, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, cancelled, log, enqueueing, queued, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -148,6 +150,22 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, o
                 {running ? 'QUEUE IT' : 'CUT IT'}
               </button>
             </div>
+            {/* The press must answer on THIS screen: the queue once grew to
+                six invisible jobs because the only evidence lived in views
+                the user was not on. */}
+            {(enqueueing || queued > 0) && (
+              <p className="queue-ack mono">
+                <span className={`led ${enqueueing ? 'led-on' : 'led-half'}`} />
+                {enqueueing
+                  ? 'adding to queue…'
+                  : `${queued} waiting in the queue`}
+                {!enqueueing && (
+                  <button className="btn-ghost" onClick={onOpenQueue}>
+                    view queue
+                  </button>
+                )}
+              </p>
+            )}
             <div className="run-options">
               <div className="opt-group">
                 <span className="opt-label">brain</span>

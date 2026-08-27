@@ -403,6 +403,15 @@ body {
   transition: border-color 0.2s;
 }
 .input-row input:focus { border-bottom-color: var(--amber); }
+/* enqueue acknowledgement — the answer to a QUEUE IT press, on this screen */
+.queue-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--amber);
+}
 .run-options { display: flex; gap: 34px; margin-top: 20px; flex-wrap: wrap; }
 .opt-group { display: flex; align-items: center; gap: 6px; }
 .opt-label {
