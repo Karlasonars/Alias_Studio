@@ -239,6 +239,10 @@ export interface SetupState {
  *  is saved and the gate must not become a wall (§5.9). */
 export interface SaveKeyResult {
   status: 'verified' | 'unverified' | 'rejected'
+  /** on rejection, Google's reason token (API_KEY_INVALID, SERVICE_DISABLED,
+   *  …) — a 403 is not one thing, and the message must name the real next
+   *  step rather than call a valid-but-unenabled key a typo */
+  reason?: string | null
 }
 
 /* ---------- the Instagram loop ---------- */

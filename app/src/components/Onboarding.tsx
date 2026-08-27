@@ -25,6 +25,7 @@ export default function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState(0)
   const [key, setKey] = useState('')
   const [keyState, setKeyState] = useState<KeyState>('idle')
+  const [keyReason, setKeyReason] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
   const [ollama, setOllama] = useState<{ running: boolean; models: string[] } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -68,6 +69,7 @@ export default function Onboarding({ onDone }: Props) {
     try {
       const res = await api.saveGeminiKey(key)
       setKeyState(res.status)
+      setKeyReason(res.reason ?? null)
     } catch (err) {
       // the write itself failed — nothing on disk, so the gate must not open
       setKeyState('idle')
@@ -151,10 +153,20 @@ export default function Onboarding({ onDone }: Props) {
                         : 'Save & verify'}
                 </button>
               </div>
+              {/* A refusal is not one thing (the gate closes for all of
+                  them, but the next step differs): SERVICE_DISABLED means
+                  the key is fine and the API just is not enabled on its
+                  project; other non-invalid reasons usually mean console
+                  restrictions. Calling those "a typo" is the dead end one
+                  layer down. */}
               {keyState === 'rejected' && (
                 <p className="ob-fine">
-                  <span className="led led-err" /> Google rejected that key — a typo,
-                  or it was revoked. Nothing was saved; fix it and try again.
+                  <span className="led led-err" />{' '}
+                  {keyReason === 'SERVICE_DISABLED'
+                    ? 'The key itself is fine, but its Google Cloud project has the Generative Language API disabled. Enable it in the Google console — or make a key at aistudio.google.com, which enables it for you. Nothing was saved.'
+                    : keyReason && keyReason !== 'API_KEY_INVALID'
+                      ? `Google refused the key (${keyReason}). The key itself may be fine — check its restrictions in the Google console. Nothing was saved.`
+                      : 'Google rejected that key — a typo, or it was revoked. Nothing was saved; fix it and try again.'}
                 </p>
               )}
               {keyState === 'unverified' && (

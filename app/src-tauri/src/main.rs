@@ -706,31 +706,58 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
 ///     curl missing). §5.9: inability to check must never become a wall.
 /// §5.11: the key rides a header, and the header reaches curl through
 /// stdin (`-H @-`), so it is never in a URL - and never in argv either.
-fn gemini_key_status(key: &str) -> &'static str {
+fn gemini_key_status(key: &str) -> (&'static str, Option<String>) {
     use std::io::Write;
-    let sink = if cfg!(target_os = "windows") { "NUL" } else { "/dev/null" };
     let spawned = quiet_command("curl")
         .args([
-            "-s", "-m", "8", "-o", sink, "-w", "%{http_code}", "-H", "@-",
+            "-s", "-m", "8", "-w", "\n__HTTP__:%{http_code}", "-H", "@-",
             "https://generativelanguage.googleapis.com/v1beta/models",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn();
     let Ok(mut child) = spawned else {
-        return "unverified";
+        return ("unverified", None);
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(stdin, "x-goog-api-key: {key}");
     }
     let Ok(out) = child.wait_with_output() else {
-        return "unverified";
+        return ("unverified", None);
     };
-    match String::from_utf8_lossy(&out.stdout).trim().parse::<u16>() {
-        Ok(200) | Ok(429) => "verified",
-        Ok(400) | Ok(401) | Ok(403) => "rejected",
-        _ => "unverified",
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (body, code) = match text.rsplit_once("\n__HTTP__:") {
+        Some((body, code_str)) => (body, code_str.trim().parse::<u16>().ok()),
+        None => ("", None),
+    };
+    match code {
+        Some(200) | Some(429) => ("verified", None),
+        // 403 is not one thing: a valid key on a project with the API
+        // disabled (SERVICE_DISABLED) or a console-restricted key both
+        // land here, and calling those "rejected" without the reason is
+        // the dead end one layer down - the key is fine and the fix is a
+        // console click. The reason token rides along so the UI can name
+        // the actual next step.
+        Some(400) | Some(401) | Some(403) => ("rejected", rejection_reason(body)),
+        _ => ("unverified", None),
     }
+}
+
+/// Google's error body carries the specific cause: details[].reason is the
+/// token (API_KEY_INVALID, SERVICE_DISABLED, ...); error.status
+/// (PERMISSION_DENIED) is the coarser fallback. Only these known fields
+/// are extracted - never arbitrary body text into the UI.
+fn rejection_reason(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body.trim()).ok()?;
+    let err = &v["error"];
+    if let Some(details) = err["details"].as_array() {
+        for d in details {
+            if let Some(reason) = d["reason"].as_str() {
+                return Some(reason.to_string());
+            }
+        }
+    }
+    err["status"].as_str().map(String::from)
 }
 
 /// Verify, then save. This used to write unconditionally and return true,
@@ -744,7 +771,7 @@ async fn save_gemini_key(key: String) -> Result<Value, String> {
     if key.is_empty() {
         return Err("key is empty".to_string());
     }
-    let status = gemini_key_status(&key);
+    let (status, reason) = gemini_key_status(&key);
     if status != "rejected" {
         let home = home_dir();
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -762,7 +789,7 @@ async fn save_gemini_key(key: String) -> Result<Value, String> {
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
         }
     }
-    Ok(json!({"status": status}))
+    Ok(json!({"status": status, "reason": reason}))
 }
 
 #[tauri::command]

@@ -45,8 +45,8 @@ function continueButton(): HTMLButtonElement {
   return screen.getByText('Continue') as HTMLButtonElement
 }
 
-async function saveKey(status: string) {
-  commands.save_gemini_key = () => ({ status })
+async function saveKey(status: string, reason: string | null = null) {
+  commands.save_gemini_key = () => ({ status, reason })
   fireEvent.change(screen.getByPlaceholderText('AIza…'), { target: { value: 'AIzaSomething' } })
   await act(async () => {
     fireEvent.click(screen.getByText('Save & verify'))
@@ -61,6 +61,27 @@ describe('the Gemini door proves the key before opening the gate', () => {
     // "Saved ✓" used to mean "written to disk": a typo'd key opened the
     // gate here and failed twenty minutes later inside scoring.
     expect(screen.getByText(/rejected that key/)).toBeTruthy()
+    expect(continueButton().disabled).toBe(true)
+  })
+
+  it('a valid key on an API-disabled project is not called a typo', async () => {
+    // 403 is not one thing: SERVICE_DISABLED means the key is fine and
+    // the fix is a console click. The gate stays closed either way, but
+    // the message must name the real next step, not claim a bad key.
+    commands.check_ollama = notRunning
+    await mountBrainStep()
+    await saveKey('rejected', 'SERVICE_DISABLED')
+    expect(screen.getByText(/Generative Language API disabled/)).toBeTruthy()
+    expect(screen.queryByText(/a typo/)).toBeNull()
+    expect(continueButton().disabled).toBe(true)
+  })
+
+  it('a restricted key names the reason instead of claiming a typo', async () => {
+    commands.check_ollama = notRunning
+    await mountBrainStep()
+    await saveKey('rejected', 'API_KEY_HTTP_REFERRER_BLOCKED')
+    expect(screen.getByText(/API_KEY_HTTP_REFERRER_BLOCKED/)).toBeTruthy()
+    expect(screen.queryByText(/a typo/)).toBeNull()
     expect(continueButton().disabled).toBe(true)
   })
 
