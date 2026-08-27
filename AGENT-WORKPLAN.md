@@ -544,7 +544,8 @@ Decisions worth not relitigating:
 list is in `CLAUDE.md` §7. The worst was that `running` never returned to true after
 an auto-advance, so every job but the first had no Cancel button: T-07 unreachable
 for exactly the jobs the queue exists to run. Nothing automated could have caught it,
-because nothing automated tests the frontend at all. That is **T-36**.
+because at that point nothing automated tested the frontend at all. **T-36** closed
+that: the same defect is now pinned by a component test.
 
 Deferred, each with a reason: drag-reorder needs a `position` column and therefore
 the first schema migration on live DBs (**T-33**); a total-time estimate is *blocked*
@@ -637,24 +638,28 @@ resolution order falls through — but if the shell was meant to set it, every
 installed user downloads an ffmpeg that is already on their disk. Find out which,
 then either wire it or delete the reader and the doc line.
 
-### T-36 · The frontend has no tests                      [P1, and it is the big one]
+### T-36 · The frontend has no tests                      [DONE 2026-08-27]
 
 ```
-Blocked by  nothing
-Proves it   itself — a test runner that catches one of T-08's seven defects
-Watch out   this is scaffolding, and §8 forbids scaffolding for features nobody
-            asked for. It does NOT forbid test infrastructure for code that
-            exists and is shipping broken
+Merged      vitest + jsdom + testing-library; 5 tests in app/src, run by
+            guards.yml after the typecheck; `npm test`
+Proves it   each test re-catches a hand-found T-08 defect, verified by running
+            the suite against the pre-fix revision of the file it pins — every
+            test fails there and passes now
 ```
 
-No vitest, no jest, no `.test.tsx`, no `test` script. `tsc --noEmit` for ~5,300 lines
-of React and `cargo check` for 993 lines of Rust: both prove compilation, neither
-proves behaviour. T-08's seven hand-found defects are the evidence and the
-specification — pick the two or three that a component test could have caught, and
-make the runner earn its place by catching them.
+The runner earned its place as specified: defects 1 (silent busy enqueue),
+3 (the 2 s subprocess poll), 6 (stale stage bars on advance) and 7 (no Cancel
+after advance — the one that made T-07 unreachable) are pinned; 5 (the flat
+history list) partially — sections and FIFO numbering asserted, readability not.
+Defects 2 and 4 are CSS layout and stay with the hand test: a DOM assertion
+cannot see them, and a class-name check would test the test.
 
-`CLAUDE.md` §7 carries the same list and the hand-test rule that stands in until this
-lands.
+The Tauri boundary (`invoke`/`listen`) is mocked at the module seam
+(`app/src/test/tauri.ts`); no product code was restructured. Still uncovered,
+deliberately and stated: CSS layout, the Rust kill path (§6), and anything
+needing a real job's artifacts. `CLAUDE.md` §7 carries the narrowed hand-test
+rule that remains for exactly those.
 
 ### T-37 · `score` fails with `OSError(22)` on some sources  [P?, needs reproduction]
 
