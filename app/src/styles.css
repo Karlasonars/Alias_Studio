@@ -706,6 +706,20 @@ body {
 .set-matrix-table td { padding: 3px 4px; text-align: center; }
 .set-matrix-row { font-size: 11px; color: var(--dim); text-align: left; padding-right: 12px; }
 
+/* Settings → Privacy: PRIVACY.md rendered as-is (T-17). Reading column,
+   not a control panel — measure capped for line length, dim body text. */
+.privacy-doc { max-width: 68ch; padding-bottom: 40px; }
+.privacy-doc h1 { font-family: var(--display); font-size: 22px; margin-bottom: 14px; }
+.privacy-doc h2 {
+  font-family: var(--display); font-size: 16px; margin: 26px 0 8px;
+  padding-top: 14px; border-top: 1px solid var(--line);
+}
+.privacy-doc h3 { font-size: 13px; margin: 18px 0 6px; color: var(--text); }
+.privacy-doc p { font-size: 13px; color: var(--dim); line-height: 1.6; margin-bottom: 10px; }
+.privacy-doc ul { margin: 0 0 10px 18px; }
+.privacy-doc li { font-size: 13px; color: var(--dim); line-height: 1.6; margin-bottom: 6px; }
+.privacy-doc strong { color: var(--text); font-weight: 600; }
+
 .settings-preset-picker { justify-content: flex-start; margin-bottom: 20px; }
 .settings-caption-layout { display: grid; grid-template-columns: 1fr 290px; gap: 34px; align-items: start; }
 .settings-caption-fields { min-width: 0; }

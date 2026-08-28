@@ -130,9 +130,11 @@ export default function Onboarding({ onDone }: Props) {
           </h1>
           <p className="ob-body">
             Long video in, vertical clips out. Speech, laughter, speakers, and camera
-            moves are all computed <em>on this machine</em>. The only thing that ever
-            leaves it is two or three small text calls to score your moments — and
-            every score comes with the full audit trail of how it was made.
+            moves are all computed <em>on this machine</em>, and your video is never
+            uploaded. Scoring sends short transcript excerpts and a few still frames
+            to the model you pick — or nothing at all in Ollama mode. Every network
+            call the app can make is named in Settings → Privacy, and every score
+            comes with the full audit trail of how it was made.
           </p>
           <button className="btn-primary" onClick={() => setStep(1)}>
             Set it up
