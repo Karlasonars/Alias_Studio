@@ -32,7 +32,15 @@ ProgressFn = Callable[[float, str], None]  # (fraction 0..1 or -1, message)
 
 
 class YtDlpError(Exception):
-    """yt-dlp process failure with a cleaned, user-facing message."""
+    """yt-dlp process failure with a cleaned, user-facing message.
+
+    `code` names an errors.CATALOG entry (T-13). Sites raising a dynamic
+    message (the cleaned yt-dlp stderr) leave it unset — the catalogue's
+    recognizer classifies those by content, `is_auth_error` first."""
+
+    def __init__(self, message: str, *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 def _binary_name() -> str:
@@ -60,7 +68,8 @@ def ensure_ytdlp(progress: ProgressFn) -> Path:
     with httpx.stream("GET", url, follow_redirects=True, timeout=config.HTTP_TIMEOUT) as res:
         if res.status_code != 200:
             raise YtDlpError(
-                f"Could not download yt-dlp (HTTP {res.status_code}). Check your connection."
+                f"Could not download yt-dlp (HTTP {res.status_code}). Check your connection.",
+                code="download-failed",
             )
         total = int(res.headers.get("content-length", 0))
         seen = 0
@@ -188,7 +197,7 @@ def _pick_playlist_entry(data: dict) -> dict:
     entry — almost always the main video (clip-forge pattern)."""
     entries = [e for e in data.get("entries") or [] if (e.get("duration") or 0) > 0]
     if not entries:
-        raise YtDlpError("This URL does not contain a downloadable video.")
+        raise YtDlpError("This URL does not contain a downloadable video.", code="url-not-video")
     main = max(entries, key=lambda e: e.get("duration") or 0)
     merged = dict(main)
     merged.setdefault("title", data.get("title"))
@@ -208,7 +217,7 @@ def fetch_meta(url: str, progress: ProgressFn) -> UrlMeta:
     if data.get("_type") == "playlist":
         data = _pick_playlist_entry(data)
     if not data.get("duration") or data["duration"] <= 0:
-        raise YtDlpError("This URL does not point to a downloadable video.")
+        raise YtDlpError("This URL does not point to a downloadable video.", code="url-not-video")
     heatmap = data.get("heatmap")
     if isinstance(heatmap, list) and heatmap:
         heatmap = [
@@ -278,4 +287,6 @@ def download(url: str, out_path: Path, progress: ProgressFn) -> None:
         if candidates:
             candidates[0].replace(out_path)
         else:
-            raise YtDlpError("Download finished but no output file was produced.")
+            raise YtDlpError(
+                "Download finished but no output file was produced.", code="download-no-output"
+            )

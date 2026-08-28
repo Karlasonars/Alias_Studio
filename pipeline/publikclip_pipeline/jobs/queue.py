@@ -171,6 +171,27 @@ def set_job_status(job_id: str, status: str, error: str | None = None, title: st
 
 CANCEL_FLAG = "cancel.requested"
 CANCELLED_MARKER = "cancelled"
+# The described failure (errors.ErrorInfo), written on any stage failure,
+# redacted at write time. Disk truth for the ErrorPanel, T-14's
+# resume-from-stage, and T-15's diagnostic bundle.
+ERROR_FILE = "error.json"
+
+
+def _record_failure(job: Job, stage: "Stage", err: BaseException) -> None:
+    """The choke point (T-13): every stage failure becomes one described,
+    redacted ErrorInfo — the DB row gets the human cause (never a repr),
+    the job dir gets the full structured value."""
+    from .. import errors
+
+    info = errors.describe(err, stage=stage.name)
+    mark_stage(job.id, stage.name, "failed", stage.schema_version, info.cause)
+    set_job_status(job.id, "failed", f"{stage.name}: {info.cause}")
+    try:
+        _atomic_write_json(job.dir / ERROR_FILE, info.to_json())
+    except OSError:
+        # A disk too broken to hold error.json must not mask the original
+        # failure (§5.9) — the DB row above still carries the cause.
+        pass
 
 
 class JobCancelled(Exception):  # noqa: N818 - a signal, not an error
@@ -393,7 +414,18 @@ def stage_statuses(job_id: str) -> dict[str, str]:
 
 
 class StageError(Exception):
-    """A stage failed in a way the user can act on. Message is user-facing."""
+    """A stage failed in a way the user can act on. Message is user-facing.
+
+    `code` names an entry in errors.CATALOG so the UI can attach actions
+    and a docs link; sites without one still honour the contract — their
+    message becomes the cause and the generic actions apply (T-13).
+    `detail` carries technical text (an ffmpeg stderr tail) that belongs
+    behind the UI's disclosure, never in the headline."""
+
+    def __init__(self, message: str, *, code: str | None = None, detail: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
 
 
 ProgressFn = Callable[[str, float, str], None]  # (stage, fraction 0..1 or -1, message)
@@ -478,9 +510,14 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
     upstream_stale = False
     # A stale cancel flag or marker from a previous (possibly hard-killed)
     # run must not cancel THIS run the moment it starts. Run setup, not a
-    # change to resume's contract.
+    # change to resume's contract. error.json follows the same rule: its
+    # consumers (the ErrorPanel, T-14's resume-from-stage) read it BETWEEN
+    # failure and the next spawn — by the time this line runs, the resume
+    # is already underway and what re-runs is the checkpoint contract's
+    # decision, never this file's.
     (job.dir / CANCEL_FLAG).unlink(missing_ok=True)
     (job.dir / CANCELLED_MARKER).unlink(missing_ok=True)
+    (job.dir / ERROR_FILE).unlink(missing_ok=True)
     set_job_status(job.id, "running")
     for stage in stages:
         # The guaranteed-clean cancel boundary: after the previous stage's
@@ -501,12 +538,14 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
         try:
             data = stage.run(_ctx_for(ctx, stage.name, results))
         except StageError as err:
-            mark_stage(job.id, stage.name, "failed", stage.schema_version, str(err))
-            set_job_status(job.id, "failed", f"{stage.name}: {err}")
+            _record_failure(job, stage, err)
             raise
         except Exception as err:  # noqa: BLE001 - record then re-raise
-            mark_stage(job.id, stage.name, "failed", stage.schema_version, repr(err))
-            set_job_status(job.id, "failed", f"{stage.name}: {err!r}")
+            # This arm used to store repr(err) — which is how
+            # OSError(22, 'Invalid argument') ended up on a user's screen.
+            # describe() turns the unknown into a legible shape; the repr
+            # survives only inside error.json's detail field (T-13).
+            _record_failure(job, stage, err)
             raise
         write_checkpoint(job, stage.name, stage.schema_version, data)
         results[stage.name] = data

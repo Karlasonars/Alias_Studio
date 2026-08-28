@@ -50,9 +50,12 @@ class LlmError(Exception):
     behavior.
     """
 
-    def __init__(self, message: str, *, fatal: bool = True):
+    def __init__(self, message: str, *, fatal: bool = True, code: str | None = None):
         super().__init__(message)
         self.fatal = fatal
+        # T-13: names an errors.CATALOG entry so the UI can attach actions.
+        # The message stays the cause either way — the code adds, never hides.
+        self.code = code
 
 
 def gemini_api_key() -> str | None:
@@ -132,7 +135,8 @@ class GeminiClient:
         if not key:
             raise LlmError(
                 "No Gemini API key found. Add one in Settings (or set "
-                "PUBLIKCLIP_GEMINI_API_KEY), or switch to Ollama mode."
+                "PUBLIKCLIP_GEMINI_API_KEY), or switch to Ollama mode.",
+                code="no-gemini-key",
             )
         self._key = key
 
@@ -173,7 +177,10 @@ class GeminiClient:
                     timeout=LLM_TIMEOUT,
                 )
                 if res.status_code in (401, 403):
-                    raise LlmError("Gemini rejected the API key. Check it in Settings.")
+                    raise LlmError(
+                        "Gemini rejected the API key. Check it in Settings.",
+                        code="gemini-key-rejected",
+                    )
                 if res.status_code == 429:
                     # Both a per-minute free-tier throttle and a genuine
                     # "no credits left" stop come back as a bare 429 whose
@@ -189,7 +196,12 @@ class GeminiClient:
                         detail = error_body["message"]
                     except Exception:  # noqa: BLE001
                         error_body, detail = {}, "rate limited"
-                    last_err = LlmError(f"Gemini 429: {_redact(detail, self._key)}")
+                    # code applies to the no-RetryInfo raise below: a 429
+                    # Google says not to retry is quota, not a throttle.
+                    last_err = LlmError(
+                        f"Gemini 429: {_redact(detail, self._key)}",
+                        code="gemini-quota-exhausted",
+                    )
                     retry_delay = _retry_delay_seconds(error_body)
                     if retry_delay is None:
                         raise last_err
@@ -218,6 +230,7 @@ class GeminiClient:
         raise LlmError(
             _redact(f"Gemini call failed after {attempts} attempts: {last_err}", self._key),
             fatal=False,
+            code="llm-call-failed",
         )
 
 
@@ -230,11 +243,15 @@ class OllamaClient:
             res.raise_for_status()
         except httpx.HTTPError as err:
             raise LlmError(
-                "Ollama isn't running. Start it (`ollama serve`) or switch to Gemini mode."
+                "Ollama isn't running. Start it (`ollama serve`) or switch to Gemini mode.",
+                code="ollama-not-running",
             ) from err
         models = [m["name"] for m in res.json().get("models", [])]
         if not models:
-            raise LlmError("Ollama has no models. Pull one, e.g. `ollama pull llama3.1:8b`.")
+            raise LlmError(
+                "Ollama has no models. Pull one, e.g. `ollama pull llama3.1:8b`.",
+                code="ollama-no-models",
+            )
         self.model = model if model in models else _pick_ollama_model(models)
 
     def generate_json(
@@ -258,7 +275,7 @@ class OllamaClient:
             res.raise_for_status()
             data = json.loads(_strip_fences(res.json()["message"]["content"]))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as err:
-            raise LlmError(f"Ollama call failed: {err}", fatal=False) from err
+            raise LlmError(f"Ollama call failed: {err}", fatal=False, code="llm-call-failed") from err
         cache_file.write_text(json.dumps(data), encoding="utf-8")
         return data
 
