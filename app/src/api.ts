@@ -1,5 +1,6 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import type {
+  BootstrapStatus,
   CaptionPreset,
   DescriptionResult,
   EditContext,
@@ -46,6 +47,13 @@ export const api = {
   setupState: () => invoke<SetupState>('get_setup_state'),
   setupStatus: () => invoke<SetupStatusResult>('setup_status'),
   runSetup: () => invoke<void>('run_setup'),
+  // T-40: the pre-python surface. bootstrapStatus is instant, Rust-only
+  // disk truth; runBootstrap is the visible `uv sync` (progress on the
+  // bootstrap-event channel). Callers must not fire setupStatus — a python
+  // one-shot that silently triggers the whole download — until
+  // bootstrapStatus says ready.
+  bootstrapStatus: () => invoke<BootstrapStatus>('bootstrap_status'),
+  runBootstrap: () => invoke<void>('run_bootstrap'),
   hardwareProfile: () => invoke<HardwareProfile | null>('get_hardware_profile'),
   probeHardware: () => invoke<HardwareProfile>('probe_hardware'),
   markOnboarded: () => invoke<void>('mark_onboarded'),

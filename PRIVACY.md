@@ -136,8 +136,11 @@ nothing is downloaded.
 The installed app bootstraps its Python environment with the bundled
 `uv` tool on first launch: Python 3.12 and the pipeline's dependencies
 download from pypi.org and files.pythonhosted.org, and on Windows the
-CUDA build of PyTorch from download.pytorch.org. Several gigabytes,
-once. These are package downloads; nothing of yours is sent.
+CUDA build of PyTorch from download.pytorch.org — about 3.9 GB once,
+measured, of which PyTorch is 3.5 GB (it downloads on machines without
+an NVIDIA GPU too; the app still runs on CPU there). The setup screen
+shows this before it starts and while it runs. These are package
+downloads; nothing of yours is sent.
 
 ## The update check — github.com, once at launch, switchable off
 

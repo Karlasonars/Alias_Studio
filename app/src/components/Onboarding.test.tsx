@@ -163,10 +163,19 @@ describe('the Ollama door leads through instead of dead-ending', () => {
   })
 })
 
-// The warning step hosts SetupModels (T-11), which asks setup_status on
-// mount — a quiet all-present answer unless a test says otherwise.
+// The warning step hosts SetupModels (T-11), which since T-40 asks
+// bootstrap_status first (a ready env here — the cold-machine story is
+// SetupModels.test.tsx's) and only then setup_status — a quiet all-present
+// answer unless a test says otherwise.
 async function reachWarningStep() {
   commands.check_ollama = ollamaReady
+  commands.bootstrap_status ??= () => ({
+    ready: true,
+    env_download_bytes: 3_857_000_000,
+    env_disk_bytes: 9_500_000_000,
+    models_approx_bytes: 2_390_000_000,
+    free_bytes: 200_000_000_000
+  })
   commands.setup_status ??= () => ({
     items: [{ id: 'whisper', label: 'Speech recognition', bytes: 1_621_672_079, present: true }],
     total_missing_bytes: 0

@@ -645,6 +645,7 @@ unexpectedly" with the actual error thrown away.
 | `save_gemini_key`, `save_pexels_key` | credential storage |
 | `get_setup_state`, `mark_onboarded`, `check_ollama` | first-run flow |
 | `update_checks_enabled`, `set_update_checks` | the launch update-check preference — a marker file in `PUBLIKCLIP_HOME`, on by default (T-16) |
+| `bootstrap_status`, `run_bootstrap` | T-40: the pre-python environment — instant disk-truth status (ready? costs? free space?), and the visible `uv sync` with disk-watcher progress on `bootstrap-event` |
 | `ig_status`, `ig_connect` | Instagram auth |
 | `export_clip` | save a rendered clip out of the job dir |
 
@@ -767,6 +768,14 @@ itself under Settings → Privacy via a build-time `?raw` import
 This section covers the model-weight subset in engineering detail.
 
 ### Downloaded weights
+
+On a packaged build, everything below is the SECOND half of the first run:
+the Python environment itself (~3.86 GB download on Windows, torch-cu128
+being 3.46 GB of it — measured 2026-08-28 from uv.lock plus HEAD requests,
+identical with or without an NVIDIA GPU because the CUDA index marker in
+`pyproject.toml` is per-platform) must materialize before python can run at
+all. §16's first-launch section covers how T-40 made that visible; the
+constants live in `main.rs` and are guarded by `tests/test_bootstrap_numbers.py`.
 
 A first job fetches **~2.39 GB, through three different downloaders** — measured
 2026-08-27 from a complete install (T-11), because the "~2.5 GB" figure had
@@ -1108,7 +1117,28 @@ list keeps `.venv`, `__pycache__`, `.pytest_cache` and tests out of the
 bundle — and specifically `wav2vec2_checkpoints`, a stray HF cache a developer
 machine may carry that is 700+ MB and must never ride into the app.
 
-### Auto-update (E15-F01, T-16)
+### The first launch (T-40)
+
+A packaged first launch must download Python 3.12 and every dependency in
+`pyproject.toml` before the sidecar can answer anything — **~3.86 GB on
+Windows** (torch-cu128 3.46 GB; ~10 minutes at 50 Mbps), then T-11's
+~2.39 GB of models: **~6.3 GB true first-run total**. Until T-40 this was
+invisible: SetupModels fired `setup_status` on mount, and on a cold machine
+that python one-shot IS the download, hidden behind "checking what is
+already on this machine…".
+
+The fix is ordering plus visibility. `bootstrap_status` (Rust, instant,
+disk-truth: env present? what does a cold bootstrap cost? how much is
+free?) answers first, and the python one-shot fires only once the env is
+ready. When it is not, the environment renders as the first row of the
+setup list with its measured size, the free-space line warns (never walls,
+§5.9) using the same headroom rule as `disk.py`, and `run_bootstrap` runs
+the visible `uv sync`: progress is T-11's disk-watcher pattern implemented
+in Rust (python cannot run yet) — real bytes appearing under the venv and
+uv's cache against a measured apparent total, uv's own output never parsed.
+The child carries KILL_ON_JOB_CLOSE like the setup downloader; a killed or
+failed bootstrap resumes at wheel granularity from uv's cache, and the
+screen offers retry with the last stderr line named.
 
 Packaged builds check `github.com/Karlasonars/Alias_Studio`'s latest release
 for `latest.json` once at launch (switchable off — the preference is a

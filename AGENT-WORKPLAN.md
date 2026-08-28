@@ -1003,6 +1003,40 @@ Watch out   structured progress ALREADY EXISTS — {event:'progress', stage, fra
             the profile file rather than re-measuring anything
 ```
 
+### T-40 · P0 — the packaged first-launch download              [DONE 2026-08-28]
+
+```
+Merged      measured: the env is ~3.86 GB on Windows (torch-cu128 3.46 GB
+            — from uv.lock sizes + HEAD for the three unsized pytorch
+            wheels + uv's 21 MiB CPython; NOT downloaded to measure), and
+            it is IDENTICAL without an NVIDIA GPU (the CUDA marker is
+            per-platform); true first run ≈ 6.3 GB. Rust bootstrap_status
+            (disk-truth: ready/costs/free) + run_bootstrap (visible `uv
+            sync`, T-11's disk-watcher pattern ported to Rust because
+            python cannot run yet, KILL_ON_JOB_CLOSE); SetupModels asks
+            it FIRST and never fires the python one-shot on a cold
+            machine; env priced as the first row; free-space warn (never
+            wall); README/PRIVACY/SPEC numbers corrected
+Proves it   SetupModels.test.tsx (+7): the one-shot is never fired while
+            the env is missing (THE pin — that call is the silent
+            download), env priced before a byte moves, real-bytes
+            progress, chain into models, failed-bootstrap retry, warn vs
+            honest silence on unreadable free space.
+            test_bootstrap_numbers.py (3): the Rust models figure tracks
+            setup.py's items within 5%, the three env constants keep
+            their documented ordering, and ENV_DOWNLOAD_BYTES can never
+            be edited below uv.lock's own sized floor + the torch floor
+Watch out   T-12's per-job check needed NO number fixed: it runs inside
+            python, which structurally cannot exist before the env does —
+            the understated surface was onboarding, and the pre-python
+            disk answer now comes from bootstrap_status. Bootstrap
+            failure is resumable at wheel granularity (uv cache), BUT a
+            drop mid-torch restarts that one 3.46 GB wheel: uv does not
+            range-resume a partial wheel. Bundling the env in the
+            installer: numbers in PR #32 — every T-16 update would ship
+            it again; owner's call, reported not built
+```
+
 **Phase 1 exit:** 20 beta users complete a job; crashes < 5 %; zero data-loss
 incidents; `guards.yml` green on every PR — **and `windows.yml` green too**, which it
 was not for 37 commits across 9 merged PRs until T-26 (see that entry). Make it a

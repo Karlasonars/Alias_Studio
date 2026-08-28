@@ -295,6 +295,31 @@ export interface SetupStatusResult {
   total_missing_bytes: number
 }
 
+/** T-40: what the shell can say about the Python environment BEFORE python
+ *  exists — packaged first launches must download it (~3.86 GB measured),
+ *  and every number here is served by Rust because nothing else can run. */
+export interface BootstrapStatus {
+  ready: boolean
+  /** compressed download for a cold bootstrap */
+  env_download_bytes: number
+  /** physical free space the bootstrap needs */
+  env_disk_bytes: number
+  /** the first-run models, approximate — itemized by setup once python runs */
+  models_approx_bytes: number
+  /** free bytes on the home volume; null = unreadable (§5.9: warn, never wall) */
+  free_bytes: number | null
+}
+
+/** Tauri channel: bootstrap-event. 'progress' carries real bytes that
+ *  appeared on disk (T-11's disk-truth rule — uv's output is not parsed). */
+export interface BootstrapEvent {
+  event: 'progress' | 'result'
+  bytes?: number
+  fraction?: number
+  ok?: boolean
+  stderr?: string
+}
+
 /** One line of the `setup run` JSONL stream (Tauri channel: setup-event).
  *  'item' rows carry per-download state; 'result' ends a run; 'exited' is
  *  the process dying unexpectedly; 'interrupted' is the shell killing
