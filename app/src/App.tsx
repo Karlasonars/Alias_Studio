@@ -342,14 +342,14 @@ export default function App() {
         onOpenSettings={() => setView('settings')}
         onOpenQueue={() => setView('queue')}
         onOpenJob={openJob}
-        onResume={(id, llm) => {
+        onResume={(id, fromStage) => {
           setRunning(true)
           setRunError(null)
           setCancelled(false)
           setStages({})
           setLog([])
           setActiveJob(id)
-          api.resumeJob(id, llm)
+          api.resumeJob(id, undefined, undefined, undefined, undefined, fromStage)
         }}
       />
     )

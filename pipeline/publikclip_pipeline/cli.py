@@ -12,7 +12,7 @@ import json
 import sys
 import time
 
-from . import config, errors, winpatches
+from . import config, errors, hardware_profile, winpatches
 from .jobs import queue
 
 winpatches.apply_all()
@@ -101,6 +101,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if job is None:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
+    # T-14 (E14-F02): the user chose where to restart. Invalidate that one
+    # stage; run_stages' cascade re-runs everything after it and nothing
+    # before. Without the flag, resume behaves exactly as it always has.
+    if getattr(args, "from_stage", None):
+        queue.invalidate_stage(job, args.from_stage)
     if args.llm or args.captions or args.camera or args.gameplay_amount is not None:
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -268,6 +273,15 @@ def cmd_jobs(args: argparse.Namespace) -> int:
         return 0
     if sub == "cancel-pending":
         print(json.dumps(queue.cancel_pending(args.job_id)))
+        return 0
+    if sub == "resume-info":
+        # T-14: everything the resume picker shows — statuses, the failed
+        # stage as the default, measured cost per starting stage.
+        job = queue.get_job(args.job_id)
+        if job is None:
+            print(json.dumps({"error": f"no job {args.job_id}"}))
+            return 2
+        print(json.dumps(queue.resume_info(job)))
         return 0
     if sub == "mark-cancelled":
         print(json.dumps(queue.mark_cancelled(args.job_id)))
@@ -665,6 +679,13 @@ def main(argv: list[str] | None = None) -> int:
         "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
     )
+    # hardware_profile.STAGES is the light-import copy of cli._stages()'s
+    # order (a test pins them equal); argparse must not pay the torch tax.
+    p_resume.add_argument(
+        "--from-stage", dest="from_stage", choices=list(hardware_profile.STAGES),
+        default=None,
+        help="invalidate this stage first, so the run re-does it and everything after (T-14)",
+    )
     p_resume.set_defaults(fn=cmd_resume)
 
     p_hw = sub.add_parser(
@@ -697,6 +718,10 @@ def main(argv: list[str] | None = None) -> int:
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
     )
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
+    p_ri = jobs_sub.add_parser(
+        "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"
+    )
+    p_ri.add_argument("job_id")
     jobs_sub.add_parser("reconcile", help="app-start bookkeeping for ghost 'running' rows")
     p_cp = jobs_sub.add_parser("cancel-pending", help="cancel a job that has not started")
     p_cp.add_argument("job_id")

@@ -60,6 +60,38 @@ def _previous_outputs(job_dir: Path) -> dict:
         return {}
 
 
+def drop_reproducible_outputs(job_dir: Path) -> list[int]:
+    """T-14's render invalidation: delete the rendered files this stage
+    would re-encode anyway, keeping (a) render.json — _previous_outputs IS
+    the adoption map — and (b) the files of structurally-edited clips,
+    which run() adopts rather than reproduces. Deleting a kept file would
+    silently downgrade adoption into a from-settings re-render, destroying
+    the user's edit. The keep set is computed from CURRENT clip_edits, not
+    the last run's kept_from_editor list, because a clip can gain
+    structural edits after the render that recorded that list. Returns the
+    dropped clip indices; empty when every clip is protected (then the
+    resume is honestly a no-op)."""
+    previous = _previous_outputs(job_dir)
+    edits = _load_clip_edits(job_dir)
+    try:
+        score = json.loads((job_dir / "score.json").read_text(encoding="utf-8"))
+        clips = (score.get("data") or {}).get("clips") or []
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        clips = []
+    dropped: list[int] = []
+    for key, entry in previous.items():
+        try:
+            idx = int(key)
+        except ValueError:
+            continue
+        clip = clips[idx] if 0 <= idx < len(clips) else {}
+        if _has_structural_edits(edits.get(key) or {}, clip):
+            continue
+        Path(entry["path"]).unlink(missing_ok=True)
+        dropped.append(idx)
+    return sorted(dropped)
+
+
 def _has_structural_edits(edit: dict, clip: dict) -> bool:
     """Whether this clip was reshaped in a way this stage cannot reproduce.
 

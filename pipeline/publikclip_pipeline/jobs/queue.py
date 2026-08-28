@@ -1,6 +1,6 @@
 """SQLite-backed job store with per-stage checkpoints.
 
-Design (PLAN.md §3): artifacts on disk are the truth; the DB is bookkeeping.
+Design (PLAN.md Â§3): artifacts on disk are the truth; the DB is bookkeeping.
 A stage is complete iff its DB row says done AND its checkpoint JSON exists
 with the current schema_version. Kill the process at any point and `resume`
 re-runs only the stages whose checkpoints are missing or stale.
@@ -111,8 +111,8 @@ def update_settings(job_id: str, settings_json: str) -> Job | None:
     A job's settings live in the DB row (what run_stages reads) and in
     <job_dir>/settings.json (what the per-clip edit path reads). Writing only
     one of them splits the job's own state: a restyle would re-render the
-    clips correctly from the DB while the clip editor kept showing — and
-    re-rendering with — the pre-restyle values, silently undoing the restyle
+    clips correctly from the DB while the clip editor kept showing â€” and
+    re-rendering with â€” the pre-restyle values, silently undoing the restyle
     for any clip touched afterwards. Both, or neither.
     """
     with _connect() as conn:
@@ -155,17 +155,17 @@ def set_job_status(job_id: str, status: str, error: str | None = None, title: st
 # Cancellation (T-07 / E2-F07)
 #
 # Two sentinel files in the job dir carry the cancel protocol, and their
-# ownership is deliberately split across two processes — do not "tidy" one
+# ownership is deliberately split across two processes â€” do not "tidy" one
 # half without the other (main.rs carries the matching comment):
 #
-#   cancel.requested — written by the Rust shell (cancel_job), consumed
+#   cancel.requested â€” written by the Rust shell (cancel_job), consumed
 #       here: run_stages exits at the next stage boundary, and deletes any
 #       stale copy when a run starts, so resuming a hard-killed job cannot
 #       cancel itself.
-#   cancelled — the library's marker. list_job_dirs (main.rs) reads the
+#   cancelled â€” the library's marker. list_job_dirs (main.rs) reads the
 #       filesystem, not SQLite, so this file is what makes 'cancelled'
 #       visible there. Written by whichever side knows first: this module
-#       at a boundary, the shell right after a hard kill — which keeps the
+#       at a boundary, the shell right after a hard kill â€” which keeps the
 #       library correct even if the bookkeeping one-shot never runs.
 #       Deleted here when a run starts.
 
@@ -179,7 +179,7 @@ ERROR_FILE = "error.json"
 
 def _record_failure(job: Job, stage: "Stage", err: BaseException) -> None:
     """The choke point (T-13): every stage failure becomes one described,
-    redacted ErrorInfo — the DB row gets the human cause (never a repr),
+    redacted ErrorInfo â€” the DB row gets the human cause (never a repr),
     the job dir gets the full structured value."""
     from .. import errors
 
@@ -190,7 +190,7 @@ def _record_failure(job: Job, stage: "Stage", err: BaseException) -> None:
         _atomic_write_json(job.dir / ERROR_FILE, info.to_json())
     except OSError:
         # A disk too broken to hold error.json must not mask the original
-        # failure (§5.9) — the DB row above still carries the cause.
+        # failure (Â§5.9) â€” the DB row above still carries the cause.
         pass
 
 
@@ -299,7 +299,7 @@ def mark_cancelled(job_id: str) -> dict:
 
 
 def _drop_corrupt_render_outputs(job: Job) -> None:
-    """Delete render outputs the killed run left truncated — the file,
+    """Delete render outputs the killed run left truncated â€” the file,
     never the checkpoint.
 
     A kill mid-encode can truncate an mp4 that an older, still-valid render
@@ -308,7 +308,7 @@ def _drop_corrupt_render_outputs(job: Job) -> None:
     done. Deleting the file routes through machinery that already exists:
     artifacts_ok fails (a listed path is gone) so the stage re-runs, while
     _previous_outputs keeps its adoption map for every clip whose file
-    verified — per-file invalidation with no checkpoint surgery. Pruning
+    verified â€” per-file invalidation with no checkpoint surgery. Pruning
     checkpoint entries instead would let artifacts_ok pass with a clip
     missing.
 
@@ -336,6 +336,98 @@ def _drop_corrupt_render_outputs(job: Job) -> None:
             continue
         if not verify_output(out, float(entry["duration"]))["ok"]:
             out.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Resume from a chosen stage (T-14 / E14-F02)
+
+
+def invalidate_stage(job: Job, stage_name: str) -> dict:
+    """Make the chosen stage re-run on this job's next run, and let
+    run_stages' upstream_stale cascade invalidate everything after it
+    (Â§4 rule 2, already implemented and tested) â€” never a second cascade.
+
+    For every stage but render, deleting the checkpoint file is the whole
+    mechanism: read_checkpoint returns None, the stage re-runs, and the
+    artifacts it rewrites are its own. render is different â€” T-07's lesson
+    (_drop_corrupt_render_outputs), reused: render.json IS the adoption map
+    (_previous_outputs) that lets run() carry forward clips the editor
+    reshaped, so deleting the checkpoint would re-render those clips from
+    job settings and destroy the user's structural edits. Delete FILES
+    instead: the reproducible clips' mp4s go, artifacts_ok's exists() check
+    routes the re-run, and the kept clips ride the intact map. When every
+    clip is editor-protected there is nothing to drop and the resume is
+    honestly a no-op â€” the right outcome, not a gap.
+    """
+    if stage_name == "render":
+        from ..render.stage import drop_reproducible_outputs
+
+        return {"stage": stage_name, "dropped_clips": drop_reproducible_outputs(job.dir)}
+    checkpoint_path(job, stage_name).unlink(missing_ok=True)
+    return {"stage": stage_name, "dropped_clips": None}
+
+
+def resume_info(job: Job) -> dict:
+    """Everything the resume picker shows for one job: per-stage status
+    (disk truth for 'done', error.json for 'failed'), the default stage a
+    failed job should offer preselected, and a measured cost estimate for
+    re-running from each stage on THIS machine.
+
+    The estimate is T-10's medians Ã— this job's source duration, summed
+    over the chosen stage and everything after (the cascade re-runs the
+    tail, so the tail is the cost). It is None unless every stage in that
+    tail has a sample under the CURRENT hardware key â€” a partial sum would
+    silently understate, which is a fabricated number with extra steps
+    (the same rule as hardware_profile._estimate, Â§5.9's empty case). The
+    stored profile key is used as-is: this function must stay a cheap
+    one-shot and never probes.
+    """
+    import statistics
+
+    from .. import hardware_profile  # lazy â€” hardware_profile imports this module
+
+    duration = None
+    try:
+        envelope = json.loads(checkpoint_path(job, "ingest").read_text(encoding="utf-8"))
+        raw = ((envelope.get("data") or {}).get("probe") or {}).get("duration_sec")
+        if isinstance(raw, (int, float)) and raw > 0:
+            duration = float(raw)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        pass
+
+    profile = hardware_profile.load()
+    bucket = (profile.get("measured") or {}).get(profile.get("key")) or {}
+    medians: dict[str, float | None] = {}
+    for name in hardware_profile.STAGES:
+        samples = ((bucket.get("stages") or {}).get(name) or {}).get("samples") or []
+        medians[name] = statistics.median(samples) if samples else None
+
+    # A job that finished must not pretend a failure happened: the default
+    # exists only for a failed job, from the stage T-13 recorded.
+    failed_stage = None
+    if job.status == "failed":
+        try:
+            payload = json.loads((job.dir / ERROR_FILE).read_text(encoding="utf-8"))
+            if payload.get("stage") in hardware_profile.STAGES:
+                failed_stage = payload["stage"]
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    names = list(hardware_profile.STAGES)
+    stages = []
+    for i, name in enumerate(names):
+        tail = [medians[n] for n in names[i:]]
+        estimate = None
+        if duration is not None and all(m is not None for m in tail):
+            estimate = int(round(duration * sum(tail)))
+        if name == failed_stage:
+            status = "failed"
+        elif checkpoint_path(job, name).exists():
+            status = "done"
+        else:
+            status = "missing"
+        stages.append({"name": name, "status": status, "estimate_sec": estimate})
+    return {"stages": stages, "default_stage": failed_stage, "duration_sec": duration}
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +509,7 @@ class StageError(Exception):
     """A stage failed in a way the user can act on. Message is user-facing.
 
     `code` names an entry in errors.CATALOG so the UI can attach actions
-    and a docs link; sites without one still honour the contract — their
+    and a docs link; sites without one still honour the contract â€” their
     message becomes the cause and the generic actions apply (T-13).
     `detail` carries technical text (an ffmpeg stderr tail) that belongs
     behind the UI's disclosure, never in the headline."""
@@ -450,7 +542,7 @@ def fingerprint_ok(stored: Any, current: Any, factory: Any) -> bool:
 
     The naive comparison (`stored == current`) is wrong the moment a new
     setting is added: every checkpoint written before it exists lacks the
-    key, mismatches, and throws away work that is still perfectly valid —
+    key, mismatches, and throws away work that is still perfectly valid â€”
     an hour of transcription discarded because someone added an unrelated
     toggle.
 
@@ -493,10 +585,10 @@ class Stage:
 
 
 def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[str, dict]:
-    """Run stages in order, skipping fresh checkpoints. Returns stage→data.
+    """Run stages in order, skipping fresh checkpoints. Returns stageâ†’data.
 
-    The pipeline is a linear chain — every stage consumes the outputs of the
-    ones before it — so a stage that re-runs invalidates everything after it,
+    The pipeline is a linear chain â€” every stage consumes the outputs of the
+    ones before it â€” so a stage that re-runs invalidates everything after it,
     regardless of what those stages' own checkpoints say. Without this
     cascade a settings change can recompute an upstream stage while a
     downstream stage happily serves output derived from the OLD upstream
@@ -512,7 +604,7 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
     # run must not cancel THIS run the moment it starts. Run setup, not a
     # change to resume's contract. error.json follows the same rule: its
     # consumers (the ErrorPanel, T-14's resume-from-stage) read it BETWEEN
-    # failure and the next spawn — by the time this line runs, the resume
+    # failure and the next spawn â€” by the time this line runs, the resume
     # is already underway and what re-runs is the checkpoint contract's
     # decision, never this file's.
     (job.dir / CANCEL_FLAG).unlink(missing_ok=True)
@@ -532,7 +624,7 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
             results[stage.name] = cached
             progress(stage.name, 1.0, "cached")
             continue
-        upstream_stale = True  # this stage re-runs → everything after it is stale
+        upstream_stale = True  # this stage re-runs â†’ everything after it is stale
         mark_stage(job.id, stage.name, "running", stage.schema_version)
         progress(stage.name, -1.0, "starting")
         try:
@@ -541,7 +633,7 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
             _record_failure(job, stage, err)
             raise
         except Exception as err:  # noqa: BLE001 - record then re-raise
-            # This arm used to store repr(err) — which is how
+            # This arm used to store repr(err) â€” which is how
             # OSError(22, 'Invalid argument') ended up on a user's screen.
             # describe() turns the unknown into a legible shape; the repr
             # survives only inside error.json's detail field (T-13).

@@ -18,6 +18,25 @@ export interface ErrorInfo {
   signature?: string | null
 }
 
+/** T-14 (E14-F02): one row of `jobs resume-info` — the resume picker's data.
+ *  status is disk truth ('done' = the checkpoint exists), except 'failed',
+ *  which comes from T-13's error.json. estimate_sec is the measured cost of
+ *  re-running from this stage THROUGH THE END on this machine (T-10's
+ *  medians × this job's duration); null whenever any stage in that tail has
+ *  no measurement under the current hardware key — never an invented number. */
+export interface ResumeStageInfo {
+  name: string
+  status: 'done' | 'failed' | 'missing'
+  estimate_sec: number | null
+}
+
+export interface ResumeInfo {
+  stages: ResumeStageInfo[]
+  /** the failed stage to preselect; null for a job that did not fail */
+  default_stage: string | null
+  duration_sec: number | null
+}
+
 export interface PipelineEvent {
   event: string
   stage?: string

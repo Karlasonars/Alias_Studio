@@ -14,7 +14,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { commands, emit, idleAppCommands, resetTauri } from './test/tauri'
+import { callsTo, commands, emit, idleAppCommands, invokeMock, resetTauri } from './test/tauri'
 
 vi.mock('@tauri-apps/api/core', async () => {
   const t = await import('./test/tauri')
@@ -73,6 +73,47 @@ describe('a job start is one transition, wherever it came from (§5.12)', () => 
     // job two has not run RENDER; a green bar for it belongs to job one
     expect(document.querySelectorAll('.deck-row.done').length).toBe(0)
     expect(screen.queryByText(/encoded 4 clips/)).toBeNull()
+  })
+})
+
+describe('a rail resume goes through the picker (T-14)', () => {
+  it('opens the picker with the failed stage preselected, and resumes with the choice', async () => {
+    commands.list_job_dirs = () => [
+      { id: 'job-one', title: 'My video', rendered: false, cancelled: false }
+    ]
+    let resolveInfo!: (v: unknown) => void
+    commands.resume_info = () => new Promise((resolve) => (resolveInfo = resolve))
+    commands.resume_job = () => undefined
+    await mountStudio()
+
+    fireEvent.click(screen.getByText('My video'))
+    // the picker answers immediately; plain resume is available before the
+    // one-shot does (§5.9 — an unreadable answer must never block resume)
+    expect(screen.getByText('continue from where it stopped')).toBeTruthy()
+    expect(callsTo('resume_job')).toBe(0) // choosing, not yet resuming
+
+    await act(async () => {
+      resolveInfo({
+        stages: [
+          { name: 'asr', status: 'done', estimate_sec: null },
+          { name: 'score', status: 'failed', estimate_sec: null }
+        ],
+        default_stage: 'score',
+        duration_sec: 600
+      })
+    })
+    expect(document.querySelector('.resume-option.opt-on')?.textContent).toContain('JUDGE')
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('RESUME'))
+    })
+    expect(callsTo('resume_job')).toBe(1)
+    const args = invokeMock.mock.calls.find(([c]) => c === 'resume_job')?.[1] as Record<
+      string,
+      unknown
+    >
+    expect(args.jobId).toBe('job-one')
+    expect(args.fromStage).toBe('score')
   })
 })
 
