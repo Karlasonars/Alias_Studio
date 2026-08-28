@@ -157,7 +157,7 @@ class RenderStage(Stage):
         score = prior.get("score")
         camera = prior.get("camera")
         if not (ingest and diarize and events and score and camera):
-            raise StageError("Render needs every prior stage output.")
+            raise StageError("Render needs every prior stage output.", code="prior-stage-missing")
 
         media = ingest["media_path"]
         probe = ingest["probe"]
@@ -265,12 +265,17 @@ class RenderStage(Stage):
                     letterbox_fill=clip_fill,
                 )
             except RuntimeError as err:
-                raise StageError(str(err)) from err
+                # renderer's message leads with raw ffmpeg stderr — headline
+                # material for a developer, disclosure material for a user.
+                raise StageError(
+                    f"Clip {i} failed to encode.", code="render-failed", detail=str(err)
+                ) from err
             check = renderer.verify_output(out_path, end - start)
             if not check["ok"]:
                 raise StageError(
                     f"Clip {i} failed verification (duration {check['duration']:.1f}s, "
-                    f"{check['width']}x{check['height']})."
+                    f"{check['width']}x{check['height']}).",
+                    code="clip-verification-failed",
                 )
             outputs.append(
                 {
@@ -286,7 +291,7 @@ class RenderStage(Stage):
             )
 
         if not outputs:
-            raise StageError("No clips were rendered.")
+            raise StageError("No clips were rendered.", code="no-clips-rendered")
         return {
             "outputs": outputs,
             "kept_from_editor": kept_from_editor,

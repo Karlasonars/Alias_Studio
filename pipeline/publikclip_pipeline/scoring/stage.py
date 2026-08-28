@@ -144,7 +144,10 @@ class ScoreStage(Stage):
         events = prior.get("events")
         cands = prior.get("candidates")
         if not (ingest and diarize and events and cands):
-            raise StageError("Scoring needs ingest + diarize + events + candidates.")
+            raise StageError(
+                "Scoring needs ingest + diarize + events + candidates.",
+                code="prior-stage-missing",
+            )
 
         llm_mode = ctx.settings.llm_mode
         try:
@@ -204,7 +207,9 @@ class ScoreStage(Stage):
                 consecutive_failures += 1
                 last_llm_error = err
                 if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
-                    raise StageError(self._breaker_message(err)) from err
+                    raise StageError(
+                        self._breaker_message(err), code="llm-consecutive-failures"
+                    ) from err
                 continue
             except Exception as err:  # noqa: BLE001
                 self._count_failure(ctx, i, err)
@@ -212,7 +217,9 @@ class ScoreStage(Stage):
                 consecutive_failures += 1
                 last_llm_error = err
                 if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
-                    raise StageError(self._breaker_message(err)) from err
+                    raise StageError(
+                        self._breaker_message(err), code="llm-consecutive-failures"
+                    ) from err
                 continue
             consecutive_failures = 0  # the service is alive; isolated skips stay §5.9
 
@@ -253,9 +260,13 @@ class ScoreStage(Stage):
                     f"Scoring produced nothing: the LLM failed on all {llm_failures} "
                     f"moment(s) it was asked about (last error: {last_llm_error}). "
                     "Nothing was scored — resume this job to retry once the service "
-                    "or connection recovers."
+                    "or connection recovers.",
+                    code="llm-all-failed",
                 )
-            raise StageError("No candidate produced a scoreable transcript.")
+            raise StageError(
+                "No candidate produced a scoreable transcript.",
+                code="no-scoreable-transcript",
+            )
 
         # Rank by best pre-visual platform score, take the finalists.
         def _text_rank(entry: dict) -> float:

@@ -97,7 +97,10 @@ class CameraStage(Stage):
         events = prior.get("events")
         score = prior.get("score")
         if not (ingest and diarize and events and score):
-            raise StageError("Camera needs ingest + diarize + events + score outputs.")
+            raise StageError(
+                "Camera needs ingest + diarize + events + score outputs.",
+                code="prior-stage-missing",
+            )
 
         media = ingest["media_path"]
         probe = ingest["probe"]

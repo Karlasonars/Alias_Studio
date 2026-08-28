@@ -1,3 +1,23 @@
+/** T-13 (E14-F01): a failure as a value, not a string. Produced only by
+ *  errors.describe() in Python — every field arrives redacted. `error` on
+ *  the result event stays the flat cause string, so a producer that
+ *  predates this shape (or an old job's DB row) still renders. */
+export interface ErrorInfo {
+  /** stable catalogue id, e.g. "gemini-key-rejected"; "unknown" is honest */
+  code: string
+  /** human-language cause — never a repr, never a traceback */
+  cause: string
+  /** at least one concrete step; may be empty only for legacy strings */
+  actions: string[]
+  /** repo-relative docs anchor, e.g. "SPECIFICATION.md#20-troubleshooting" */
+  docs?: string | null
+  stage?: string | null
+  /** technical text (stderr tail / traceback), behind the disclosure */
+  detail?: string | null
+  /** exception class + errno — groups recurrences without claiming a cause */
+  signature?: string | null
+}
+
 export interface PipelineEvent {
   event: string
   stage?: string
@@ -6,6 +26,7 @@ export interface PipelineEvent {
   job_id?: string
   ok?: boolean
   error?: string
+  error_info?: ErrorInfo
   stderr?: string
   /** E1-F07 'disk' events only: 'warn' means the job starts anyway with
    *  `message` on screen; 'block' means the run fails before anything is

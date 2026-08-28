@@ -188,7 +188,9 @@ class CandidatesStage(Stage):
         diarize = prior.get("diarize")
         events = prior.get("events")
         if not (ingest and diarize and events):
-            raise StageError("Candidates need ingest + diarize + events outputs.")
+            raise StageError(
+                "Candidates need ingest + diarize + events outputs.", code="prior-stage-missing"
+            )
 
         segments = diarize["segments"]
         duration = float(ingest["probe"]["duration_sec"])
@@ -196,7 +198,7 @@ class CandidatesStage(Stage):
 
         curves_path = Path(events["curves_path"])
         if not curves_path.exists():
-            raise StageError("curves.json missing — re-run events.")
+            raise StageError("curves.json missing — re-run events.", code="prior-stage-missing")
         curves = json.loads(curves_path.read_text(encoding="utf-8"))
 
         ctx.emit(-1, "Detecting scene changes…")
@@ -241,7 +243,8 @@ class CandidatesStage(Stage):
         )
         if not candidates:
             raise StageError(
-                "No candidate moments found — the video may be too short or too quiet."
+                "No candidate moments found — the video may be too short or too quiet.",
+                code="no-candidates",
             )
 
         # Persist the curve for the review UI's timeline visualization.

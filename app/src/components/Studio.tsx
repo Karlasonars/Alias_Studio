@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { hardwareLabel, sixtyMinEstimate } from '../hw'
-import type { HardwareProfile, JobSummary, LogLine } from '../types'
+import type { ErrorInfo, HardwareProfile, JobSummary, LogLine } from '../types'
+import ErrorPanel from './ErrorPanel'
 import KeyModal from './KeyModal'
 
 const STAGE_ORDER = [
@@ -25,7 +26,7 @@ interface Props {
   jobs: JobSummary[]
   running: boolean
   stages: Record<string, { fraction: number; message: string }>
-  error: string | null
+  error: ErrorInfo | null
   cancelled: boolean
   /** E1-F07 warn-level disk notice: the job is running, just tight on space */
   diskNotice: string | null
@@ -280,12 +281,7 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
             </section>
           )}
 
-          {error && (
-            <section className="error-block">
-              <span className="led led-err" />
-              {error}
-            </section>
-          )}
+          {error && <ErrorPanel error={error} />}
         </div>
 
         {showConsole && (

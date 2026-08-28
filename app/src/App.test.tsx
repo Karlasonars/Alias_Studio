@@ -76,6 +76,42 @@ describe('a job start is one transition, wherever it came from (§5.12)', () => 
   })
 })
 
+describe('a described failure survives the exited fallback (T-13)', () => {
+  it('renders error_info actions and does not let exited stomp the described error', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-one' })
+    await pipelineEvent({
+      event: 'result',
+      ok: false,
+      job_id: 'job-one',
+      error: 'Gemini rejected the API key. Check it in Settings.',
+      error_info: {
+        code: 'gemini-key-rejected',
+        cause: 'Gemini rejected the API key. Check it in Settings.',
+        actions: ['Check the key in Settings — re-paste it from aistudio.google.com.'],
+        stage: 'score'
+      }
+    })
+    expect(screen.getByText(/re-paste it from aistudio/)).toBeTruthy()
+    // Rust emits 'exited' on EVERY nonzero exit, after the result event.
+    // Before T-13 this overwrote the good message with the generic crash
+    // text — the described error must win.
+    await pipelineEvent({ event: 'exited', code: 1, stderr: 'noise' })
+    // (the console log line still records the exit — the PANEL must not)
+    const cause = document.querySelector('.error-cause')
+    expect(cause?.textContent).toContain('Gemini rejected the API key')
+    expect(cause?.textContent).not.toContain('exited unexpectedly')
+  })
+
+  it('still explains a crash that produced no result event', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-one' })
+    await pipelineEvent({ event: 'exited', code: 1, stderr: 'RuntimeError: ~ is gone' })
+    expect(screen.getByText(/The pipeline exited unexpectedly/)).toBeTruthy()
+    expect(screen.getByText(/continues from its last checkpoint/)).toBeTruthy()
+  })
+})
+
 describe('the disk pre-flight reaches the screen (E1-F07 / T-12)', () => {
   it('shows a warn notice while the job keeps running, Cancel intact', async () => {
     await mountStudio()
