@@ -91,7 +91,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npm ci
-          npx tauri build --bundles nsis
+          # createUpdaterArtifacts is enabled HERE and only here: with it in
+          # tauri.conf.json, every plain `npx tauri build` (windows.yml, a
+          # dev machine) refuses to build without the signing key. Signing
+          # is a release concern; only the release build carries the key.
+          npx tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Assemble latest.json and upload the artifacts
         shell: pwsh

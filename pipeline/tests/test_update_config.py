@@ -21,12 +21,15 @@ def _conf() -> dict:
 
 
 def test_updater_config_is_complete_and_signed() -> None:
-    """The updater refuses everything without a pubkey, and silently does
-    nothing without createUpdaterArtifacts — both halves must be present,
-    and the pubkey must actually be a minisign public key, not a
-    placeholder that would make every installed app reject every update."""
+    """The pubkey must actually be a minisign public key, not a placeholder
+    that would make every installed app reject every update. And
+    createUpdaterArtifacts must NOT be global: with it in tauri.conf.json,
+    every plain `npx tauri build` (windows.yml, any dev machine) refuses to
+    build without the signing key — found the hard way when the first CI
+    run of this branch died on exactly that. It belongs only in the release
+    workflow's --config override, next to the key (checked below)."""
     conf = _conf()
-    assert conf["bundle"]["createUpdaterArtifacts"] is True
+    assert "createUpdaterArtifacts" not in conf["bundle"]
     pubkey = conf["plugins"]["updater"]["pubkey"]
     decoded = base64.b64decode(pubkey).decode("utf-8")
     assert decoded.startswith("untrusted comment: minisign public key")
@@ -52,6 +55,7 @@ def test_release_workflow_produces_what_the_endpoint_serves() -> None:
     assert "TAURI_SIGNING_PRIVATE_KEY" in workflow
     assert "latest.json" in workflow
     assert "gh release upload" in workflow
+    assert '{"bundle":{"createUpdaterArtifacts":true}}' in workflow
 
 
 def test_privacy_md_names_the_update_check_and_the_off_switch() -> None:

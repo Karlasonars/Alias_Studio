@@ -892,7 +892,9 @@ Watch out   the fourth category the entry missed is USER CONTENT: source
 
 ```
 Merged      tauri updater + process plugins; pubkey + endpoint in
-            tauri.conf.json, createUpdaterArtifacts on; launch check
+            tauri.conf.json; createUpdaterArtifacts only in the release
+            build's --config (global would make every plain build demand
+            the signing key — the branch's first CI run proved it); launch check
             (switchable off via a PUBLIKCLIP_HOME marker) surfacing a
             banner; the whole flow in Settings → About: changelog before
             install, install refuses while a job runs, relaunch after;
