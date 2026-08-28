@@ -644,6 +644,7 @@ unexpectedly" with the actual error thrown away.
 | `edit_tool`, `settings_tool`, `ig_tool` | generic passthrough to CLI subcommands |
 | `save_gemini_key`, `save_pexels_key` | credential storage |
 | `get_setup_state`, `mark_onboarded`, `check_ollama` | first-run flow |
+| `update_checks_enabled`, `set_update_checks` | the launch update-check preference — a marker file in `PUBLIKCLIP_HOME`, on by default (T-16) |
 | `ig_status`, `ig_connect` | Instagram auth |
 | `export_clip` | save a rendered clip out of the job dir |
 
@@ -1106,6 +1107,35 @@ Python pipeline and a `uv` binary into `src-tauri/resources/`. Its exclude
 list keeps `.venv`, `__pycache__`, `.pytest_cache` and tests out of the
 bundle — and specifically `wav2vec2_checkpoints`, a stray HF cache a developer
 machine may carry that is 700+ MB and must never ride into the app.
+
+### Auto-update (E15-F01, T-16)
+
+Packaged builds check `github.com/Karlasonars/Alias_Studio`'s latest release
+for `latest.json` once at launch (switchable off — the preference is a
+marker file in `PUBLIKCLIP_HOME`) and on demand from Settings → About, which
+owns the whole flow: changelog before install, an install that refuses while
+a job is running, minisign verification against the pubkey in
+`tauri.conf.json` (`plugins.updater`). `release.yml`'s `windows-updater` job
+builds the NSIS installer with the signing key from CI secrets
+(`TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD`) and uploads installer + `.sig` +
+`latest.json` to the tagged release. There is no Authenticode signing —
+SmartScreen warns on install, and README says so before the download link.
+
+Two survival facts, both load-bearing:
+
+- **User data lives in `~/.publikclip`** (`home_dir()` in both `main.rs`
+  and `config.py`), outside the NSIS install dir
+  (`%LOCALAPPDATA%\Alias Studio`) — jobs, checkpoints, settings, presets,
+  models, secrets and the hardware profile all survive any update.
+- **The packaged Python env lives in `~/.publikclip/venv`**, because
+  `quiet_command` sets `UV_PROJECT_ENVIRONMENT` there in release builds
+  (T-16). Before that it materialized as `resources/pipeline/.venv` inside
+  the install dir, where an update's file replacement could wipe it and
+  silently re-cost gigabytes. With the env outside and uv's cache
+  (`%LOCALAPPDATA%\uv`) also outside, an update's next launch is a
+  re-sync: sub-second when `uv.lock` is unchanged, only the changed
+  packages when it is not (measured: full venv rebuild from a warm cache
+  is ~15 s with zero network). Dev builds keep `pipeline/.venv`.
 
 > **`tauri.conf.json` currently sets `bundle.targets` to `["dmg"]`.** On
 > Windows, `npx tauri build` therefore produces only

@@ -23,6 +23,8 @@ import type {
 
 interface Props {
   onBack: () => void
+  /** Open on a specific tab — the update banner deep-links '__about'. */
+  initialGroup?: string
 }
 
 const COST_LABEL: Record<string, string> = {
@@ -114,11 +116,11 @@ function CaptionPreview({ preset }: { preset: CaptionPreset }) {
   )
 }
 
-export default function Settings({ onBack }: Props) {
+export default function Settings({ onBack, initialGroup }: Props) {
   const [payload, setPayload] = useState<SettingsPayload | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null)
   const [presets, setPresets] = useState<Record<string, CaptionPreset>>({})
-  const [activeGroup, setActiveGroup] = useState('clips')
+  const [activeGroup, setActiveGroup] = useState(initialGroup ?? 'clips')
   const [activePreset, setActivePreset] = useState('classic')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)

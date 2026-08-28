@@ -43,6 +43,18 @@ fn quiet_command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     cmd.env("PYTHONUTF8", "1");
+    // T-16: in packaged builds the Python env must live OUTSIDE the install
+    // directory, or every auto-update gambles it against the installer's
+    // file-replacement semantics — a wiped .venv means the next launch
+    // re-materializes gigabytes of packages. Under PUBLIKCLIP_HOME it
+    // survives any update, and `uv run`'s per-launch re-sync against an
+    // unchanged uv.lock is a sub-second no-op (changed lock: only the
+    // changed packages move). Dev builds keep pipeline/.venv — relocating
+    // it would fight every `uv sync`/pytest run in the repo. Non-uv spawns
+    // (curl, taskkill) ignore the variable.
+    if !cfg!(debug_assertions) {
+        cmd.env("UV_PROJECT_ENVIRONMENT", home_dir().join("venv"));
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -1005,6 +1017,32 @@ fn mark_onboarded() -> Result<(), String> {
     fs::write(home.join("onboarded"), "1").map_err(|e| e.to_string())
 }
 
+// T-16: the launch update check is on by default and switchable off
+// (E15-F01). The preference is a marker file in PUBLIKCLIP_HOME — the
+// same mechanism as `onboarded`, and deliberately NOT a pipeline setting:
+// nothing in the pipeline reads it, so putting it in the settings tree
+// would fail §5.2's "every group is read" guard, and rightly.
+const UPDATE_CHECKS_OFF: &str = "update-checks-off";
+
+#[tauri::command]
+fn update_checks_enabled() -> bool {
+    !home_dir().join(UPDATE_CHECKS_OFF).exists()
+}
+
+#[tauri::command]
+fn set_update_checks(enabled: bool) -> Result<(), String> {
+    let marker = home_dir().join(UPDATE_CHECKS_OFF);
+    if enabled {
+        if marker.exists() {
+            fs::remove_file(&marker).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    } else {
+        fs::create_dir_all(home_dir()).map_err(|e| e.to_string())?;
+        fs::write(marker, "1").map_err(|e| e.to_string())
+    }
+}
+
 #[tauri::command]
 async fn check_ollama() -> Result<Value, String> {
     let out = quiet_command("curl")
@@ -1243,6 +1281,8 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             resume_job,
             resume_info,
@@ -1262,6 +1302,8 @@ fn main() {
             get_hardware_profile,
             probe_hardware,
             mark_onboarded,
+            update_checks_enabled,
+            set_update_checks,
             check_ollama,
             ig_status,
             ig_connect,

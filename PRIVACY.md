@@ -18,8 +18,10 @@ exact file under Settings → Privacy.
 - Your library, your jobs, the full transcript, your clip edits, your
   settings and your rendered clips live on disk under your home
   directory and go nowhere.
-- There is no telemetry, no analytics, no crash reporting, no account,
-  and no update check.
+- There is no telemetry, no analytics, no crash reporting, and no
+  account. The one background call is the launch update check — a single
+  request to github.com for the latest release, described below, and you
+  can switch it off.
 
 One deliberate exception exists, and you control it: in Gemini mode,
 short transcript excerpts and a few still frames are sent to Google to
@@ -137,6 +139,26 @@ download from pypi.org and files.pythonhosted.org, and on Windows the
 CUDA build of PyTorch from download.pytorch.org. Several gigabytes,
 once. These are package downloads; nothing of yours is sent.
 
+## The update check — github.com, once at launch, switchable off
+
+When the app starts it asks github.com for the latest release
+description (a small JSON file on the releases page) and compares
+versions. Nothing about you or your work is sent — the request is a
+plain download, the same as fetching any release page; GitHub sees your
+IP address, as any visited site does. If an update exists, the app shows
+what changed and installs **only when you press install** — and it
+refuses while a job is running. Updates are verified against a signing
+key baked into the app; an unsigned or tampered update is rejected.
+
+Optional: yes — Settings → About has the switch ("check at launch"),
+and the check also runs when you press "Check for updates" there. If you
+switch it off: the app makes no background network call at all; you
+check manually, or watch the releases page yourself. Refusing costs you
+nothing but hearing about fixes later.
+
+An update never touches your jobs, settings, presets, models or keys —
+they live in the app's data folder, outside the install directory.
+
 ## Links that open in your browser
 
 Some buttons open a page in your default browser — get a Gemini key
@@ -147,9 +169,6 @@ itself.
 
 ## Not in the app today
 
-- **Auto-update** (planned): there is no update check of any kind yet.
-  When it lands, this document changes in the same commit — the guard
-  test forces that.
 - **Crash reporting / telemetry** (deliberately absent): a failure
   produces a local, redacted diagnostic zip that only you can choose to
   send, and the app has no way to send it for you.

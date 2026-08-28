@@ -49,6 +49,10 @@ export const api = {
   hardwareProfile: () => invoke<HardwareProfile | null>('get_hardware_profile'),
   probeHardware: () => invoke<HardwareProfile>('probe_hardware'),
   markOnboarded: () => invoke<void>('mark_onboarded'),
+  // T-16: the launch update-check preference — a PUBLIKCLIP_HOME marker
+  // owned by the shell, on by default, switchable in Settings → About.
+  updateChecksEnabled: () => invoke<boolean>('update_checks_enabled'),
+  setUpdateChecks: (enabled: boolean) => invoke<void>('set_update_checks', { enabled }),
   checkOllama: () => invoke<{ running: boolean; models: string[] }>('check_ollama'),
   exportClip: (path: string, title?: string) =>
     invoke<string>('export_clip', { path, title }),

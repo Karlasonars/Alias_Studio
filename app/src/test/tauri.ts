@@ -46,8 +46,12 @@ export function resetTauri(): void {
   listenMock.mockClear()
 }
 
-/** The commands App.tsx fires on mount, answered with a quiet idle app. */
+/** The commands App.tsx fires on mount, answered with a quiet idle app.
+ * update_checks_enabled answers false so the launch update check (T-16)
+ * stops before importing the updater plugin — tests that want the check
+ * override it and mock the plugin module themselves. */
 export function idleAppCommands(): void {
+  commands.update_checks_enabled = () => false
   commands.get_setup_state = () => ({ has_gemini_key: true, onboarded: true })
   commands.list_job_dirs = () => []
   commands.ig_status = () => ({ connected: false })

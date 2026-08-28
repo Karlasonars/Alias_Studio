@@ -734,6 +734,24 @@ body {
   border-top: 1px solid var(--line); vertical-align: top;
 }
 
+/* T-16: update banner (launch check) + the About update panel. */
+.update-banner {
+  position: fixed; bottom: 18px; right: 18px; z-index: 40;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  padding: 10px 14px; font-size: 13px; color: var(--text);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+.update-panel { border: 1px solid var(--line); padding: 14px 16px; margin: 16px 0; }
+.update-panel h2 { border-top: none !important; padding-top: 0 !important; margin-top: 0 !important; }
+.update-actions { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
+.update-note { font-size: 12px; color: var(--dim); }
+.update-blocked { color: var(--amber); }
+.update-changelog {
+  border: 1px solid var(--line); padding: 8px 12px; margin: 8px 0 12px;
+  max-height: 220px; overflow-y: auto;
+}
+
 /* Settings → About (T-18): the AGPL surface. */
 .about-version { font-size: 12px; color: var(--faint); margin: -6px 0 14px; }
 .about-dirty { color: var(--amber); }

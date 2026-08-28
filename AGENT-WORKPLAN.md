@@ -888,12 +888,37 @@ Watch out   the fourth category the entry missed is USER CONTENT: source
             upload, anywhere (E14-F04 is deliberately not this)
 ```
 
-### T-16 · E15-F01 — Auto-update                                [P0]
+### T-16 · E15-F01 — Auto-update                                [DONE 2026-08-28]
 
 ```
-Blocked by  T-04
-Touches     app/src-tauri/tauri.conf.json, Cargo.toml, .github/workflows/
-Proves it   an update run that preserves jobs, settings and presets
+Merged      tauri updater + process plugins; pubkey + endpoint in
+            tauri.conf.json, createUpdaterArtifacts on; launch check
+            (switchable off via a PUBLIKCLIP_HOME marker) surfacing a
+            banner; the whole flow in Settings → About: changelog before
+            install, install refuses while a job runs, relaunch after;
+            release.yml gained the windows-updater job (signed NSIS +
+            .sig + latest.json) and a gate that fails a release when
+            TAURI_SIGNING_PRIVATE_KEY is missing; SmartScreen warning in
+            README before the download link
+Proves it   test_update_config.py (4): pubkey is a real minisign key +
+            createUpdaterArtifacts on (injection-verified), endpoint ==
+            the About screen's repo, workflow still signs and uploads
+            latest.json, PRIVACY.md names the check AND the off switch.
+            UpdatePanel.test.tsx (7): changelog-before-install,
+            running-job refusal (injection-verified), toggle round-trip,
+            the banner and its off state. What only a real release
+            proves: signature verification end-to-end, the installer
+            swap, relaunch, data survival — deferred to the first tag
+Watch out   THE TRAP RESOLVED: the packaged venv used to land in
+            resources/pipeline/.venv INSIDE the install dir; release
+            builds now set UV_PROJECT_ENVIRONMENT=~/.publikclip/venv in
+            quiet_command, so updates cost one uv re-sync (sub-second
+            unchanged lock; ~15 s full rebuild from warm cache,
+            measured) instead of gambling gigabytes on NSIS replacement
+            semantics. The updater PRIVATE key + password are GitHub
+            secrets only the owner can add — see PR #31 for the exact
+            steps; main.rs's "bootstraps into PUBLIKCLIP_HOME" comment
+            was aspirational before this task and is true now
 ```
 
 ### T-17 · E15-F03 — Privacy notice                             [DONE 2026-08-28]
