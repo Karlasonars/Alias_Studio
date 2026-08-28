@@ -12,10 +12,14 @@ import json
 import sys
 import time
 
-from . import config, winpatches
+from . import config, errors, winpatches
 from .jobs import queue
 
 winpatches.apply_all()
+# Before anything else can crash: unhandled tracebacks print through
+# redact(), so the stderr tail the shell captures for its 'exited' event
+# never carries a secret or the user's home path (T-13).
+errors.install_excepthook()
 
 
 def _stages() -> list[queue.Stage]:
@@ -108,6 +112,22 @@ def cmd_resume(args: argparse.Namespace) -> int:
     return _execute(job, args.jsonl)
 
 
+def _failure_payload(job: queue.Job, err: BaseException) -> dict:
+    """The result event's error fields: the described ErrorInfo run_stages
+    just wrote to error.json (authoritative — it knows the stage), falling
+    back to describing the exception directly when the file is not there
+    (a failure outside run_stages). `error` stays the flat cause string so
+    every consumer that predates error_info keeps rendering."""
+    try:
+        payload = json.loads((job.dir / queue.ERROR_FILE).read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and payload.get("cause"):
+            return {"error": payload["cause"], "error_info": payload}
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    info = errors.describe(err)
+    return {"error": info.cause, "error_info": info.to_json()}
+
+
 def _execute(job: queue.Job, jsonl: bool) -> int:
     emit = _progress_printer(jsonl)
     if jsonl:
@@ -135,7 +155,11 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
             print(f"[disk] {report['action']}: {report['message']}", file=sys.stderr, flush=True)
         if report["action"] == "block":
             disk.block_start(job, report)
-            _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": report["message"]})
+            info = errors.info_for("disk-space-blocked", cause=report["message"])
+            _emit_result(
+                jsonl,
+                {"ok": False, "job_id": job.id, "error": info.cause, "error_info": info.to_json()},
+            )
             return 1
     # Resolve (and fetch if missing) ffmpeg once, up front — several stages
     # (ingest merging, ASR decoding, rendering) need it and some, like
@@ -157,7 +181,17 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
             print(f"job {job.id} cancelled - checkpoints kept", file=sys.stderr)
         return 0
     except queue.StageError as err:
-        _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": str(err)})
+        _emit_result(jsonl, {"ok": False, "job_id": job.id, **_failure_payload(job, err)})
+        return 1
+    except Exception as err:  # noqa: BLE001 — T-13: the unknown must not reach the UI as a repr
+        # run_stages already recorded and described this into error.json;
+        # emitting a result here is what lets the UI show the described
+        # shape instead of relying on the shell's 'exited' fallback. The
+        # (redacted) traceback still goes to stderr for the live console.
+        _emit_result(jsonl, {"ok": False, "job_id": job.id, **_failure_payload(job, err)})
+        import traceback
+
+        sys.stderr.write(errors.redact(traceback.format_exc()))
         return 1
     # E13-F01: fold this run's measured stage timings into the hardware
     # profile. Best-effort - a profile hiccup must never fail a job that

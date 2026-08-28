@@ -58,7 +58,7 @@ class IngestStage(Stage):
         else:
             media_path = Path(job.source).expanduser().resolve()
             if not media_path.exists():
-                raise StageError(f"File not found: {media_path}")
+                raise StageError(f"File not found: {media_path}", code="source-file-missing")
             title = media_path.stem
 
         prog(0.96, "Probing media…")
@@ -68,7 +68,8 @@ class IngestStage(Stage):
             raise StageError(str(err)) from err
         if not info.has_audio:
             raise StageError(
-                "This video has no audio track. Alias Studio needs speech to find moments."
+                "This video has no audio track. Alias Studio needs speech to find moments.",
+                code="no-audio-track",
             )
 
         if info.vfr:

@@ -19,10 +19,10 @@ class DiarizeStage(Stage):
         prior = ctx.prior or {}
         ingest, asr = prior.get("ingest"), prior.get("asr")
         if not ingest or not asr:
-            raise StageError("Diarization needs ingest + asr outputs.")
+            raise StageError("Diarization needs ingest + asr outputs.", code="prior-stage-missing")
         audio_path = Path(ingest["audio_path"])
         if not audio_path.exists():
-            raise StageError("Analysis audio missing — re-run ingest.")
+            raise StageError("Analysis audio missing — re-run ingest.", code="prior-stage-missing")
 
         import torch
 

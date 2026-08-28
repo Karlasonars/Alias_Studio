@@ -817,18 +817,31 @@ Watch out   block needs a CONFIDENT shortfall — free below the LOW end of
             screen in E1-F07's criteria is T-30 and was not built here.
 ```
 
-### T-13 · E14-F01 — Error catalogue                            [P0]
+### T-13 · E14-F01 — Error catalogue                            [DONE 2026-08-28]
 
 ```
-Blocked by  T-08
-Touches     a new pipeline/publikclip_pipeline/errors.py, every stage's raise sites,
-            app/src/components/ (an ErrorPanel)
-Proves it   tests/test_error_catalog.py: every known class has a cause and an action
-Watch out   SPECIFICATION.md §20 is the starting list — cover all of it
+Merged      errors.py (catalogue + describe() + redact() + excepthook) with
+            the choke point in run_stages' two except arms; ErrorPanel.tsx;
+            result events carry error_info beside the flat `error` string
+Proves it   tests/test_error_catalog.py (10) — every entry has cause+action,
+            §20 row coverage, recognizers, the unknown shape, and the choke
+            point writing a cause (never a repr) to the DB and the full
+            value to error.json. tests/test_error_redaction.py (5) — no
+            stored secret, key shape, query credential or home path survives
+            into any field; a real subprocess crash proves the excepthook
+            redacts the stderr tail Rust captures. ErrorPanel.test.tsx (5)
+            + App.test.tsx (2): actions render, detail stays behind the
+            disclosure with copy, exited no longer stomps a described error
+Watch out   describe() is the ONLY constructor of the wire shape — new
+            failures get a CATALOG entry + code, never a second path.
+            error.json is cleared at run start (T-14 reads it BETWEEN
+            failure and the next spawn; checkpoints, not the file, decide
+            what re-runs). The Instagram raise sites are covered at the
+            display layer only — T-32's query params are hidden by
+            redact(), not fixed. T-37 stays code "unknown" with signature
+            "OSError errno 22" until reproduced; T-38 raises nothing and
+            is untouched
 ```
-
-No error may surface as a Python traceback. Cause in human language, at least one
-action, traceback behind a disclosure.
 
 ### T-14 · E14-F02 — Resume from stage                          [P0]
 

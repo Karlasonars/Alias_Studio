@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { HardwareProfile, JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
+import type { ErrorInfo, HardwareProfile, JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
@@ -14,6 +14,14 @@ import './styles.css'
 type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'settings' | 'queue'
 
 const LOG_LIMIT = 2000
+
+// T-13: every failure renders through one shape. A bare string (an old DB
+// row, a producer that predates error_info) becomes a cause with no
+// actions — exactly the old error block, through the new panel.
+function asErrorInfo(text: string, info?: ErrorInfo): ErrorInfo {
+  if (info && info.cause) return info
+  return { code: 'legacy', cause: text, actions: [] }
+}
 
 // One readable line per pipeline-event, for the raw console feed — this is
 // deliberately separate from `stages` (which keeps only the latest message
@@ -51,7 +59,7 @@ export default function App() {
   const [results, setResults] = useState<JobResults | null>(null)
   const [stages, setStages] = useState<Record<string, { fraction: number; message: string }>>({})
   const [running, setRunning] = useState(false)
-  const [runError, setRunError] = useState<string | null>(null)
+  const [runError, setRunError] = useState<ErrorInfo | null>(null)
   const [cancelled, setCancelled] = useState(false)
   // E1-F07: the pre-flight's warn-level notice ("this may need up to N GB").
   // A block-level result rides the existing error path instead — one place
@@ -188,7 +196,7 @@ export default function App() {
             setView('review')
           })
         } else if (!payload.ok) {
-          setRunError(String(payload.error ?? 'Pipeline failed'))
+          setRunError(asErrorInfo(String(payload.error ?? 'Pipeline failed'), payload.error_info))
         }
       } else if (payload.event === 'disk') {
         // Warn: the job continues, so keep the notice up beside the deck.
@@ -203,10 +211,22 @@ export default function App() {
         refreshJobs()
       } else if (payload.event === 'exited') {
         setRunning(false)
+        // Fallback only: Rust emits 'exited' on EVERY nonzero exit, which
+        // also follows a result event that already described the failure.
+        // Overwriting here used to stomp every good StageError message
+        // with the generic crash text — the described error wins (T-13).
         const detail = payload.stderr?.trim()
         setRunError(
-          'The pipeline exited unexpectedly. Resume the job to continue from its last checkpoint.' +
-            (detail ? `\n\n${detail}` : '')
+          (prev) =>
+            prev ?? {
+              code: 'pipeline-exited',
+              cause: 'The pipeline exited unexpectedly.',
+              actions: [
+                'Resume the job from the rail — it continues from its last checkpoint.',
+                'If it happens again, copy the technical details and open an issue.'
+              ],
+              detail: detail || null
+            }
         )
       }
     }).then((un) => {
@@ -246,7 +266,7 @@ export default function App() {
         // A swallowed enqueue error is the same silence: surface it the
         // way run errors are surfaced.
         if (wasIdle) setRunning(false)
-        setRunError(`Could not add to the queue: ${String(err)}`)
+        setRunError(asErrorInfo(`Could not add to the queue: ${String(err)}`))
       } finally {
         setEnqueueing((n) => n - 1)
       }

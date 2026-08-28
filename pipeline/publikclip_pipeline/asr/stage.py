@@ -44,10 +44,10 @@ class AsrStage(Stage):
     def run(self, ctx: StageContext) -> dict:
         ingest = ctx.prior.get("ingest") if ctx.prior else None
         if not ingest:
-            raise StageError("ASR needs the ingest stage output.")
+            raise StageError("ASR needs the ingest stage output.", code="prior-stage-missing")
         audio_path = Path(ingest["audio_path"])
         if not audio_path.exists():
-            raise StageError("Analysis audio missing — re-run ingest.")
+            raise StageError("Analysis audio missing — re-run ingest.", code="prior-stage-missing")
 
         _point_caches_at_home()
         ctx.emit(-1, "Loading speech model (downloads ~1.6 GB on first run)…")
@@ -127,7 +127,8 @@ class AsrStage(Stage):
         word_count = sum(len(s["words"]) for s in segments)
         if word_count == 0:
             raise StageError(
-                "No speech was found in this video. Alias Studio needs dialogue to find moments."
+                "No speech was found in this video. Alias Studio needs dialogue to find moments.",
+                code="no-speech",
             )
 
         total = transcribe_secs + align_secs

@@ -37,7 +37,12 @@ def _extract_wav(media: Path, dst: Path, sr: int) -> None:
         capture_output=True, text=True, timeout=3600,
     )
     if proc.returncode != 0:
-        raise StageError(f"Audio extraction failed: {(proc.stderr or '')[-500:]}")
+        # The stderr tail is for the disclosure, not the headline (T-13).
+        raise StageError(
+            "The audio track could not be extracted for event detection.",
+            code="audio-extract-failed",
+            detail=(proc.stderr or "")[-500:],
+        )
 
 
 class EventsStage(Stage):
@@ -78,7 +83,7 @@ class EventsStage(Stage):
         prior = ctx.prior or {}
         ingest, asr = prior.get("ingest"), prior.get("asr")
         if not ingest or not asr:
-            raise StageError("Events need ingest + asr outputs.")
+            raise StageError("Events need ingest + asr outputs.", code="prior-stage-missing")
         media = Path(ingest["media_path"])
         audio16 = Path(ingest["audio_path"])
 

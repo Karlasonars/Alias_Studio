@@ -47,6 +47,10 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
                            Real surface: 88, all of it help-guarded
   hardware.py       (231)  CUDA/CPU detection. The single place that answers
                            "what can this machine do"
+  errors.py                the error catalogue (T-13). describe() is the ONLY
+                           constructor of the user-facing error value and it
+                           redacts every field — add entries, never a second
+                           path around it
   jobs/queue.py     (355)  Job/Stage machinery, SQLite, checkpoints
   ingest/ asr/ diarize/ events/ candidates/ scoring/ camera/ render/
                            the eight stages, in that order
