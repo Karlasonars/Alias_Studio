@@ -634,6 +634,7 @@ unexpectedly" with the actual error thrown away.
 | `run_job` | start a new job |
 | `resume_job` | resume/restyle an existing job (optionally from a chosen stage, T-14) |
 | `resume_info` | passthrough to `jobs resume-info` for the resume picker |
+| `diagnose_job` | builds the T-15 bundle via the CLI, copies it to Downloads |
 | `job_results` | read every stage checkpoint for a job |
 | `list_job_dirs` | enumerate jobs |
 | `save_clip_edits` | write `clip_edits.json` |
@@ -985,6 +986,7 @@ changes take effect on the next job with no rebuild.
 | `resume <job_id>` | resume from checkpoints, optionally with new settings |
 | `resume <job_id> --from-stage <name>` | invalidate that stage first, so it and everything after re-run (T-14) |
 | `jobs resume-info <job_id>` | per-stage status + measured re-run cost, for the resume picker |
+| `diagnose [job_id] [--out]` | one inspectable, redacted zip for a bug report (T-15) — allowlist-built, no network |
 | `jobs` | list jobs |
 | `settings get\|set\|reset` | read/write the global settings tree |
 | `settings preset-save\|preset-reset <name>` | caption preset editing |
