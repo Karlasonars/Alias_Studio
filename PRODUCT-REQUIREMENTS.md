@@ -425,7 +425,7 @@ Alias Studio prasa vienu no diviem, pirms tas kaut ko izdara:
 
 | Ceļš | Ko lietotājam jāizdara | Izmaksas |
 |---|---|---|
-| **Gemini** | Iegūt bezmaksas API atslēgu aistudio.google.com | ~2 min · ~$1,20 uz stundu avota (maksas līmenī; T-39 pārcēla uz gemini-3.6-flash cenām) |
+| **Gemini** | Iegūt bezmaksas API atslēgu aistudio.google.com | ~2 min · bezmaksas līmenis strādā (ar limitiem; Google var izmantot bezmaksas pieprasījumus produktu uzlabošanai) · maksas līmenī ~$1,20 uz stundu avota (T-39: gemini-3.6-flash cenas) |
 | **Ollama** | Instalēt Ollama un novilkt modeli | ~10 min · 0 € · pilnībā lokāli |
 
 Tas ir **apzināts vārtu mehānisms**, ne berze, ko vajadzētu novērst. Pamatojums:
@@ -758,7 +758,7 @@ Onboardings prasa vienu no diviem un neļauj turpināt bez tā. Divas izvēles, 
 | Izvēle | Ko tas nozīmē lietotājam | Cik ilgi |
 |---|---|---|
 | **Ollama (lokāli)** | Bez maksas, bez limitiem, nekas neaizceļo no datora | ~10 min pirmoreiz |
-| **Gemini** | Precīzāks humora un vizuālais spriedums (T2 caurlaide) | ~2 min · ~$1,20 uz stundu avota (maksas līmenī) |
+| **Gemini** | Precīzāks humora un vizuālais spriedums (T2 caurlaide) | ~2 min · bezmaksas līmenis ar limitiem · maksas līmenī ~$1,20 uz stundu avota |
 
 *Pieņemšanas kritēriji — iemesls:*
 - Pirms izvēles onboardings **vienā teikumā pasaka, kāpēc tas vajadzīgs**: bez modeļa, kas spriež par saturu, vērtējums nav vērtējums. Ne atvainošanās, ne slēpšana — līgums.
