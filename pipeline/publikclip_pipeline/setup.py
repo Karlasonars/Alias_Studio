@@ -270,6 +270,21 @@ def items(settings: "config.Settings | None" = None) -> list[SetupItem]:
     return out
 
 
+def item_dir(item_id: str) -> Path:
+    """Where this item's bytes land — the directory whose VOLUME a disk
+    pre-flight must charge (T-12). Defaults put everything under
+    PUBLIKCLIP_HOME, but HF_HOME/TORCH_HOME can point the two foreign
+    caches at another drive, and charging the wrong volume reports room
+    that does not exist."""
+    if item_id == "whisper":
+        return _hf_hub_root()
+    if item_id in ("vad", "align-en"):
+        return _torch_hub_root()
+    if item_id == "ffmpeg":
+        return config.bin_dir()
+    return config.models_dir()
+
+
 def status(settings: "config.Settings | None" = None) -> dict:
     """Cheap, offline, filesystem-only — safe to call on every screen entry.
     total_missing_bytes is what E1-F01 shows BEFORE any download starts."""

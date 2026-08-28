@@ -114,6 +114,29 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
         print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir)}), flush=True)
     else:
         print(f"job {job.id} → {job.dir}", file=sys.stderr)
+    # E1-F07: per-volume disk pre-flight before anything heavy writes. A
+    # confident shortfall fails the job with the numbers in its error —
+    # never leaves it pending, which the shell's auto-advance would respawn
+    # in a loop — so the queue continues and a resume after freeing space
+    # retries for free. Unknown warns, never refuses, and a crash inside
+    # the check itself must not take the job with it (§5.9).
+    from .jobs import disk
+
+    emit("setup", -1.0, "Checking disk space…")
+    try:
+        report = disk.preflight(job)
+    except Exception as err:  # noqa: BLE001 — the check is advisory
+        sys.stderr.write(f"disk check skipped: {err!r}\n")
+        report = None
+    if report is not None and report["action"] != "ok":
+        if jsonl:
+            print(json.dumps({"event": "disk", **report}), flush=True)
+        else:
+            print(f"[disk] {report['action']}: {report['message']}", file=sys.stderr, flush=True)
+        if report["action"] == "block":
+            disk.block_start(job, report)
+            _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": report["message"]})
+            return 1
     # Resolve (and fetch if missing) ffmpeg once, up front — several stages
     # (ingest merging, ASR decoding, rendering) need it and some, like
     # whisperx's ASR step, shell out to a bare `ffmpeg` on PATH rather than
