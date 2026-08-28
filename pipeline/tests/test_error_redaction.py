@@ -93,6 +93,17 @@ def test_unhandled_tracebacks_are_redacted_at_birth(isolated_home):
     assert "~" in proc.stderr
 
 
+def test_extra_terms_are_removed_only_when_asked():
+    # T-15's knob on the ONE implementation: the bundler passes the job's
+    # content identifiers; the live UI passes nothing, because a user
+    # should see their own filename on screen.
+    text = "File not found: ~/Videos/Unreleased Trailer.mp4"
+    assert "Unreleased" in errors.redact(text)
+    scrubbed = errors.redact(text, extra=["Unreleased Trailer.mp4"])
+    assert "Unreleased" not in scrubbed
+    assert "[removed]" in scrubbed
+
+
 def test_the_cli_installs_the_hook():
     # Importing the CLI module is what arms the hook for every sidecar
     # process the shell ever spawns; if this import stops doing that, the

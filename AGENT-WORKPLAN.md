@@ -864,13 +864,28 @@ Watch out   render is invalidated by DELETING FILES, never render.json —
             (no choice) is byte-identical to before
 ```
 
-### T-15 · E14-F03 — Diagnostic bundle                          [P0]
+### T-15 · E14-F03 — Diagnostic bundle                          [DONE 2026-08-28]
 
 ```
-Blocked by  T-13
-Touches     pipeline/publikclip_pipeline/cli.py (a `diagnose` subcommand), app/src
-Proves it   a test asserting keys, paths and source names are stripped
-Watch out   never include API keys, file paths or media
+Merged      diagnose.py (allowlist-first bundle builder) + `publikclip
+            diagnose [job] [--out]`; redact() gained `extra` literal terms
+            (the ONE implementation, parameterized — never a second); a
+            Rust diagnose_job one-shot lands the zip in Downloads; the
+            ErrorPanel offers "save a diagnostic bundle"
+Proves it   tests/test_diagnose.py (5) — the soaked-job mould (key, token,
+            home path, source name, title, keywords: none survive; the
+            unredacted variant fails it, verified by injection); every
+            written field is declared in MANIFEST; transcript-shaped
+            checkpoint data never rides while its scalars do; the shape
+            (probe/duration/codec) survives the content's removal.
+            ErrorPanel.test.tsx (+2): the button, the trust line, the
+            honest failure
+Watch out   the fourth category the entry missed is USER CONTENT: source
+            URL/path, title, media filename and keyword settings are
+            stripped literally; checkpoint DATA is never copied (counts
+            and scalars only). No persisted logs exist to include —
+            error.json's detail is the nearest thing. No network, no
+            upload, anywhere (E14-F04 is deliberately not this)
 ```
 
 ### T-16 · E15-F01 — Auto-update                                [P0]

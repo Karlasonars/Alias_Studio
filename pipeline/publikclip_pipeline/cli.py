@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 from . import config, errors, hardware_profile, winpatches
 from .jobs import queue
@@ -215,6 +216,21 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
         "heatmap_segments": len(results.get("ingest", {}).get("heatmap") or []),
     }
     _emit_result(jsonl, summary)
+    return 0
+
+
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    """E14-F03: one inspectable zip a beta user can safely send. No
+    network, no upload — the user sends the file themselves."""
+    from . import diagnose
+
+    job = queue.get_job(args.job_id) if args.job_id else next(iter(queue.list_jobs(1)), None)
+    if job is None:
+        print(json.dumps({"ok": False, "error": "no job to diagnose"}))
+        return 2
+    out = Path(args.out) if args.out else None
+    result = diagnose.build_bundle(job, out)
+    print(json.dumps({"ok": True, "job_id": job.id, **result}))
     return 0
 
 
@@ -692,6 +708,13 @@ def main(argv: list[str] | None = None) -> int:
         "hardware", help="probe the machine, update hardware_profile.json, print it"
     )
     p_hw.set_defaults(fn=cmd_hardware)
+
+    p_diag = sub.add_parser(
+        "diagnose", help="build a redacted, inspectable diagnostic zip for one job (T-15)"
+    )
+    p_diag.add_argument("job_id", nargs="?", default=None, help="defaults to the most recent job")
+    p_diag.add_argument("--out", default=None, help="zip path (default: inside the job dir)")
+    p_diag.set_defaults(fn=cmd_diagnose)
 
     p_setup = sub.add_parser(
         "setup", help="fetch everything a first job would download (resumable; kill-safe)"

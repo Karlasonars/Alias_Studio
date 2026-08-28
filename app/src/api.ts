@@ -36,6 +36,9 @@ export const api = {
     fromStage?: string
   ) => invoke<void>('resume_job', { jobId, llm, captions, camera, gameplayAmount, fromStage }),
   resumeInfo: (jobId: string) => invoke<ResumeInfo>('resume_info', { jobId }),
+  // T-15: builds the redacted bundle and lands it in Downloads; resolves to
+  // the destination path. No network anywhere behind this.
+  diagnoseJob: (jobId: string) => invoke<string>('diagnose_job', { jobId }),
   cancelJob: () => invoke<void>('cancel_job'),
   jobResults: (jobId: string) => invoke<JobResults>('job_results', { jobId }),
   listJobs: () => invoke<JobSummary[]>('list_job_dirs'),

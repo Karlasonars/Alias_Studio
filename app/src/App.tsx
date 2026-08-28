@@ -328,6 +328,7 @@ export default function App() {
         running={running}
         stages={stages}
         error={runError}
+        errorJobId={activeJob}
         cancelled={cancelled}
         diskNotice={diskNotice}
         log={log}

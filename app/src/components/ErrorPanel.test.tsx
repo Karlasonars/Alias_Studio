@@ -1,11 +1,16 @@
 /* T-13 (E14-F01): the failure shape as the user sees it — cause first,
  * actions as the way forward, the technical text behind a disclosure with
  * a copy button, and a legacy bare string rendering like the old block. */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ErrorInfo } from '../types'
+import { callsTo, commands, resetTauri } from '../test/tauri'
 import ErrorPanel from './ErrorPanel'
 
+vi.mock('@tauri-apps/api/core', async () => {
+  const t = await import('../test/tauri')
+  return { invoke: t.invokeMock, convertFileSrc: (p: string) => p }
+})
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(async () => {}) }))
 
 const unknown: ErrorInfo = {
@@ -22,6 +27,7 @@ const unknown: ErrorInfo = {
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  resetTauri()
 })
 
 describe('ErrorPanel (E14-F01)', () => {
@@ -62,6 +68,32 @@ describe('ErrorPanel (E14-F01)', () => {
     expect(screen.getByText('score: something old')).toBeTruthy()
     expect(container.querySelector('.error-actions')).toBeNull()
     expect(container.querySelector('details')).toBeNull()
+  })
+
+  it('offers the diagnostic bundle only when it knows the job (T-15)', async () => {
+    const { rerender } = render(<ErrorPanel error={unknown} />)
+    expect(screen.queryByText(/diagnostic bundle/)).toBeNull()
+
+    commands.diagnose_job = () => 'C:/Users/x/Downloads/alias-diagnostic-job-1.zip'
+    rerender(<ErrorPanel error={unknown} jobId="job-1" />)
+    await act(async () => {
+      fireEvent.click(screen.getByText('save a diagnostic bundle'))
+    })
+    expect(callsTo('diagnose_job')).toBe(1)
+    // the trust line: where it went, and that it is readable BEFORE sending
+    expect(screen.getByText(/alias-diagnostic-job-1\.zip/)).toBeTruthy()
+    expect(screen.getByText(/Look inside before sending/)).toBeTruthy()
+  })
+
+  it('admits a bundle that could not be built', async () => {
+    commands.diagnose_job = () => {
+      throw new Error('no job')
+    }
+    render(<ErrorPanel error={unknown} jobId="job-1" />)
+    await act(async () => {
+      fireEvent.click(screen.getByText('save a diagnostic bundle'))
+    })
+    expect(screen.getByText(/could not build the bundle/)).toBeTruthy()
   })
 
   it('offers the docs link only when the entry carries one', () => {
