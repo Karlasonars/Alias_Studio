@@ -32,6 +32,8 @@ function formatLogLine(payload: PipelineEvent): string | null {
     }
     case 'result':
       return payload.ok ? 'job finished' : `job failed: ${payload.error ?? 'unknown error'}`
+    case 'disk':
+      return `disk: ${payload.message ?? ''}`.trimEnd()
     case 'cancelled':
       return 'job cancelled — checkpoints kept'
     case 'exited':
@@ -51,6 +53,10 @@ export default function App() {
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [cancelled, setCancelled] = useState(false)
+  // E1-F07: the pre-flight's warn-level notice ("this may need up to N GB").
+  // A block-level result rides the existing error path instead — one place
+  // per severity, so a warning can never be mistaken for a dead job.
+  const [diskNotice, setDiskNotice] = useState<string | null>(null)
   const [log, setLog] = useState<LogLine[]>([])
   // Enqueue-while-running feedback: six silent QUEUE IT presses once
   // enqueued six invisible jobs. `enqueueing` acknowledges the press the
@@ -160,6 +166,7 @@ export default function App() {
         setLog([])
         setRunError(null)
         setCancelled(false)
+        setDiskNotice(null)
         setRunning(true)
       }
       appendLog(payload)
@@ -183,6 +190,11 @@ export default function App() {
         } else if (!payload.ok) {
           setRunError(String(payload.error ?? 'Pipeline failed'))
         }
+      } else if (payload.event === 'disk') {
+        // Warn: the job continues, so keep the notice up beside the deck.
+        // Block: the run's own failed result lands next and takes the
+        // error path — duplicating it here would show the message twice.
+        if (payload.action === 'warn') setDiskNotice(String(payload.message ?? ''))
       } else if (payload.event === 'cancelled') {
         // A deliberate stop: must never read as the 'exited' crash below.
         setRunning(false)
@@ -297,6 +309,7 @@ export default function App() {
         stages={stages}
         error={runError}
         cancelled={cancelled}
+        diskNotice={diskNotice}
         log={log}
         enqueueing={enqueueing > 0}
         queued={queuedCount}

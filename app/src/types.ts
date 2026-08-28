@@ -7,6 +7,10 @@ export interface PipelineEvent {
   ok?: boolean
   error?: string
   stderr?: string
+  /** E1-F07 'disk' events only: 'warn' means the job starts anyway with
+   *  `message` on screen; 'block' means the run fails before anything is
+   *  written (its result event carries the same message as `error`). */
+  action?: 'warn' | 'block'
   [key: string]: unknown
 }
 
