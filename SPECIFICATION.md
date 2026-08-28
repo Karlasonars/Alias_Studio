@@ -696,6 +696,11 @@ app points it at its own app-data directory; the CLI uses the default.
     ├── score.json   │
     ├── camera.json  │
     ├── render.json ─┘
+    ├── error.json          the described failure (errors.ErrorInfo, T-13):
+    │                       code, cause, actions, stage, redacted detail.
+    │                       Written on any stage failure, cleared at run
+    │                       start like the cancel flags; read by the
+    │                       ErrorPanel, T-14 and T-15 between the two
     ├── trajectory_NN.json  per-clip crop paths
     ├── clip_edits.json     per-clip overrides
     ├── t2frames/           frames sent to the vision pass
@@ -1265,6 +1270,16 @@ screen labels them.
 ---
 
 ## 20. Troubleshooting
+
+Since T-13 this table is also the floor of the in-app **error catalogue**
+(`errors.py`, E14-F01): every row maps to a catalogue code
+(`errors.SPEC20_CODES`, enforced by `test_error_catalog.py`), job failures
+reach the UI as a structured `error_info` — cause, actions, optional docs
+link, technical detail behind a disclosure — and an unrecognized failure
+gets a generic cause naming the stage plus a `signature` for grouping,
+never a Python repr. Unhandled tracebacks are redacted at birth
+(`errors.install_excepthook`), so the shell's captured stderr tail carries
+no secrets and no home paths.
 
 | Symptom | Cause and fix |
 |---|---|
