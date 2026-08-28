@@ -1188,8 +1188,13 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
     if !src.exists() {
         return Err("clip file missing".into());
     }
+    copy_to_downloads(&src, &title.unwrap_or_else(|| "Alias Studio".into()), "mp4")
+}
+
+/// Copy a produced file into Downloads under a sanitized, collision-free
+/// name. Shared by clip export and the diagnostic bundle (T-15).
+fn copy_to_downloads(src: &PathBuf, stem: &str, ext: &str) -> Result<String, String> {
     let downloads = dirs_home().join("Downloads");
-    let stem = title.unwrap_or_else(|| "Alias Studio".into());
     let safe: String = stem
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
@@ -1199,14 +1204,31 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
         .chars()
         .take(60)
         .collect();
-    let mut dest = downloads.join(format!("{safe}.mp4"));
+    let mut dest = downloads.join(format!("{safe}.{ext}"));
     let mut n = 1;
     while dest.exists() {
-        dest = downloads.join(format!("{safe}-{n}.mp4"));
+        dest = downloads.join(format!("{safe}-{n}.{ext}"));
         n += 1;
     }
-    fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    fs::copy(src, &dest).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// T-15: build the redacted diagnostic zip (a python one-shot — what goes
+/// in and what is stripped are python's decisions) and land it in
+/// Downloads, where the user can open it and read every file before
+/// deciding to send it. No network anywhere on this path.
+#[tauri::command]
+async fn diagnose_job(job_id: String) -> Result<String, String> {
+    let out = one_shot_json(&["diagnose".to_string(), job_id.clone()])
+        .ok_or_else(|| "diagnose produced no answer".to_string())?;
+    if out["ok"].as_bool() != Some(true) {
+        return Err(out["error"].as_str().unwrap_or("diagnose failed").to_string());
+    }
+    let src = PathBuf::from(
+        out["path"].as_str().ok_or_else(|| "diagnose returned no path".to_string())?,
+    );
+    copy_to_downloads(&src, &format!("alias-diagnostic-{job_id}"), "zip")
 }
 
 fn main() {
@@ -1224,6 +1246,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             resume_job,
             resume_info,
+            diagnose_job,
             cancel_job,
             enqueue_job,
             start_queue,

@@ -29,6 +29,8 @@ interface Props {
   running: boolean
   stages: Record<string, { fraction: number; message: string }>
   error: ErrorInfo | null
+  /** the job the error belongs to — lets the panel offer T-15's bundle */
+  errorJobId: string | null
   cancelled: boolean
   /** E1-F07 warn-level disk notice: the job is running, just tight on space */
   diskNotice: string | null
@@ -45,7 +47,7 @@ interface Props {
   onResume: (id: string, fromStage?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, cancelled, diskNotice, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, errorJobId, cancelled, diskNotice, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -317,7 +319,7 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
             </section>
           )}
 
-          {error && <ErrorPanel error={error} />}
+          {error && <ErrorPanel error={error} jobId={errorJobId} />}
         </div>
 
         {showConsole && (

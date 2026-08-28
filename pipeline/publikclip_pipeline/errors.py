@@ -97,16 +97,26 @@ def _stored_secret_values() -> list[str]:
     return values
 
 
-def redact(text: str) -> str:
+def redact(text: str, extra: "tuple[str, ...] | list[str]" = ()) -> str:
     """Strip secrets and the user's identity from text bound for a user
     surface, a stored error.json, or a pasted issue. Order matters: literal
     secrets first (they may contain pattern-breaking chars), then shape
-    patterns, then path rewrites."""
+    patterns, then path rewrites.
+
+    `extra` is T-15's addition and the ONLY redaction knob: literal terms
+    the caller knows identify the user's CONTENT (a source filename, a
+    video title) rather than the user. The live UI passes none — a user
+    should see their own filename on screen; the diagnostic bundler passes
+    the job's known content identifiers so a bundle never names unreleased
+    footage. One implementation, parameterized — never a second redact()."""
     if not text:
         return text
     for value in _stored_secret_values():
         if value in text:
             text = text.replace(value, "[redacted]")
+    for term in extra:
+        if term and len(term) >= 3 and term in text:
+            text = text.replace(term, "[removed]")
     for pattern in _PATTERNS:
         if pattern.groups:
             text = pattern.sub(lambda m: f"{m.group(1)}=[redacted]", text)

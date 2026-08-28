@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { api } from '../api'
 import type { ErrorInfo } from '../types'
 
 /* T-13 (E14-F01): the one place a job failure is rendered. Cause as the
@@ -12,10 +13,26 @@ const DOCS_BASE = 'https://github.com/Karlasonars/Alias_Studio/blob/main/'
 
 interface Props {
   error: ErrorInfo
+  /** when set, the panel offers T-15's diagnostic bundle for this job */
+  jobId?: string | null
 }
 
-export default function ErrorPanel({ error }: Props) {
+export default function ErrorPanel({ error, jobId }: Props) {
   const [copied, setCopied] = useState(false)
+  // T-15: idle → building → the Downloads path, or a failure note. The
+  // bundle is a zip of readable JSON the user inspects before sending.
+  const [bundle, setBundle] = useState<
+    { state: 'building' } | { state: 'saved'; path: string } | { state: 'failed' } | null
+  >(null)
+
+  const saveBundle = () => {
+    if (!jobId) return
+    setBundle({ state: 'building' })
+    api
+      .diagnoseJob(jobId)
+      .then((path) => setBundle({ state: 'saved', path }))
+      .catch(() => setBundle({ state: 'failed' }))
+  }
 
   const copyDetails = () => {
     const text = [
@@ -49,6 +66,26 @@ export default function ErrorPanel({ error }: Props) {
         <button className="btn-ghost" onClick={() => openUrl(DOCS_BASE + error.docs).catch(() => {})}>
           ↗ more in the docs
         </button>
+      )}
+      {jobId && (
+        <div className="error-bundle">
+          <button
+            className="btn-ghost"
+            onClick={saveBundle}
+            disabled={bundle?.state === 'building'}
+          >
+            {bundle?.state === 'building' ? 'building the bundle…' : 'save a diagnostic bundle'}
+          </button>
+          {bundle?.state === 'saved' && (
+            <p className="error-bundle-note mono">
+              saved to {bundle.path} — a zip of readable JSON with keys, paths and your
+              video's name removed. Look inside before sending it anywhere.
+            </p>
+          )}
+          {bundle?.state === 'failed' && (
+            <p className="error-bundle-note mono">could not build the bundle</p>
+          )}
+        </div>
       )}
       {error.detail && (
         <details className="error-detail">
