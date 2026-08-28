@@ -1009,6 +1009,23 @@ body {
   animation: rise 0.35s ease both;
 }
 .modal-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+
+/* ---------- T-14 resume picker ---------- */
+.resume-picker { min-width: 420px; display: grid; gap: 12px; }
+.resume-option {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  width: 100%; text-align: left; padding: 10px 14px; cursor: pointer;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--line); font: inherit; font-size: 14px;
+}
+.resume-option.opt-on { border-color: var(--amber); color: var(--amber); }
+.resume-stages { display: grid; gap: 6px; }
+.resume-status { font-size: 11px; letter-spacing: 0.08em; opacity: 0.7; text-transform: uppercase; }
+.resume-status-failed { color: rgb(255, 92, 73); opacity: 1; }
+.resume-status-missing { opacity: 0.45; }
+.resume-loading { font-size: 13px; opacity: 0.6; }
+.resume-cost { font-size: 13px; color: var(--amber); }
+.resume-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
 .ig-intro { font-size: 14px; line-height: 1.6; color: var(--dim); margin-bottom: 22px; }
 .ig-intro em { color: var(--text); font-style: normal; }
 .ig-steps { list-style: none; padding: 0; margin: 0 0 24px; }

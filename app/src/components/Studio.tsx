@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { api } from '../api'
 import { hardwareLabel, sixtyMinEstimate } from '../hw'
-import type { ErrorInfo, HardwareProfile, JobSummary, LogLine } from '../types'
+import type { ErrorInfo, HardwareProfile, JobSummary, LogLine, ResumeInfo } from '../types'
 import ErrorPanel from './ErrorPanel'
 import KeyModal from './KeyModal'
+import ResumePicker from './ResumePicker'
 
 const STAGE_ORDER = [
   'ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'
 ]
 
-const STAGE_LABELS: Record<string, string> = {
+export const STAGE_LABELS: Record<string, string> = {
   ingest: 'INGEST',
   asr: 'TRANSCRIBE',
   diarize: 'SPEAKERS',
@@ -40,7 +42,7 @@ interface Props {
   onOpenQueue: () => void
   onOpenSettings: () => void
   onOpenJob: (id: string) => void
-  onResume: (id: string, llm?: string) => void
+  onResume: (id: string, fromStage?: string) => void
 }
 
 export default function Studio({ jobs, running, stages, error, cancelled, diskNotice, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
@@ -50,6 +52,14 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
   const [gameplayAmount, setGameplayAmount] = useState(0)
   const [showKey, setShowKey] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  // T-14: the resume picker for one rail job. info=null while the one-shot
+  // answers; an unreadable answer degrades to an empty stage list, so the
+  // picker still offers plain resume — the check must never block it (§5.9).
+  const [resumePick, setResumePick] = useState<{
+    id: string
+    title: string
+    info: ResumeInfo | null
+  } | null>(null)
   const consoleRef = useRef<HTMLDivElement>(null)
   const showConsole = running || log.length > 0
 
@@ -64,6 +74,20 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
     if (!running) setCancelling(false)
   }, [running])
 
+  const openResumePicker = (job: JobSummary) => {
+    setResumePick({ id: job.id, title: job.title ?? job.id, info: null })
+    api
+      .resumeInfo(job.id)
+      .then((info) => setResumePick((p) => (p && p.id === job.id ? { ...p, info } : p)))
+      .catch(() =>
+        setResumePick((p) =>
+          p && p.id === job.id
+            ? { ...p, info: { stages: [], default_stage: null, duration_sec: null } }
+            : p
+        )
+      )
+  }
+
   // Enqueue and clear the field: with the input live while a job runs, a
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
@@ -76,6 +100,18 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
     <div className="studio">
       <div className="grain" />
       {showKey && <KeyModal onClose={() => setShowKey(false)} />}
+      {resumePick && (
+        <ResumePicker
+          title={resumePick.title}
+          info={resumePick.info}
+          onGo={(fromStage) => {
+            const id = resumePick.id
+            setResumePick(null)
+            onResume(id, fromStage ?? undefined)
+          }}
+          onClose={() => setResumePick(null)}
+        />
+      )}
       <aside className="rail">
         <header className="rail-brand">
           <span className="rail-logo">Alias Studio</span>
@@ -88,7 +124,7 @@ export default function Studio({ jobs, running, stages, error, cancelled, diskNo
             <button
               key={job.id}
               className={`rail-job ${job.rendered ? '' : 'partial'}`}
-              onClick={() => (job.rendered ? onOpenJob(job.id) : onResume(job.id))}
+              onClick={() => (job.rendered ? onOpenJob(job.id) : openResumePicker(job))}
               disabled={running}
               title={
                 job.rendered

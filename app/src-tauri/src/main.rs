@@ -308,11 +308,18 @@ fn resume_job(
     captions: Option<String>,
     camera: Option<String>,
     gameplay_amount: Option<f64>,
+    from_stage: Option<String>,
 ) -> Result<(), String> {
     let mut args = vec!["--jsonl".to_string(), "resume".to_string(), job_id.clone()];
     if let Some(mode) = llm {
         args.push("--llm".to_string());
         args.push(mode);
+    }
+    // T-14: which stage to invalidate is python's decision surface; the
+    // shell only forwards the user's choice as a flag.
+    if let Some(stage) = from_stage {
+        args.push("--from-stage".to_string());
+        args.push(stage);
     }
     if let Some(preset) = captions {
         args.push("--captions".to_string());
@@ -663,6 +670,15 @@ async fn queue_state(app: AppHandle) -> Result<Value, String> {
         refresh_queue_cache(&app);
     }
     Ok(snapshot)
+}
+
+/// T-14: the resume picker's data — per-stage status, the failed stage as
+/// the preselected default, measured re-run cost per starting stage. All
+/// of it decided in python (`jobs resume-info`); this is a passthrough.
+#[tauri::command]
+async fn resume_info(job_id: String) -> Result<Value, String> {
+    one_shot_json(&["jobs".to_string(), "resume-info".to_string(), job_id])
+        .ok_or_else(|| "resume-info produced no answer".to_string())
 }
 
 #[tauri::command]
@@ -1207,6 +1223,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             resume_job,
+            resume_info,
             cancel_job,
             enqueue_job,
             start_queue,

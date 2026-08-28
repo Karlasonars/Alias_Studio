@@ -10,6 +10,7 @@ import type {
   JobSummary,
   LoopOverview,
   QueueStateResult,
+  ResumeInfo,
   SaveKeyResult,
   SettingsPayload,
   SetupState,
@@ -31,8 +32,10 @@ export const api = {
     llm?: string,
     captions?: string,
     camera?: string,
-    gameplayAmount?: number
-  ) => invoke<void>('resume_job', { jobId, llm, captions, camera, gameplayAmount }),
+    gameplayAmount?: number,
+    fromStage?: string
+  ) => invoke<void>('resume_job', { jobId, llm, captions, camera, gameplayAmount, fromStage }),
+  resumeInfo: (jobId: string) => invoke<ResumeInfo>('resume_info', { jobId }),
   cancelJob: () => invoke<void>('cancel_job'),
   jobResults: (jobId: string) => invoke<JobResults>('job_results', { jobId }),
   listJobs: () => invoke<JobSummary[]>('list_job_dirs'),
