@@ -1342,6 +1342,22 @@ Practical obligations:
 - **The licence cannot be changed** on this codebase, and derivative works
   must also be AGPL-3.0.
 
+**In the UI (E16-F03, T-18):** Settings → About renders these obligations on
+T-17's one-source pattern — LICENSE, VENDORED-LICENSES.md and README's "What
+this build adds" section arrive via build-time `?raw` imports, so the screen
+can only show the files that ship in the repo. The version shown is
+`getVersion()`'s answer (tauri.conf.json is its one defined place — a guard
+in `tests/test_vendored_licenses.py` rejects any literal copy in `app/src`),
+and the exact-source link resolves through the commit `vite.config.ts` bakes
+in at build time (`src/buildInfo.ts` is its only reader). A build made
+without git — a source archive — shows "no commit recorded" instead of a
+dead link. `.github/workflows/release.yml` closes the release half: pushing
+a `v*` tag creates the GitHub Release carrying that tag's source archives,
+after a gate that refuses a tag whose name disagrees with
+tauri.conf.json's version. The same guard file cross-checks `vendor/`
+against VENDORED-LICENSES.md in both directions and verifies the
+attribution headers the doc claims.
+
 ### Third-party code
 
 [VENDORED-LICENSES.md](VENDORED-LICENSES.md) is the authoritative list —

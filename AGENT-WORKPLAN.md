@@ -923,13 +923,32 @@ Watch out   the audit found two calls outside the task's starter list:
             forces it only if the host is a literal in scanned code
 ```
 
-### T-18 · E16-F03 — AGPL in the UI                             [P0]
+### T-18 · E16-F03 — AGPL in the UI                             [DONE 2026-08-28]
 
 ```
-Blocked by  nothing
-Touches     app/src/components/ (an About screen), app/scripts/prepare-resources.mjs
-Proves it   the About screen shows the licence, the source link, and the exact version
-Watch out   each release must publish a source archive for that version, not just main
+Merged      Settings → About on T-17's one-source pattern: LICENSE,
+            VENDORED-LICENSES.md and README's "What this build adds"
+            (the AGPL modification statement) all ?raw imports; version
+            = getVersion() (tauri.conf.json, its one defined place);
+            exact source = the commit vite.config.ts bakes at build
+            time, linked as tree/<commit> or the release tag; a no-git
+            build says "no commit recorded" instead of linking nowhere.
+            release.yml publishes each tag's source archive after a
+            tag-matches-version gate. Markdown renderer factored out of
+            PrivacyNotice and taught tables + links for the vendored doc
+Proves it   test_vendored_licenses.py (4): vendor/ ↔ doc in both
+            directions, attribution headers verified not assumed, no
+            version literal in app/src (injection-verified: a "0.1.0"
+            literal and a fake vendor dir both go red). About.test.tsx
+            (4): version is the API's answer (a value no file contains),
+            exact-commit link, tagged-release link, the honest no-commit
+            state, and the three documents arriving — a renamed README
+            heading fails it (injection-verified)
+Watch out   prepare-resources.mjs needed no change (the docs ride the
+            JS bundle, not resources/). T-16 extends release.yml rather
+            than adding a second release path. campplus headers credit
+            upstream but do not point at VENDORED-LICENSES.md — the
+            guard accepts either; vendor/ stays unedited per the task
 ```
 
 ### T-19 · E16-F04 — macOS CI                                   [P0]

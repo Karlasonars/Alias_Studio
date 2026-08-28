@@ -1,0 +1,45 @@
+# The AGPL release obligation (E16-F03, T-18): every release publishes the
+# source archive for exactly that version — not just main. Pushing a v* tag
+# creates the GitHub Release, and GitHub attaches the tag's own source
+# archives (zip + tar.gz) to it automatically; the About screen's
+# "source for exactly this build" link resolves through the same tag.
+#
+# The gate exists because the About screen shows tauri.conf.json's version:
+# a v0.2.0 tag on a tree that still says 0.1.0 would make every installed
+# About screen lie about which release it is. Bump the version and tag the
+# commit that contains the bump.
+#
+# T-16 (auto-update) lands its updater artifacts in THIS workflow — extend
+# it, do not add a second release path.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the tag names the version the app believes it is
+        run: |
+          ver=$(python3 -c "import json; print(json.load(open('app/src-tauri/tauri.conf.json'))['version'])")
+          if [ "${GITHUB_REF_NAME}" != "v${ver}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match app version v${ver} (tauri.conf.json)"
+            echo "Tag the commit that bumps the version, or fix the tag."
+            exit 1
+          fi
+
+      - name: create the release with its source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Alias Studio ${GITHUB_REF_NAME}" \
+            --notes "Alias Studio is AGPL-3.0. The source for exactly this version is attached below as the auto-generated source archives, and browsable at https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}. Third-party attributions: VENDORED-LICENSES.md in the archive."
