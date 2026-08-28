@@ -233,6 +233,44 @@ export interface SetupState {
   onboarded: boolean
 }
 
+/* ---------- E1-F01 setup downloads ---------- */
+
+/** One entry of `publikclip setup status`: presence is derived from disk
+ *  on every ask, never remembered — that is the whole resume story. */
+export interface SetupItemStatus {
+  id: string
+  label: string
+  /** expected download size; null = depends on the machine (ffmpeg) */
+  bytes: number | null
+  present: boolean
+}
+
+export interface SetupStatusResult {
+  items: SetupItemStatus[]
+  /** what E1-F01 shows BEFORE any download starts */
+  total_missing_bytes: number
+}
+
+/** One line of the `setup run` JSONL stream (Tauri channel: setup-event).
+ *  'item' rows carry per-download state; 'result' ends a run; 'exited' is
+ *  the process dying unexpectedly; 'interrupted' is the shell killing
+ *  setup because a job started (whose lazy fetches resume the partials). */
+export interface SetupEvent {
+  event: 'item' | 'result' | 'exited' | 'interrupted'
+  item?: string
+  state?: 'downloading' | 'done' | 'failed'
+  /** -1 = indeterminate (a fetch with no honest fraction) */
+  fraction?: number
+  message?: string
+  error?: string
+  cached?: boolean
+  ok?: boolean
+  failures?: { item: string; error: string }[]
+  code?: number | null
+  stderr?: string
+  by?: string
+}
+
 /** hardware_profile.json, written by python (job end + `hardware` verb),
  *  read by the shell as a plain file — never probed per view (T-10). */
 export interface HardwareSummary {

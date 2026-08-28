@@ -13,6 +13,7 @@ import type {
   SaveKeyResult,
   SettingsPayload,
   SetupState,
+  SetupStatusResult,
   SyncSummary,
   TitlesResult
 } from './types'
@@ -37,6 +38,8 @@ export const api = {
   listJobs: () => invoke<JobSummary[]>('list_job_dirs'),
   saveGeminiKey: (key: string) => invoke<SaveKeyResult>('save_gemini_key', { key }),
   setupState: () => invoke<SetupState>('get_setup_state'),
+  setupStatus: () => invoke<SetupStatusResult>('setup_status'),
+  runSetup: () => invoke<void>('run_setup'),
   hardwareProfile: () => invoke<HardwareProfile | null>('get_hardware_profile'),
   probeHardware: () => invoke<HardwareProfile>('probe_hardware'),
   markOnboarded: () => invoke<void>('mark_onboarded'),

@@ -163,14 +163,21 @@ describe('the Ollama door leads through instead of dead-ending', () => {
   })
 })
 
+// The warning step hosts SetupModels (T-11), which asks setup_status on
+// mount — a quiet all-present answer unless a test says otherwise.
+async function reachWarningStep() {
+  commands.check_ollama = ollamaReady
+  commands.setup_status ??= () => ({
+    items: [{ id: 'whisper', label: 'Speech recognition', bytes: 1_621_672_079, present: true }],
+    total_missing_bytes: 0
+  })
+  await mountBrainStep()
+  await act(async () => {
+    fireEvent.click(screen.getByText('Continue'))
+  })
+}
+
 describe('the hardware sentence is honest (T-10, E1-F03)', () => {
-  async function reachWarningStep() {
-    commands.check_ollama = ollamaReady
-    await mountBrainStep()
-    await act(async () => {
-      fireEvent.click(screen.getByText('Continue'))
-    })
-  }
 
   it('shows the GPU and the measured estimate when one exists', async () => {
     commands.get_hardware_profile = () => gpuProfile()
@@ -200,5 +207,24 @@ describe('the hardware sentence is honest (T-10, E1-F03)', () => {
       })
     await reachWarningStep()
     expect(screen.getByText(/forced CPU \(PUBLIKCLIP_DEVICE\)/)).toBeTruthy()
+  })
+})
+
+describe('setup is a better default, never a second gate (T-11, §5.9)', () => {
+  it('the studio stays reachable while every model is still missing', async () => {
+    // The one gate is the brain (D-15, settled in T-09). Missing models
+    // must never grow into another one: the lazy path in the stages still
+    // works, so "Open the studio" stays enabled with 2.4 GB undownloaded.
+    commands.get_hardware_profile = () => gpuProfile()
+    commands.setup_status = () => ({
+      items: [
+        { id: 'whisper', label: 'Speech recognition', bytes: 1_621_672_079, present: false },
+        { id: 'panns', label: 'Audio events', bytes: 312_000_000, present: false }
+      ],
+      total_missing_bytes: 1_933_672_079
+    })
+    await reachWarningStep()
+    expect((screen.getByText('Open the studio') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText(/downloads during your first job/)).toBeTruthy()
   })
 })
