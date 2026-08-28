@@ -9,8 +9,11 @@
 # About screen lie about which release it is. Bump the version and tag the
 # commit that contains the bump.
 #
-# T-16 (auto-update) lands its updater artifacts in THIS workflow — extend
-# it, do not add a second release path.
+# T-16 (auto-update) extends this same workflow — never a second release
+# path: the windows job below builds the NSIS installer, signs it with the
+# app's updater key (a minisign key, NOT Authenticode — installs still trip
+# SmartScreen, and README warns users up front), and uploads installer +
+# signature + latest.json, which is the endpoint tauri.conf.json points at.
 name: release
 
 on:
@@ -36,10 +39,89 @@ jobs:
             exit 1
           fi
 
+      - name: the updater key must exist before a release is worth cutting
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not set in this repository's secrets."
+            echo "Without it the windows job cannot sign the update, installed apps"
+            echo "will refuse it, and this release would be download-only."
+            echo "Add the secret (see the T-16 PR for the exact steps), then re-tag."
+            exit 1
+          fi
+
       - name: create the release with its source archive
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --title "Alias Studio ${GITHUB_REF_NAME}" \
-            --notes "Alias Studio is AGPL-3.0. The source for exactly this version is attached below as the auto-generated source archives, and browsable at https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}. Third-party attributions: VENDORED-LICENSES.md in the archive."
+            --notes "Alias Studio is AGPL-3.0. The source for exactly this version is attached below as the auto-generated source archives, and browsable at https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}. Third-party attributions: VENDORED-LICENSES.md in the archive.
+
+          The Windows installer below is not Authenticode-signed: SmartScreen will warn — click More info, then Run anyway. In-app updates are verified against the app's own signing key regardless."
+
+  # The updater artifacts. Windows because that is the exercised platform
+  # (macOS joins with T-19). The installer is what both first installs and
+  # updates run; latest.json is what installed apps poll.
+  windows-updater:
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # prepare-resources.mjs copies the host uv into the bundle.
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build the signed NSIS installer + updater signature
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm ci
+          # createUpdaterArtifacts is enabled HERE and only here: with it in
+          # tauri.conf.json, every plain `npx tauri build` (windows.yml, a
+          # dev machine) refuses to build without the signing key. Signing
+          # is a release concern; only the release build carries the key.
+          npx tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      - name: Assemble latest.json and upload the artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = Get-ChildItem app/src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "no NSIS installer produced" }
+          $sig = Get-Item "$($setup.FullName).sig" -ErrorAction Stop
+          $conf = Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $tag = $env:GITHUB_REF_NAME
+          # latest.json is the updater endpoint's payload: version, notes
+          # (the changelog the app shows BEFORE installing), and the signed
+          # installer's stable download URL for this tag.
+          $encoded = [uri]::EscapeDataString($setup.Name)
+          $latest = [ordered]@{
+            version  = $conf.version
+            notes    = "Release notes: https://github.com/$($env:GITHUB_REPOSITORY)/releases/tag/$tag"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $sig.FullName -Raw)
+                url       = "https://github.com/$($env:GITHUB_REPOSITORY)/releases/download/$tag/$encoded"
+              }
+            }
+          }
+          $latest | ConvertTo-Json -Depth 4 | Out-File latest.json -Encoding utf8
+          Get-Content latest.json
+          gh release upload $tag $setup.FullName $sig.FullName latest.json --clobber

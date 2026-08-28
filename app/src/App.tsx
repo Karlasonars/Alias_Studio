@@ -53,6 +53,8 @@ function formatLogLine(payload: PipelineEvent): string | null {
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
+  const [updateAvail, setUpdateAvail] = useState<string | null>(null)
+  const [settingsFocus, setSettingsFocus] = useState<string | undefined>(undefined)
   const [setup, setSetup] = useState<SetupState | null>(null)
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [activeJob, setActiveJob] = useState<string | null>(null)
@@ -140,6 +142,23 @@ export default function App() {
     refreshJobs()
     refreshHardware()
   }, [refreshJobs, refreshHardware])
+
+  // T-16: the launch update check (E15-F01) — on by default, switchable in
+  // Settings → About, where the whole install flow lives. One GET for
+  // latest.json; every failure path is silent, because a dev build, an
+  // offline machine or a repo with no release yet are not error states.
+  useEffect(() => {
+    ;(async () => {
+      try {
+        if (!(await api.updateChecksEnabled())) return
+        const { check } = await import('@tauri-apps/plugin-updater')
+        const update = await check()
+        if (update) setUpdateAvail(update.version)
+      } catch {
+        /* quiet by design */
+      }
+    })()
+  }, [])
 
   // Instagram loop: opportunistic sync on launch + hourly while open
   // (decision #12 — no background process, the app's own uptime is the
@@ -298,7 +317,7 @@ export default function App() {
   } else if (view === 'loop') {
     content = <Loop onBack={() => setView('studio')} />
   } else if (view === 'settings') {
-    content = <Settings onBack={() => setView('studio')} />
+    content = <Settings onBack={() => setView('studio')} initialGroup={settingsFocus} />
   } else if (view === 'queue') {
     content = <QueueView onBack={() => setView('studio')} />
   } else if (view === 'review' && results) {
@@ -340,7 +359,10 @@ export default function App() {
         }}
         onRun={startRun}
         onOpenLoop={() => setView('loop')}
-        onOpenSettings={() => setView('settings')}
+        onOpenSettings={() => {
+          setSettingsFocus(undefined)
+          setView('settings')
+        }}
         onOpenQueue={() => setView('queue')}
         onOpenJob={openJob}
         onResume={(id, fromStage) => {
@@ -359,6 +381,29 @@ export default function App() {
   return (
     <>
       {content}
+      {updateAvail && view === 'studio' && (
+        <div className="update-banner">
+          <span>
+            Update <span className="mono">{updateAvail}</span> is available.
+          </span>
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              setSettingsFocus('__about')
+              setView('settings')
+            }}
+          >
+            VIEW
+          </button>
+          <button
+            className="btn-ghost"
+            title="dismiss until next launch"
+            onClick={() => setUpdateAvail(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {view !== 'boot' && <ThemeSwitcher />}
     </>
   )

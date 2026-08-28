@@ -66,9 +66,10 @@ detection).
 
 Every model — speech recognition, forced alignment, diarization, laughter
 detection, audio tagging, face detection, active-speaker detection — runs
-locally. The only network calls are the video download and a few small LLM
-calls (bring your own Gemini key, or run fully local via Ollama at reduced
-scoring quality).
+locally. Your video is never uploaded; scoring sends transcript excerpts and
+a few still frames to Gemini (bring your own key), or stays fully local via
+Ollama at reduced scoring quality. [PRIVACY.md](PRIVACY.md) names every
+network call the app can make.
 
 ## Status
 
@@ -99,6 +100,25 @@ NVIDIA-only, and everything falls back to the CPU without it.
 pipeline/   Python package — the entire processing pipeline + CLI
 app/        Tauri v2 desktop shell (React UI, Python sidecar)
 ```
+
+## Installing a release build (Windows)
+
+Release installers are on the
+[releases page](https://github.com/Karlasonars/Alias_Studio/releases), built
+by CI from the tagged source that sits beside them.
+
+**Expect a Windows SmartScreen warning — it is normal for this app.** The
+installer is not Authenticode-signed (a paid certificate this free beta
+deliberately skips), so Windows shows "Windows protected your PC". Click
+**More info → Run anyway**. You will see it once per downloaded installer.
+If you want to verify what you downloaded first, each release lists its
+source and CI run.
+
+The lack of a Windows certificate does not mean updates are unverified:
+the app's built-in updater checks every update against its own signing key
+and refuses anything unsigned or tampered with. Update checks run at launch
+and can be switched off in Settings → About ([PRIVACY.md](PRIVACY.md) has
+the details).
 
 ## Install from source (Windows)
 

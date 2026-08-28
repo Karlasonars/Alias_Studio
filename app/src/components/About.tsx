@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import Markdown from './Markdown'
+import UpdatePanel from './UpdatePanel'
 import { buildInfo, type BuildInfo } from '../buildInfo'
 import licenseText from '../../../LICENSE?raw'
 import vendoredText from '../../../VENDORED-LICENSES.md?raw'
@@ -96,6 +97,8 @@ export default function About({ build = buildInfo }: { build?: BuildInfo }) {
           each with its own source archive.
         </p>
       )}
+
+      <UpdatePanel />
 
       <p>
         Alias Studio is a modified build of{' '}

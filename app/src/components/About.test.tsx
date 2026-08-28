@@ -6,15 +6,26 @@
  * three one-source documents (LICENSE, VENDORED-LICENSES.md, README's
  * modification statement) actually arrive on screen. */
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { commands, resetTauri } from '../test/tauri'
 import About, { modificationsSection } from './About'
 
+vi.mock('@tauri-apps/api/core', async () => {
+  const t = await import('../test/tauri')
+  return { invoke: t.invokeMock, convertFileSrc: (p: string) => p }
+})
 vi.mock('@tauri-apps/api/app', () => ({
   getVersion: async () => '9.9.9-test'
 }))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(async () => {}) }))
 
 const commit = 'abcdef0123456789abcdef0123456789abcdef01'
+
+beforeEach(() => {
+  resetTauri()
+  // About hosts UpdatePanel (T-16), which loads the launch-check pref.
+  commands.update_checks_enabled = () => true
+})
 
 describe('About (E16-F03)', () => {
   it('shows the runtime version and links the exact commit of the build', async () => {
