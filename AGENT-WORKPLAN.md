@@ -896,15 +896,32 @@ Touches     app/src-tauri/tauri.conf.json, Cargo.toml, .github/workflows/
 Proves it   an update run that preserves jobs, settings and presets
 ```
 
-### T-17 · E15-F03 — Privacy notice                             [P0]
+### T-17 · E15-F03 — Privacy notice                             [DONE 2026-08-28]
 
 ```
-Blocked by  nothing
-Touches     PRIVACY.md (new), app/src/components/ (Settings → Privacy)
-Proves it   review: every network call in the code appears in the document
+Merged      PRIVACY.md (every network call: what, when, to whom, optional,
+            what refusing costs — never-leaves list first, the free-tier
+            training sentence bolded twice); Settings → Privacy renders
+            the file itself (build-time ?raw import — one source, no
+            copy to drift); onboarding step 0 now states the claim
+            accurately and points at the tab
+Proves it   tests/test_privacy_notice.py — extracts every host from
+            Python string constants (ast, vendor excluded), main.rs, the
+            frontend and pyproject.toml, plus the no-literal-URL
+            downloaders (huggingface_hub, torch.hub, uv), and fails on
+            any host PRIVACY.md does not name; verified by injection (an
+            evil.example.com literal goes red). Content pins for the two
+            PRD sentences. PrivacyNotice.test.tsx (+3): claims render,
+            refusal consequence named, the tab reaches the doc
+Watch out   the audit found two calls outside the task's starter list:
+            main.rs itself curls Gemini (key check) and Ollama, and a
+            packaged build's FIRST LAUNCH downloads Python + deps from
+            pypi.org / download.pytorch.org via bundled uv — both are in
+            the document now. The old onboarding line ("two or three
+            small text calls") was false: T2 sends frames. Auto-update
+            (T-16) must update PRIVACY.md in the same commit — the guard
+            forces it only if the host is a literal in scanned code
 ```
-
-Name every network call the app makes. Auditable claim, not marketing.
 
 ### T-18 · E16-F03 — AGPL in the UI                             [P0]
 

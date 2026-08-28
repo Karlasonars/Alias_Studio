@@ -7,6 +7,8 @@ T-22 and T-24.
 
 Companion documents: [README.md](README.md) is the user-facing pitch;
 [VENDORED-LICENSES.md](VENDORED-LICENSES.md) covers third-party code;
+[PRIVACY.md](PRIVACY.md) names every network call the app can make (T-17 —
+guarded by a test, shown verbatim under Settings → Privacy);
 [CLAUDE.md](CLAUDE.md) is the working rules and **wins on any conflict with
 this file**; this file is the engineering reference for how the built thing
 works.
@@ -751,6 +753,17 @@ pipeline writes only kilobytes there.
 ---
 
 ## 11. Models and external services
+
+**The authoritative list of network calls is [PRIVACY.md](PRIVACY.md)**
+(E15-F03, T-17): every host the code can reach, what is sent, when, and what
+refusing costs. It is enforced, not aspirational —
+`tests/test_privacy_notice.py` extracts every host from the Python string
+constants (ast), the Rust shell, the frontend and `pyproject.toml`, plus the
+hosts the no-literal-URL downloaders reach (huggingface_hub, torch.hub, uv),
+and fails when one is missing from the document. The app renders the file
+itself under Settings → Privacy via a build-time `?raw` import
+(`PrivacyNotice.tsx`), so the shown text cannot drift from the repo copy.
+This section covers the model-weight subset in engineering detail.
 
 ### Downloaded weights
 
