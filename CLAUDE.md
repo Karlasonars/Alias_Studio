@@ -42,9 +42,9 @@ mirror it into the code.
 pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
   cli.py            (718)  argparse surface; the sidecar's entry point
   config.py         (452)  the whole settings tree
-  settings_schema.py (487) UI schema — 13 groups; 67 nested + 5 top-level = 72
+  settings_schema.py (492) UI schema — 13 groups; 67 nested + 6 top-level = 73
                            fields, plus CAPTION_FIELDS (15) outside GROUPS.
-                           Real surface: 87, all of it help-guarded
+                           Real surface: 88, all of it help-guarded
   hardware.py       (231)  CUDA/CPU detection. The single place that answers
                            "what can this machine do"
   jobs/queue.py     (355)  Job/Stage machinery, SQLite, checkpoints
@@ -180,8 +180,9 @@ still correct?*
    "Missing means unchanged" is the wrong summary: it is only unchanged *if the
    current value is still the default*.
 
-   **`fingerprint_ok` has exactly one caller** (`candidates`). Everything below uses
-   strict comparison instead, which means rule 3 does **not** hold for those stages.
+   **`fingerprint_ok` has three callers** — `candidates`, `events` (T-21) and
+   `scoring` (T-39). `camera` and `render` use strict comparison instead, which
+   means rule 3 does **not** hold for those two.
 
 What each stage actually does — all eight, because the two-row version of this table
 is how a shipped setting ended up dead:
@@ -193,7 +194,7 @@ is how a shipped setting ended up dead:
 | `diarize` | no override — **correct: reads zero settings** | n/a |
 | `events` | `curves.json` exists + `fingerprint_ok` on `laughter_specialist` | yes |
 | `candidates` | `fingerprint_ok(...)` — the only caller | yes |
-| `scoring` | strict `==` on `settings_used` | no |
+| `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | two strict `!=` on `__dict__` (`camera`, `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
 | `render` | six strict comparisons | no |
 
@@ -208,15 +209,18 @@ Two live consequences, both worth knowing before you touch any of this:
   disk and cascaded into four stages. Fixing rule 1 by breaking rule 3.
 - **`ingest`, `asr` and `diarize` read zero settings** (verified by grep, not
   assumed), so having no fingerprint is correct there rather than an oversight.
-- **Adding any field to `CameraSettings` or the scoring settings invalidates every
-  existing checkpoint**, because those stages compare `__dict__` strictly. That is
+- **Adding any field to `CameraSettings` invalidates every existing camera and
+  render checkpoint**, because those two stages compare `__dict__` strictly. That is
   precisely the "throw away an hour of work over an unrelated toggle" failure rule 3
-  claims to have solved. It has not been solved outside `candidates`.
+  claims to have solved. It has not been solved for `camera` or `render`; scoring
+  joined the fingerprint_ok callers in T-39, exactly because a strict comparison
+  there would have re-spent real LLM money on every job already on disk when
+  `gemini_model` arrived.
 
 Each fingerprint covers **only** what that stage reads. A title edit must not force a
 re-encode; a caption tweak must not re-run the expensive camera pass.
 
-**The tests for this section are in `pipeline/tests/test_clip_edit_sync.py`** (23
+**The tests for this section are in `pipeline/tests/test_clip_edit_sync.py`** (28
 tests: fingerprint invalidation, structural edits, cache survival) and, for rule 2
 specifically, `test_queue.py:test_a_rerun_stage_invalidates_every_stage_after_it` —
 added in T-21, because the rule the whole cascade depends on had no direct test. Nothing in §5's

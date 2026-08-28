@@ -285,8 +285,12 @@ zero.
 
 Two LLM backends behind one interface in `llm.py`:
 
-- `GeminiClient` — model `gemini-flash-latest`. Key resolution order:
-  `PUBLIKCLIP_GEMINI_API_KEY` env var, then the stored key.
+- `GeminiClient` — model `gemini-3.6-flash` by default, overridable per job
+  via `Settings.gemini_model` (T-39: the rolling `gemini-flash-latest` alias
+  died under this product with persistent 503s, so the pin is a stable
+  versioned id and the setting is the user's escape hatch when Google
+  retires it). Key resolution order: `PUBLIKCLIP_GEMINI_API_KEY` env var,
+  then the stored key.
 - `OllamaClient` — local, auto-picks an installed model.
 
 Responses are cached on a hash of (backend, model, prompt, schema, images), so
@@ -427,15 +431,17 @@ that did not need one.
 | `diarize` | **no override** — same | n/a |
 | `events` | `curves.json` exists, then `fingerprint_ok` on `laughter_specialist` | yes |
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
-| `scoring` | strict `==` on `settings_used` (weights + word gate) | no |
+| `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | strict `!=` on `camera_settings` and `retention_settings`, plus `clip_framing` | no |
 | `render` | six strict comparisons: `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` | no |
 
-**`fingerprint_ok` has two callers** — `candidates` and `events`. Everything
-else compares strictly, so rule 3 does *not* hold for `scoring`, `camera` or
-`render`: adding a field to `CameraSettings` or to the scoring settings
-invalidates every existing checkpoint for that stage. That is a known gap, not
-a design intent.
+**`fingerprint_ok` has three callers** — `candidates`, `events` and, since
+T-39, `scoring` (the naive strict fix for the new `gemini_model` key would
+have rescored every job on disk under the new model, missing the LLM cache
+and re-spending real API money). `camera` and `render` still compare
+strictly, so rule 3 does *not* hold there: adding a field to
+`CameraSettings` or the render fingerprint invalidates every existing
+checkpoint for that stage. That is a known gap, not a design intent.
 
 `camera`'s `clip_framing` is the only fingerprint that reaches outside
 `Settings` — it reads `clip_edits.json` off disk, so a per-clip framing
@@ -449,7 +455,7 @@ Each fingerprint deliberately covers **only** what that stage reads. A title
 edit must not force a re-encode; a caption tweak must not re-run the expensive
 camera pass.
 
-The tests for this section are `tests/test_clip_edit_sync.py` (26) and, for
+The tests for this section are `tests/test_clip_edit_sync.py` (28) and, for
 rule 2 specifically, `test_queue.py:test_a_rerun_stage_invalidates_every_stage_after_it`.
 `tests/test_house_rules.py` does **not** cover the checkpoint contract.
 
@@ -782,7 +788,7 @@ SER weights (~378 MB) whose loader has never succeeded (T-38).
 
 | Service | Required? | Used for |
 |---|---|---|
-| Gemini (`gemini-flash-latest`) | optional | T1 rubric, T2 vision, music briefs, copywriting |
+| Gemini (`gemini-3.6-flash` by default; `Settings.gemini_model`) | optional | T1 rubric, T2 vision, music briefs, copywriting |
 | Ollama (local) | optional | the same, minus T2 |
 | Pexels | optional | overlay image search |
 | Meta Graph / Instagram | optional | the feedback loop |

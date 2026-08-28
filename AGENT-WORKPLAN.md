@@ -707,6 +707,31 @@ lasted, and it is the standing argument for showing `missing` in the UI.
 
 Both also surface as raw Python `repr` in the UI, which is T-13's whole subject.
 
+### T-39 · The recommended brain was pinned to a dead alias     [DONE 2026-08-28]
+
+```
+Merged      Settings.gemini_model (default gemini-3.6-flash, §5.1's four
+            places) + the scoring circuit breaker + honest failure messages;
+            cost claims updated ($0.15 → ~$1.20/hr, new model's prices)
+Proves it   tests/test_scoring_breaker.py (4) — 4 consecutive total failures
+            stop the stage naming the cause; a success resets; zero scores
+            from LLM failures blames the service, not the video.
+            test_clip_edit_sync.py — the model is in scoring's fingerprint,
+            and old checkpoints survive the field arriving (rule 3)
+Watch out   scoring's artifacts_ok is now fingerprint_ok, not strict `==` —
+            the strict fix would have re-spent LLM money on every job on
+            disk. Do NOT trust ListModels when changing the pin: it
+            advertised both the 404 (2.5-flash, new keys) and the 503
+            (flash-latest) — verify with a real generateContent call
+```
+
+The alias `gemini-flash-latest` began returning persistent 503s on
+2026-08-28: 26 moments × 5 backoff attempts each ≈ ten minutes of doomed
+calls, then a failure blaming the video ("No candidate produced a scoreable
+transcript"). Verified live before repinning: ListModels with the owner's
+key advertises 53 models including the dead alias; generateContent answers
+200 on gemini-3.5/3.6-flash and 503 on flash-latest and 3.7-flash.
+
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
 ```

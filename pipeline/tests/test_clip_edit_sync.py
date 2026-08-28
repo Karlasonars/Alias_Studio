@@ -18,6 +18,7 @@ from publikclip_pipeline import config
 from publikclip_pipeline.camera import stage as camera_stage
 from publikclip_pipeline.edits import store as edits_store
 from publikclip_pipeline.render import stage as render_stage
+from publikclip_pipeline.scoring import stage as scoring_stage
 
 
 class FakeJob:
@@ -314,3 +315,34 @@ def test_render_cache_is_invalidated_by_a_clip_style_edit(tmp_path, ctx):
     assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
     write_edits(tmp_path, {"0": {"letterbox_fill": "blur"}})
     assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+
+
+# ---------------------------------------------------------------------------
+# Scoring stage: the model is part of the fingerprint (T-39, §5.1 place 3)
+
+
+def test_scoring_cache_is_invalidated_by_a_model_change(ctx):
+    stage = scoring_stage.ScoreStage()
+    data = {"settings_used": stage._settings_used(ctx)}
+    assert stage.artifacts_ok(ctx, data) is True
+    # A different model produces different scores for identical inputs, and
+    # the LLM disk cache keys on it — serving old numbers would be the
+    # "shipped setting that silently does nothing" failure (§4 rule 1).
+    ctx.settings.gemini_model = "gemini-9.9-flash"
+    assert stage.artifacts_ok(ctx, data) is False
+
+
+def test_old_scoring_checkpoints_survive_the_model_setting_arriving(ctx):
+    """§4 rule 3, which scoring did NOT have before T-39: every checkpoint
+    written before gemini_model existed lacks the key, and the old strict
+    `==` would have rescored every job on disk under the new model — a cache
+    miss on every LLM call, real API spend, for scores that are already
+    valid work of the model that made them."""
+    stage = scoring_stage.ScoreStage()
+    stored = stage._settings_used(ctx)
+    del stored["gemini_model"]  # a checkpoint from before the field existed
+    assert stage.artifacts_ok(ctx, {"settings_used": stored}) is True
+    # ...but only while the user is on the factory default: a deliberate
+    # model change still invalidates that same old checkpoint.
+    ctx.settings.gemini_model = "gemini-9.9-flash"
+    assert stage.artifacts_ok(ctx, {"settings_used": stored}) is False

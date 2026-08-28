@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import config
 from ..jobs.queue import Stage, StageContext, StageError
 from ..music import brief as music_brief
 from . import constants as constants_mod
@@ -21,6 +22,25 @@ from . import llm as llm_mod
 from . import rubric
 
 SELECT_COUNT = 12
+
+# Circuit breaker for the T1 loop (T-39). Skipping ONE moment whose call
+# failed after its own 5-attempt retry ladder is §5.9 working; skipping all
+# of them is a failed run wearing a success — a real outage once burned ten
+# minutes of doomed, backoff-padded calls across 26 moments and the run
+# carried on. Four CONSECUTIVE total failures is ~20 HTTP attempts spanning
+# minutes of wall clock including backoff — beyond anything the per-call
+# retries are designed to absorb — while still one more than the
+# outage-recovers-at-moment-4 case a smaller threshold would wrongly kill.
+# Any success resets the count, so a flaky-but-alive service never trips it.
+CONSECUTIVE_FAILURE_LIMIT = 4
+
+
+class _FactoryCtx:
+    """Minimal StageContext stand-in so artifacts_ok can compute the
+    factory-default fingerprint (the candidates stage's pattern)."""
+
+    def __init__(self, settings: "config.Settings"):
+        self.settings = settings
 
 
 def _transcript_slice(segments: list[dict], start: float, end: float) -> tuple[str, str]:
@@ -70,6 +90,10 @@ class ScoreStage(Stage):
     def _settings_used(ctx: StageContext) -> dict:
         return {
             "llm_mode": ctx.settings.llm_mode,
+            # A different model produces different scores for identical
+            # inputs — and misses the LLM disk cache, which keys on the
+            # model — so it must invalidate exactly like a weight change.
+            "gemini_model": ctx.settings.gemini_model,
             "select_count": ctx.settings.clips.select_count,
             "min_words": ctx.settings.clips.min_words,
             "scoring": {
@@ -81,11 +105,37 @@ class ScoreStage(Stage):
         }
 
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
-        # Weights and the word gate change which clips win and what they
-        # score — a change here must rescore rather than serve old numbers.
-        # (LLM calls themselves are disk-cached, so a rescore is cheap when
-        # only the weights moved.)
-        return data.get("settings_used") == self._settings_used(ctx)
+        # Weights, the word gate and the model change which clips win and
+        # what they score — a change here must rescore rather than serve old
+        # numbers. Compared via fingerprint_ok rather than strict `==`
+        # (T-21's events pattern): every checkpoint written before
+        # gemini_model existed lacks the key, and a strict comparison would
+        # force a rescore of every job on disk under the NEW model — which
+        # misses the LLM cache and re-spends real API money on scores that
+        # are already valid, honest work of the model that made them. A user
+        # who actually changes the setting still mismatches and rescores.
+        from ..jobs.queue import fingerprint_ok
+
+        factory = self._settings_used(
+            _FactoryCtx(config.Settings())  # type: ignore[arg-type]
+        )
+        return fingerprint_ok(data.get("settings_used") or {}, self._settings_used(ctx), factory)
+
+    @staticmethod
+    def _count_failure(ctx: StageContext, index: int, err: Exception) -> None:
+        ctx.emit(-1, f"moment {index + 1} scoring failed, skipping: {err}")
+
+    @staticmethod
+    def _breaker_message(last: Exception) -> str:
+        # T-13 will fold this into the catalogue; until then it must stand
+        # on its own: the cause, what was NOT lost, and the way forward.
+        return (
+            f"The scoring model failed {CONSECUTIVE_FAILURE_LIMIT} moments in a row "
+            "(each call already retried with backoff), so the service is down for "
+            f"this run — stopping instead of failing every remaining moment. "
+            f"Last error: {last}. Everything before scoring is checkpointed; resume "
+            "this job to retry, or pick a different Gemini model in Settings → AI."
+        )
 
     def run(self, ctx: StageContext) -> dict:
         prior = ctx.prior or {}
@@ -98,7 +148,7 @@ class ScoreStage(Stage):
 
         llm_mode = ctx.settings.llm_mode
         try:
-            client = llm_mod.make_client(llm_mode)
+            client = llm_mod.make_client(llm_mode, ctx.settings.gemini_model)
         except llm_mod.LlmError as err:
             raise StageError(str(err)) from err
 
@@ -129,6 +179,9 @@ class ScoreStage(Stage):
 
         candidates = cands["candidates"]
         scored: list[dict] = []
+        consecutive_failures = 0
+        llm_failures = 0
+        last_llm_error: Exception | None = None
         for i, cand in enumerate(candidates):
             start, end = cand["start"], cand["end"]
             ctx.emit(i / max(1, len(candidates)) * 0.6, f"Scoring moment {i + 1}/{len(candidates)}…")
@@ -146,11 +199,22 @@ class ScoreStage(Stage):
             except llm_mod.LlmError as err:
                 if err.fatal:
                     raise
-                ctx.emit(-1, f"moment {i + 1} scoring failed, skipping: {err}")
+                self._count_failure(ctx, i, err)
+                llm_failures += 1
+                consecutive_failures += 1
+                last_llm_error = err
+                if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                    raise StageError(self._breaker_message(err)) from err
                 continue
             except Exception as err:  # noqa: BLE001
-                ctx.emit(-1, f"moment {i + 1} scoring failed, skipping: {err}")
+                self._count_failure(ctx, i, err)
+                llm_failures += 1
+                consecutive_failures += 1
+                last_llm_error = err
+                if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                    raise StageError(self._breaker_message(err)) from err
                 continue
+            consecutive_failures = 0  # the service is alive; isolated skips stay §5.9
 
             arousal_pct = _window_pct(arousal, arousal_grid, start, end)
             heatmap_pct = (
@@ -180,6 +244,17 @@ class ScoreStage(Stage):
             )
 
         if not scored:
+            # Two very different failures used to share one message that
+            # blamed the video. Name the real cause: a run where the LLM
+            # failed every attempted moment is a service problem the user
+            # can act on, not a video that lacks scoreable speech.
+            if llm_failures:
+                raise StageError(
+                    f"Scoring produced nothing: the LLM failed on all {llm_failures} "
+                    f"moment(s) it was asked about (last error: {last_llm_error}). "
+                    "Nothing was scored — resume this job to retry once the service "
+                    "or connection recovers."
+                )
             raise StageError("No candidate produced a scoreable transcript.")
 
         # Rank by best pre-visual platform score, take the finalists.
