@@ -28,7 +28,10 @@ serde_json = "1"
 # the licence-audit surface (T-18) one crate smaller; the API needed is 4 calls.
 # Win32_System_Threading: JOBOBJECT_EXTENDED_LIMIT_INFORMATION embeds
 # Threading::IO_COUNTERS, needed for the setup child's KILL_ON_JOB_CLOSE.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+# Win32_Storage_FileSystem: GetDiskFreeSpaceExW for the T-40 pre-bootstrap
+# free-space line — the answer python's disk.py would give, needed before
+# python can exist.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(unix)'.dependencies]
 # T-07 cancel on macOS: killpg of the job's process group. Unverified until T-19.

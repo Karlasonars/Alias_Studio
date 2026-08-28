@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
@@ -266,30 +266,24 @@ fn handle_cancelled_exit(
     }
 }
 
-/// Where the Python pipeline lives and how to invoke it.
-/// Dev builds call `uv run` against the repo's pipeline/ directory. Packaged
-/// builds invoke the bundled python env (M6); resolution stays in one place.
-fn pipeline_invocation() -> (String, Vec<String>) {
+/// Which uv binary, against which pipeline directory. One resolution for
+/// everything that spawns uv — the job runner composes `run publikclip` on
+/// top of it and the T-40 bootstrap composes `sync`, so the two can never
+/// drift onto different pipelines.
+fn uv_base() -> (String, PathBuf) {
     if cfg!(debug_assertions) {
         let pipeline_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../pipeline")
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from("../pipeline"));
-        (
-            "uv".to_string(),
-            vec![
-                "--directory".to_string(),
-                pipeline_dir.to_string_lossy().to_string(),
-                "run".to_string(),
-                "publikclip".to_string(),
-            ],
-        )
+        ("uv".to_string(), pipeline_dir)
     } else {
         // Packaged: bundled uv + pipeline source under the platform's
         // resource layout — macOS keeps them in the .app's Resources dir,
         // Windows (NSIS) lands them in resources\ next to the exe. The venv
-        // bootstraps into PUBLIKCLIP_HOME on first run (uv handles Python
-        // 3.12 download + deps; the onboarding screen owns expectations).
+        // bootstraps into PUBLIKCLIP_HOME (T-16's UV_PROJECT_ENVIRONMENT in
+        // quiet_command); the T-40 bootstrap section below owns making that
+        // first materialization visible instead of a silent multi-GB stall.
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -302,14 +296,25 @@ fn pipeline_invocation() -> (String, Vec<String>) {
         let uv = if cfg!(target_os = "windows") { "bin/uv.exe" } else { "bin/uv" };
         (
             resources.join(uv).to_string_lossy().to_string(),
-            vec![
-                "--directory".to_string(),
-                resources.join("pipeline").to_string_lossy().to_string(),
-                "run".to_string(),
-                "publikclip".to_string(),
-            ],
+            resources.join("pipeline"),
         )
     }
+}
+
+/// Where the Python pipeline lives and how to invoke it.
+/// Dev builds call `uv run` against the repo's pipeline/ directory. Packaged
+/// builds invoke the bundled python env (M6); resolution stays in one place.
+fn pipeline_invocation() -> (String, Vec<String>) {
+    let (program, pipeline_dir) = uv_base();
+    (
+        program,
+        vec![
+            "--directory".to_string(),
+            pipeline_dir.to_string_lossy().to_string(),
+            "run".to_string(),
+            "publikclip".to_string(),
+        ],
+    )
 }
 
 #[tauri::command]
@@ -998,6 +1003,229 @@ fn stream_setup_child(app: &AppHandle, mut child: std::process::Child) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T-40: the Python environment bootstrap, made visible. A packaged first
+// launch must download Python 3.12 plus every dependency in pyproject.toml
+// before the sidecar can answer anything at all — measured 2026-08-28 at
+// ~3.86 GB on Windows (torch cu128 alone is 3.46 GB, and §6's CUDA index
+// marker is per-PLATFORM, so a machine with no NVIDIA GPU downloads it
+// too). T-11's disk-watcher machinery is the right pattern but it lives in
+// Python, which cannot run until this finishes — so the same pattern is
+// implemented here: spawn `uv sync`, never parse uv's output (not a stable
+// interface), report real bytes appearing on disk against a measured
+// total. The child gets KILL_ON_JOB_CLOSE for T-11's setup-downloader
+// reason: a multi-GB download that outlives the app is invisible network
+// and disk use nobody asked to keep; uv's cache keeps completed wheels, so
+// the next attempt resumes at wheel granularity.
+
+/// Compressed download total for a cold Windows bootstrap. Measured from
+/// uv.lock wheel sizes plus HEAD requests for the three pytorch-cu128
+/// wheels the lock does not size, plus uv's managed CPython archive.
+/// tests/test_bootstrap_numbers.py cross-checks what is checkable offline.
+const ENV_DOWNLOAD_BYTES: u64 = 3_857_000_000;
+/// Apparent bytes that land under the venv + uv cache during a cold
+/// bootstrap — the watcher's denominator. Estimated as measured venv
+/// (8.48 GB) + cache extraction of the same content; the fraction clamps
+/// at 99% and the byte counter is the honest half, exactly as in T-11.
+const ENV_APPARENT_TOTAL_BYTES: u64 = 17_000_000_000;
+/// Physical free space the bootstrap needs (cache stores each wheel
+/// unpacked once; venv entries hardlink to it on the same volume).
+const ENV_DISK_NEED_BYTES: u64 = 9_500_000_000;
+/// First-run model downloads, mirroring setup.py's measured 2026-08-27
+/// split (~2.39 GB). A copy across the language boundary, because python
+/// cannot be asked before the env exists — pinned against setup.py's own
+/// constants by tests/test_bootstrap_numbers.py so it cannot drift.
+const MODELS_FIRST_RUN_BYTES: u64 = 2_390_000_000;
+
+fn env_dir() -> PathBuf {
+    if cfg!(debug_assertions) {
+        let (_, pipeline_dir) = uv_base();
+        pipeline_dir.join(".venv")
+    } else {
+        // Matches quiet_command's UV_PROJECT_ENVIRONMENT (T-16).
+        home_dir().join("venv")
+    }
+}
+
+fn env_ready() -> bool {
+    let py = if cfg!(target_os = "windows") { "Scripts/python.exe" } else { "bin/python" };
+    env_dir().join(py).exists()
+}
+
+fn uv_cache_dir() -> PathBuf {
+    if let Some(custom) = std::env::var_os("UV_CACHE_DIR") {
+        return PathBuf::from(custom);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs_home().join("AppData/Local"))
+            .join("uv/cache")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        dirs_home().join(".cache/uv")
+    }
+}
+
+fn volume_free_bytes(path: &Path) -> Option<u64> {
+    // Nearest existing ancestor, same as python's disk.py: the target may
+    // not exist yet on a cold machine.
+    let mut probe = path.to_path_buf();
+    while !probe.exists() {
+        let Some(parent) = probe.parent() else { break };
+        probe = parent.to_path_buf();
+    }
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = probe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut free: u64 = 0;
+        if GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) != 0 {
+            Some(free)
+        } else {
+            None // §5.9: an unreadable volume degrades to "no number"
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        let c = std::ffi::CString::new(probe.to_string_lossy().as_bytes()).ok()?;
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c.as_ptr(), &mut stat) == 0 {
+            Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+        } else {
+            None
+        }
+    }
+}
+
+/// Everything the onboarding screen needs BEFORE python can exist: whether
+/// the env is materialized, what a cold bootstrap costs, and how much room
+/// this machine actually has. Read-only and instant.
+#[tauri::command]
+fn bootstrap_status() -> Value {
+    json!({
+        "ready": env_ready(),
+        "env_download_bytes": ENV_DOWNLOAD_BYTES,
+        "env_disk_bytes": ENV_DISK_NEED_BYTES,
+        "models_approx_bytes": MODELS_FIRST_RUN_BYTES,
+        "free_bytes": volume_free_bytes(&home_dir()),
+    })
+}
+
+struct BootstrapState(Mutex<bool>);
+
+fn tree_bytes(root: &Path) -> u64 {
+    fn walk(dir: &Path, acc: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                walk(&entry.path(), acc);
+            } else {
+                *acc += meta.len();
+            }
+        }
+    }
+    let mut total = 0;
+    walk(root, &mut total);
+    total
+}
+
+/// Materialize the env (`uv sync`), with disk-truth progress. Idempotent:
+/// on a machine where the env exists this is uv's sub-second no-op and the
+/// result event fires almost immediately.
+#[tauri::command]
+fn run_bootstrap(app: AppHandle, state: tauri::State<BootstrapState>) -> Result<(), String> {
+    {
+        let mut running = state.0.lock().unwrap();
+        if *running {
+            return Ok(()); // already bootstrapping; its events are already visible
+        }
+        *running = true;
+    }
+    let (program, pipeline_dir) = uv_base();
+    let mut cmd = quiet_command(&program);
+    cmd.args(["--directory", &pipeline_dir.to_string_lossy(), "sync"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            *state.0.lock().unwrap() = false;
+            return Err(format!("could not start the environment install: {err}"));
+        }
+    };
+    #[cfg(target_os = "windows")]
+    let _job = job_object::JobHandle::adopt_kill_on_close(&child);
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "windows")]
+        let _job = _job; // keep the handle alive for the child's lifetime
+        let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let stderr_thread = child.stderr.take().map(|stderr| {
+            let tail = stderr_tail.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let mut buf = tail.lock().unwrap();
+                    buf.push_str(&line);
+                    buf.push('\n');
+                    let excess = buf.len().saturating_sub(4000);
+                    if excess > 0 {
+                        buf.replace_range(0..excess, "");
+                    }
+                }
+            })
+        });
+
+        // Bytes ADDED since start, not absolute: the uv cache is shared
+        // with other projects, so absolute counting would inherit their
+        // bytes. The cost: a resumed bootstrap's bar starts at zero and
+        // finishes early — the clamp and the completion re-check make that
+        // honest rather than confusing. (T-11 counts absolutes because its
+        // caches belong to this app alone; this one diverges deliberately.)
+        let venv = env_dir();
+        let cache = uv_cache_dir();
+        let base = tree_bytes(&venv) + tree_bytes(&cache);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if let Some(t) = stderr_thread {
+                        let _ = t.join();
+                    }
+                    let ok = status.success();
+                    let detail = stderr_tail.lock().unwrap().trim().to_string();
+                    *app.state::<BootstrapState>().0.lock().unwrap() = false;
+                    let _ = app.emit(
+                        "bootstrap-event",
+                        json!({"event": "result", "ok": ok, "stderr": if ok { String::new() } else { detail }}),
+                    );
+                    return;
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+            let added = (tree_bytes(&venv) + tree_bytes(&cache)).saturating_sub(base);
+            let fraction =
+                (added as f64 / ENV_APPARENT_TOTAL_BYTES as f64).min(0.99);
+            let _ = app.emit(
+                "bootstrap-event",
+                json!({"event": "progress", "bytes": added, "fraction": fraction}),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn get_setup_state() -> Result<Value, String> {
     let secrets = home_dir().join("secrets.json");
@@ -1278,6 +1506,7 @@ fn main() {
         })))
         .manage(QueueCache(Mutex::new(QueueCacheInner { gen: 0, jobs: None })))
         .manage(SetupState(Mutex::new(None)))
+        .manage(BootstrapState(Mutex::new(false)))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1298,6 +1527,8 @@ fn main() {
             save_gemini_key,
             setup_status,
             run_setup,
+            bootstrap_status,
+            run_bootstrap,
             get_setup_state,
             get_hardware_profile,
             probe_hardware,

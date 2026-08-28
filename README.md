@@ -136,9 +136,11 @@ node_modules\.bin\tauri.cmd build --bundles nsis
 Start-Process (Get-ChildItem src-tauri\target\release\bundle\nsis -Filter *-setup.exe).FullName
 ```
 
-On first run the app downloads its speech/audio models (~4–5 GB) behind a
-progress bar, and fetches a caption-capable static ffmpeg automatically if the
-machine has none. Scoring uses your own Gemini API key, or a local Ollama model
+On first run the app downloads its Python environment (~3.9 GB on Windows —
+PyTorch's CUDA build is most of it, and it lands on machines without an
+NVIDIA GPU too) and then its speech/audio models (~2.4 GB), about **6.3 GB
+in total**, behind a progress bar; a caption-capable static ffmpeg is
+fetched automatically if the machine has none. Scoring uses your own Gemini API key, or a local Ollama model
 at reduced quality — onboarding walks through both.
 
 On a machine with an NVIDIA GPU, `uv sync` installs the CUDA build of PyTorch
