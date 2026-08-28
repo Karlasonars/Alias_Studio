@@ -732,6 +732,16 @@ transcript"). Verified live before repinning: ListModels with the owner's
 key advertises 53 models including the dead alias; generateContent answers
 200 on gemini-3.5/3.6-flash and 503 on flash-latest and 3.7-flash.
 
+Also verified in the follow-up: the flash-lite tier (3.5-flash-lite,
+3.1-flash-lite) passes the same scoring-shaped probe — responseSchema plus
+inline JPEG — with zero thinking tokens, at roughly a third of 3.6-flash's
+price. A lite default is a QUALITY decision, not a mechanical one, and needs
+a scored-output comparison on real content (owner's call, a real run). The
+free tier exists for all of them: rate-limited (the 429 path already paces
+on Google's retryDelay), per-account caps unpublished, and free-tier
+prompts "may be used to improve our products" — a privacy fact T-17's
+notice must state.
+
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
 ```

@@ -68,8 +68,9 @@ export default function KeyModal({ onClose }: Props) {
           <button className="btn-ghost" onClick={onClose}>close ✕</button>
         </header>
         <p className="ig-intro">
-          Gemini scores your moments at full quality (~<span className="mono">$1.20</span>/hr
-          of source on the paid tier). The key lives in <span className="mono">~/.publikclip/secrets.json</span>,
+          Gemini scores your moments at full quality. A free-tier key works —
+          rate-limited, and Google may train on free-tier prompts; the paid tier
+          runs ~<span className="mono">$1.20</span>/hr of source. The key lives in <span className="mono">~/.publikclip/secrets.json</span>,
           chmod 600, and never goes anywhere but Google.{' '}
           {hasKey && <strong>A key is currently saved{saved ? ' — updated ✓' : ''}.</strong>}
         </p>

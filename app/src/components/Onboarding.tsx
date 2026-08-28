@@ -152,9 +152,11 @@ export default function Onboarding({ onDone }: Props) {
               <h3>Gemini key <span className="chip chip-amber">recommended</span></h3>
               <p>
                 Bring your own key: sign in at aistudio.google.com, press{' '}
-                <em>Get API key</em>, paste it here. Costs roughly{' '}
-                <span className="mono">$1.20</span> per hour of source video on
-                the paid tier. Best humor and shock judgment.
+                <em>Get API key</em>, paste it here. Google's free tier works —
+                rate-limited (the run paces itself), and Google may use free-tier
+                prompts to improve its products. The paid tier costs roughly{' '}
+                <span className="mono">$1.20</span> per hour of source video.
+                Best humor and shock judgment.
               </p>
               <button
                 className="btn-ghost"
