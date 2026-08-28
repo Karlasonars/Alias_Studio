@@ -704,6 +704,26 @@ All model caches are redirected under `PUBLIKCLIP_HOME` deliberately, so
 
 Job IDs are `YYYYMMDD-HHMMSS-<6 hex>`.
 
+### Disk pre-flight (E1-F07, T-12)
+
+Before any stage writes, `jobs/disk.py` estimates what the job still needs to
+put on disk — the URL download (yt-dlp's own filesize fields where its format
+pick matches ours, a bitrate range otherwise), the analysis wav (exact
+arithmetic from duration), the rendered clips (always a range), and any
+missing model bytes from `setup status` — charges each piece to the volume it
+lands on (`HF_HOME`/`TORCH_HOME` can point the caches at another drive), and
+compares with what is free there. What is already on disk costs nothing, so a
+resume after freeing space passes.
+
+The policy: **block only on a confident shortfall** (free below the low end of
+the estimate); in the gray zone the job starts with a warning; unknown —
+unreadable free space, an unsizeable component — warns and never refuses
+(§5.9-shaped). A blocked job is marked `failed` with the numbers in its error,
+never left `pending`, because `next_pending()` would hand a pending job
+straight back to the shell's auto-advance in a loop; the queue continues and
+checkpoint resume keeps retry free. The system temp dir is not checked: the
+pipeline writes only kilobytes there.
+
 ---
 
 ## 11. Models and external services

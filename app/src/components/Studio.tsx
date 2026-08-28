@@ -27,6 +27,8 @@ interface Props {
   stages: Record<string, { fraction: number; message: string }>
   error: string | null
   cancelled: boolean
+  /** E1-F07 warn-level disk notice: the job is running, just tight on space */
+  diskNotice: string | null
   log: LogLine[]
   enqueueing: boolean
   queued: number
@@ -40,7 +42,7 @@ interface Props {
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, cancelled, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, cancelled, diskNotice, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -259,6 +261,15 @@ export default function Studio({ jobs, running, stages, error, cancelled, log, e
                   </button>
                 </div>
               )}
+            </section>
+          )}
+
+          {/* Warn-severity, so the amber half-led, not the error one: the
+              job is still running and Cancel stays available above. */}
+          {diskNotice && (
+            <section className="error-block">
+              <span className="led led-half" />
+              {diskNotice}
             </section>
           )}
 

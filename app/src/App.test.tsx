@@ -76,6 +76,45 @@ describe('a job start is one transition, wherever it came from (§5.12)', () => 
   })
 })
 
+describe('the disk pre-flight reaches the screen (E1-F07 / T-12)', () => {
+  it('shows a warn notice while the job keeps running, Cancel intact', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-one' })
+    await pipelineEvent({
+      event: 'disk',
+      action: 'warn',
+      message: 'Disk space is tight: this job may need up to 12.4 GB on C:\\ and 9.1 GB is free.'
+    })
+    // a warning, not a verdict: the run continues and stays cancellable
+    expect(screen.getAllByText(/may need up to 12.4 GB/).length).toBeGreaterThan(0)
+    expect(screen.getByText('■ CANCEL')).toBeTruthy()
+  })
+
+  it('shows a blocked start as the job\'s failure, with the numbers', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-one' })
+    const message =
+      'Not enough disk space: this job needs roughly 4.1–18.0 GB free on C:\\ and only 1.2 GB is free. ' +
+      'Nothing was written — free up space and resume this job from the rail.'
+    await pipelineEvent({ event: 'disk', action: 'block', message })
+    await pipelineEvent({ event: 'result', ok: false, job_id: 'job-one', error: message })
+    // the user can tell WHICH happened: the message names the block and the
+    // way out, and the run is over (no Cancel for a job that never started)
+    expect(screen.getAllByText(/free up space and resume/).length).toBeGreaterThan(0)
+    expect(screen.queryByText('■ CANCEL')).toBeNull()
+  })
+
+  it('does not carry a warning into the next job (§5.12)', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-one' })
+    await pipelineEvent({ event: 'disk', action: 'warn', message: 'Disk space is tight: 9.1 GB free.' })
+    await pipelineEvent({ event: 'result', ok: false, error: 'render: out of space' })
+    // the queue advances on its own; job two got the space job one freed
+    await pipelineEvent({ event: 'job', job_id: 'job-two' })
+    expect(screen.queryByText(/Disk space is tight/)).toBeNull()
+  })
+})
+
 describe('the studio rail shows the measured hardware expectation (T-10)', () => {
   it('renders the estimate from the profile file, or admits there is none', async () => {
     commands.get_hardware_profile = () => ({
