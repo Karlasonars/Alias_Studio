@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
+import About from './About'
 import PrivacyNotice from './PrivacyNotice'
 import type {
   CaptionPreset,
@@ -477,10 +478,18 @@ export default function Settings({ onBack }: Props) {
           >
             <span>Privacy</span>
           </button>
+          <button
+            className={`settings-tab ${activeGroup === '__about' ? 'settings-tab-on' : ''}`}
+            onClick={() => setActiveGroup('__about')}
+          >
+            <span>About</span>
+          </button>
         </nav>
 
         <main className="settings-main">
-          {activeGroup === '__privacy' ? (
+          {activeGroup === '__about' ? (
+            <About />
+          ) : activeGroup === '__privacy' ? (
             <PrivacyNotice />
           ) : activeGroup === '__captions' ? (
             <>
