@@ -22,10 +22,17 @@ import httpx
 
 from .. import config
 
-# The rolling alias, deliberately: Google retires pinned models for NEW api
-# keys while still advertising them in ListModels (learned live — 404 "no
-# longer available to new users" on gemini-2.5-flash with a fresh key).
-GEMINI_MODEL = "gemini-flash-latest"
+# Pinned, and a per-job setting (Settings.gemini_model) overrides it. The
+# previous value was the rolling alias "gemini-flash-latest", chosen because
+# a pinned gemini-2.5-flash had 404'd for new keys — and then the alias
+# itself died: on 2026-08-28 it returned persistent 503s ("high demand")
+# while the versioned gemini-3.5/3.6-flash answered the same key fine
+# (T-39). Both failure modes are real, so the policy is now: pin a stable
+# versioned model, and keep the setting as the user's escape hatch. Do not
+# trust ListModels alone when changing the pin — it advertises models that
+# generateContent refuses (both the 404 and the 503 above were listed) —
+# verify with a real generateContent call.
+GEMINI_MODEL = config.DEFAULT_GEMINI_MODEL
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 OLLAMA_URL = "http://localhost:11434"
 LLM_TIMEOUT = 120.0
@@ -119,8 +126,8 @@ def _strip_fences(text: str) -> str:
 class GeminiClient:
     backend = "gemini"
 
-    def __init__(self, model: str = GEMINI_MODEL):
-        self.model = model
+    def __init__(self, model: str | None = None):
+        self.model = model or GEMINI_MODEL
         key = gemini_api_key()
         if not key:
             raise LlmError(
@@ -276,7 +283,7 @@ def _pick_ollama_model(models: list[str]) -> str:
     return models[0]
 
 
-def make_client(llm_mode: str):
+def make_client(llm_mode: str, gemini_model: str | None = None):
     if llm_mode == "ollama":
         return OllamaClient()
-    return GeminiClient()
+    return GeminiClient(gemini_model)

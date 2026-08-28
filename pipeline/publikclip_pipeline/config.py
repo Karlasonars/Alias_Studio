@@ -87,6 +87,15 @@ PROBE_TIMEOUT = 60.0
 MAX_HEIGHT = 1080
 AUDIO_SR = 16_000  # analysis sample rate; every M1 model consumes this wav
 
+# The pinned Gemini model. A non-versioned alias here ("gemini-flash-latest")
+# once let Google break every scoring run without this product changing at
+# all — the alias's target started returning persistent 503s (T-39,
+# 2026-08-28). Pin a stable versioned model, verified live against the API
+# with a real key before each change of this constant, and keep it a SETTING
+# (Settings.gemini_model) so a user can move off a retired pin without
+# waiting for a release.
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+
 
 T = TypeVar("T")
 
@@ -332,6 +341,10 @@ class Settings:
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
+    # Which Gemini model scores. Configurable because the T-39 outage proved
+    # a hardcoded model id is a dependency Google can retire out from under
+    # every user at once, with no workaround short of a new release.
+    gemini_model: str = DEFAULT_GEMINI_MODEL
     caption_preset: str = "classic"
     # jrgillick laughter specialist: 10 ms precision but ~300k CPU forward
     # passes on an hour-plus source. OFF by default — PANNs' AudioSet
@@ -358,6 +371,7 @@ class Settings:
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
+            "gemini_model": self.gemini_model,
             "caption_preset": self.caption_preset,
             "laughter_specialist": self.laughter_specialist,
         }
@@ -401,6 +415,9 @@ class Settings:
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),
+            # `or` on purpose: a blanked-out UI field must fall back to the
+            # pin, not send requests to .../models/:generateContent.
+            gemini_model=data.get("gemini_model") or DEFAULT_GEMINI_MODEL,
             caption_preset=data.get("caption_preset", "classic"),
             laughter_specialist=data.get("laughter_specialist", False),
         )

@@ -377,6 +377,10 @@ GROUPS: list[dict[str, Any]] = [
                  {"value": "ollama", "label": "Ollama (local, no key)"},
              ],
              "help": "Gemini also does the visual pass; Ollama is text-only and marks clips as local estimates."},
+            {"key": "gemini_model", "label": "Gemini model", "type": "text",
+             "help": "The exact Gemini model id used for scoring, e.g. gemini-3.6-flash. "
+                     "Change it if Google retires the default — the app keeps working without an update. "
+                     "Leave empty to use the built-in default."},
             {"key": "laughter_specialist", "label": "Laughter specialist", "type": "bool",
              "help": "Adds a second, higher-precision laughter detector. Substantially slower on long sources — worth it when laughter is the thing you cut on, since two agreeing detectors boost a clip's score."},
         ],

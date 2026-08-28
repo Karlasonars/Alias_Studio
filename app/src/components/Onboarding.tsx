@@ -153,8 +153,8 @@ export default function Onboarding({ onDone }: Props) {
               <p>
                 Bring your own key: sign in at aistudio.google.com, press{' '}
                 <em>Get API key</em>, paste it here. Costs roughly{' '}
-                <span className="mono">$0.15</span> per hour of source video. Best
-                humor and shock judgment.
+                <span className="mono">$1.20</span> per hour of source video on
+                the paid tier. Best humor and shock judgment.
               </p>
               <button
                 className="btn-ghost"

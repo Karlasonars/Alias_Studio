@@ -61,10 +61,10 @@ def plan_prompt(numbered_words: str) -> str:
     )
 
 
-def plan_overlays(words: list[dict], llm_mode: str) -> list[dict]:
+def plan_overlays(words: list[dict], llm_mode: str, gemini_model: str | None = None) -> list[dict]:
     """words carry OUTPUT-timeline times. Returns raw visual plans."""
     numbered = " ".join(f"[{i}]{w['word']}" for i, w in enumerate(words))
-    client = llm_mod.make_client(llm_mode)
+    client = llm_mod.make_client(llm_mode, gemini_model)
     result = client.generate_json(plan_prompt(numbered), PLAN_SCHEMA)
     plans = []
     for v in result.get("visuals", []):
@@ -172,10 +172,13 @@ def fetch_image(query: str, job_dir: Path, prefer: str = "pexels") -> tuple[str 
     return None, "none"
 
 
-def suggest(job_dir: Path, words: list[dict], llm_mode: str, prefer: str = "pexels") -> list[Overlay]:
+def suggest(
+    job_dir: Path, words: list[dict], llm_mode: str, prefer: str = "pexels",
+    gemini_model: str | None = None,
+) -> list[Overlay]:
     """Plan + fetch, returning ready Overlay items (static by default —
     animation strictly opt-in per the design decision)."""
-    plans = plan_overlays(words, llm_mode)
+    plans = plan_overlays(words, llm_mode, gemini_model)
     out: list[Overlay] = []
     for i, plan in enumerate(plans):
         path, source = fetch_image(plan["query"], job_dir, prefer)

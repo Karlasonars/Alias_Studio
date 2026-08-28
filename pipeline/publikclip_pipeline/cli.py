@@ -369,7 +369,10 @@ def cmd_edit(args: argparse.Namespace) -> int:
         ]
         settings = config.Settings.from_json(json.loads(job.settings_json))
         try:
-            suggestions = visuals.suggest(job_dir, words, settings.llm_mode, prefer=args.prefer)
+            suggestions = visuals.suggest(
+                job_dir, words, settings.llm_mode, prefer=args.prefer,
+                gemini_model=settings.gemini_model,
+            )
         except Exception as err:  # noqa: BLE001 — surface, don't crash the app
             print(json.dumps({"ok": False, "error": str(err)}))
             return 1
@@ -394,7 +397,7 @@ def cmd_edit(args: argparse.Namespace) -> int:
         settings = config.Settings.from_json(json.loads(job.settings_json))
         diarize = json.loads((job_dir / "diarize.json").read_text(encoding="utf-8"))["data"]
         try:
-            client = llm_mod.make_client(settings.llm_mode)
+            client = llm_mod.make_client(settings.llm_mode, settings.gemini_model)
         except llm_mod.LlmError as err:
             print(json.dumps({"ok": False, "error": str(err)}))
             return 1
