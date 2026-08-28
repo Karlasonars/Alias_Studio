@@ -762,12 +762,24 @@ Watch out   only ~360 MB of the ~2.39 GB goes through registry.ensure. The
             (language is only known mid-transcribe)
 ```
 
-### T-12 · E1-F07 — Disk space check                            [P0]
+### T-12 · E1-F07 — Disk space check                            [DONE 2026-08-28]
 
 ```
-Blocked by  T-10
-Touches     pipeline/publikclip_pipeline/jobs/queue.py, app/src/components/Studio.tsx
-Proves it   a unit test on the estimate; blocked start when free space is short
+Merged      jobs/disk.py (new) + a pre-flight in cli._execute before anything
+            writes; setup.item_dir (which volume each download charges); a
+            'disk' pipeline-event that App/Studio render as a warn notice
+Proves it   tests/test_disk_check.py (10) — the estimate's arithmetic, the
+            two-volume case, unknown warns and never blocks (§5.9), and the
+            queue policy: blocked = 'failed' with the numbers in its error,
+            never 'pending' (next_pending would hand a pending job back to
+            the shell's auto-advance in a spawn loop). App.test.tsx (3):
+            warn shows while Cancel stays; a blocked start reads as the
+            job's failure; a new job clears the notice (§5.12)
+Watch out   block needs a CONFIDENT shortfall — free below the LOW end of
+            the estimate; the gray zone starts with a warning instead.
+            yt-dlp's -J filesize fields describe its DEFAULT format pick:
+            above MAX_HEIGHT they are an upper bound only. The cleanup
+            screen in E1-F07's criteria is T-30 and was not built here.
 ```
 
 ### T-13 · E14-F01 — Error catalogue                            [P0]
