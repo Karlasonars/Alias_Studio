@@ -843,13 +843,25 @@ Watch out   describe() is the ONLY constructor of the wire shape — new
             is untouched
 ```
 
-### T-14 · E14-F02 — Resume from stage                          [P0]
+### T-14 · E14-F02 — Resume from stage                          [DONE 2026-08-28]
 
 ```
-Blocked by  T-13
-Touches     pipeline/publikclip_pipeline/jobs/queue.py, app/src (the library row)
-Proves it   tests/test_queue.py additions
-Watch out   resuming must respect the invalidation cascade (CLAUDE.md §4 rule 2)
+Merged      queue.invalidate_stage + queue.resume_info; `resume
+            --from-stage` + `jobs resume-info`; render.drop_reproducible_
+            outputs; ResumePicker.tsx behind the rail's resume click
+Proves it   tests/test_resume_from_stage.py (7) — run-counts prove chosen
+            stage + after re-run and nothing before; the render trap
+            (files deleted, render.json and structurally-edited clips
+            kept — the naive checkpoint-delete fails both tests, verified
+            by injection); failed job offers its stage, finished job
+            offers none; estimates are full-tail medians or None (§5.9).
+            ResumePicker.test.tsx (6) + an App-level rail-click flow pin
+Watch out   render is invalidated by DELETING FILES, never render.json —
+            the adoption map lives there and the keep set comes from
+            CURRENT clip_edits, not the stale kept_from_editor list. The
+            picker's estimate uses the STORED profile key (no probe) and
+            goes silent if any tail stage lacks a sample. Plain resume
+            (no choice) is byte-identical to before
 ```
 
 ### T-15 · E14-F03 — Diagnostic bundle                          [P0]

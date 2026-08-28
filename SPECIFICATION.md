@@ -455,6 +455,17 @@ Each fingerprint deliberately covers **only** what that stage reads. A title
 edit must not force a re-encode; a caption tweak must not re-run the expensive
 camera pass.
 
+**Resume from a chosen stage (T-14 / E14-F02)** rides this contract rather
+than adding one: `queue.invalidate_stage` deletes the chosen stage's
+checkpoint and rule 2's cascade re-runs everything after. The exception is
+`render`, whose checkpoint is also the adoption map for editor-reshaped
+clips (`_previous_outputs`) — there the invalidation deletes the
+reproducible clips' FILES instead (T-07's mechanism), keeping `render.json`
+and every structurally-edited clip's file intact. The picker's per-stage
+cost line is T-10's measured medians × the job's duration, summed over the
+chosen stage and its tail, and absent unless every tail stage has a sample
+under the current hardware key.
+
 The tests for this section are `tests/test_clip_edit_sync.py` (28) and, for
 rule 2 specifically, `test_queue.py:test_a_rerun_stage_invalidates_every_stage_after_it`.
 `tests/test_house_rules.py` does **not** cover the checkpoint contract.
@@ -621,7 +632,8 @@ unexpectedly" with the actual error thrown away.
 | Command | Purpose |
 |---|---|
 | `run_job` | start a new job |
-| `resume_job` | resume/restyle an existing job |
+| `resume_job` | resume/restyle an existing job (optionally from a chosen stage, T-14) |
+| `resume_info` | passthrough to `jobs resume-info` for the resume picker |
 | `job_results` | read every stage checkpoint for a job |
 | `list_job_dirs` | enumerate jobs |
 | `save_clip_edits` | write `clip_edits.json` |
@@ -971,6 +983,8 @@ changes take effect on the next job with no rebuild.
 |---|---|
 | `run <source>` | process a URL or file |
 | `resume <job_id>` | resume from checkpoints, optionally with new settings |
+| `resume <job_id> --from-stage <name>` | invalidate that stage first, so it and everything after re-run (T-14) |
+| `jobs resume-info <job_id>` | per-stage status + measured re-run cost, for the resume picker |
 | `jobs` | list jobs |
 | `settings get\|set\|reset` | read/write the global settings tree |
 | `settings preset-save\|preset-reset <name>` | caption preset editing |
