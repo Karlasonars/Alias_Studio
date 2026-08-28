@@ -588,6 +588,35 @@ machine with models, and the PR should say so rather than quietly omitting them.
 And when a UI behaviour *is* pinnable, pin it: a UI change ships with a test the
 way a Python change does.
 
+### Who runs the checklist, and when — the standing policy
+
+**Write the checklist. Do not expect it to be run before merge.** The owner is
+deferring hand-testing to one session before v0.9 ships, deliberately, to keep
+velocity while the surface is still moving. A merged PR therefore means "green
+and reviewed", **not** "exercised by a human". Write every checklist as if the
+person reading it has forgotten this project entirely, because by then they
+nearly will have.
+
+**One exception, and it is sixty seconds.** If your change touches
+`stream_pipeline`, `start_job_locked`, or anything else on the path that spawns
+the sidecar, the owner runs the kill check before merge: start a job, press
+CANCEL, confirm no `uv`/`python`/`ffmpeg` survive. Say so at the top of your
+checklist when it applies.
+
+Why that one and nothing else: nothing in this repository tests it. `cargo check`
+proves the code compiles. It has already been broken once — after T-08 every
+auto-advanced job had no Cancel button at all — and its symptom is an ffmpeg
+quietly burning a core after the UI said "cancelled", which is not something
+anyone notices while testing a feature. Every other defect this policy defers is
+visible the moment someone looks; this one is not.
+
+**The obligation this puts on you: earn your way off the list.** Before writing a
+hand-test step, say why it cannot be a test. "It is UI" is not a reason — T-36
+exists and pinned five of T-08's seven. CSS layout, the kill path, and anything
+needing a real job's artifacts are the three honest categories; a step that is
+not one of those belongs in `*.test.tsx` or `tests/`, not in the owner's evening.
+A PR whose checklist grew instead of shrinking should explain why.
+
 ---
 
 ## 8. Scope discipline
