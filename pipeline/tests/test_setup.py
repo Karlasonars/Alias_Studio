@@ -74,11 +74,13 @@ def test_laughter_is_included_only_when_the_user_enabled_it(home):
 
 
 def test_ser_is_not_a_setup_item(home):
-    # Deliberate exclusion, not an oversight: the SER loader has never
-    # succeeded on the reference machine (every job on disk fell back to
-    # dsp-proxy), so prefetching its 378 MB would be waste until the loader
-    # is fixed. See the setup module docstring; remove this pin only when
-    # setup adopts a demonstrably loading SER.
+    # Deliberate exclusion, not an oversight. T-38 fixed the loader, so the
+    # original reason (prefetching weights a broken loader could never use)
+    # is gone — what remains is the owner's pending decision on adding
+    # ~760 MB (SER weights + the wav2vec2-base snapshot its hyperparams
+    # pull) to the first-run download T-40 measured. Until that decision is
+    # made, the events stage fetches SER lazily and this pin stands. See
+    # the setup module docstring.
     ids = [i.id for i in setup_mod.items(config.Settings())]
     assert not any("ser" in i for i in ids)
     assert set(ids) >= {"whisper", "vad", "align-en", "campplus", "panns", "vision"}

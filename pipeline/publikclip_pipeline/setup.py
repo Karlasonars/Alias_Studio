@@ -34,13 +34,15 @@ Deliberately NOT fetched here:
     user's saved settings enable laughter_specialist. Downloading a model
     the user has switched off, on their metered connection, to make a
     progress list look complete is the wrong trade.
-  - speechbrain SER (~378 MB): its loader fails before the weights ever
-    download (foreign_class dies after fetching one 6 KB interface file),
-    so events falls back to the DSP arousal proxy — observed on every job
-    on the 2026-08-27 reference machine, and recorded honestly by scoring
-    in each score's `missing` list all along. Prefetching 378 MB for a
-    model the loader cannot use would be pure waste; fixing the loader is
-    T-38, and setup should adopt it only once it demonstrably loads.
+  - speechbrain SER: T-38 fixed the loader (the default fetch strategy
+    needed a symlink privilege normal Windows accounts lack — WinError
+    1314), so the events stage now lazily downloads it on the first job
+    that runs with the model absent. The honest size is ~760 MB, not the
+    ~378 MB previously written down: ~378 MB of SER weights plus ~380 MB
+    of facebook/wav2vec2-base that the model's hyperparams pull through
+    transformers. Whether that belongs in this list — on top of the
+    6.3 GB first run T-40 measured — is the owner's call, recorded in
+    T-38's PR; until made, the lazy path carries it.
   - non-English alignment models: the language is detected mid-transcribe
     (asr/stage.py), so only the English default is prefetched; another
     language lazily fetches its own aligner exactly as today.

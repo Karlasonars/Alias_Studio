@@ -35,7 +35,12 @@ const SIGNAL_LABELS: Record<string, string> = {
   audio_events: 'audio events',
   arousal: 'vocal arousal',
   replay_heatmap: 'replay heatmap',
-  visual: 'visual pass'
+  visual: 'visual pass',
+  // T-38: the exact string rubric.py has written into `missing` since day
+  // one — it reached this panel unlabeled and nobody read it as the
+  // degradation it was. Old jobs carry the same string, so they get the
+  // honest label too.
+  'ser_model (dsp proxy used)': 'arousal model (DSP fallback used)'
 }
 
 function fmtTime(t: number): string {
@@ -108,6 +113,11 @@ export default function Review({ results, onBack, onRestyle }: Props) {
             {outputs.length} clips · scored by {results.score?.model ?? '—'} ·{' '}
             {results.score?.llm_mode === 'ollama' ? 'LOCAL ESTIMATE' : 'standard confidence'} ·{' '}
             {results.candidates?.heatmap_present ? 'replay heatmap in play' : 'no public heatmap'}
+            {/* T-38: the degradation §5.9 requires the user to be able to
+                see — shock scores ran without the arousal model. */}
+            {results.events && results.events.arousal_source !== 'ser'
+              ? ' · shock scored on fallback arousal (no SER model)'
+              : ''}
           </p>
         </div>
       </header>
