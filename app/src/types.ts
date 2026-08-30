@@ -229,7 +229,14 @@ export interface JobResults {
     // or bounds the whole-job render cannot reproduce.
     kept_from_editor?: number[]
   } | null
-  events: { counts: Record<string, number>; timeline: unknown[]; arousal_source: string } | null
+  events: {
+    counts: Record<string, number>
+    timeline: unknown[]
+    arousal_source: string
+    /** T-38: why the DSP fallback ran, when it did. Absent on checkpoints
+     * written before the field existed; null when SER ran. */
+    arousal_fallback_reason?: string | null
+  } | null
   candidates: { count: number; effective_weights: Record<string, number>; heatmap_present: boolean } | null
   camera: {
     trajectories: Record<string, string>

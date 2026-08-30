@@ -26,6 +26,7 @@ from .. import config
 from ..jobs.queue import Stage, StageContext, StageError, fingerprint_ok
 from ..models import registry, specs
 from ..render import ffmpeg_bin
+from . import ser
 
 
 def _extract_wav(media: Path, dst: Path, sr: int) -> None:
@@ -43,6 +44,24 @@ def _extract_wav(media: Path, dst: Path, sr: int) -> None:
             code="audio-extract-failed",
             detail=(proc.stderr or "")[-500:],
         )
+
+
+def resolve_arousal(y16k, segments: list[dict], curves: dict, emit) -> tuple:
+    """SER when the model loads, the DSP proxy when it cannot — and the
+    fallback is *announced*. T-38 hid for the product's entire life because
+    the degradation was recorded only where nobody looked (§5.9: a
+    degradation nobody can see is indistinguishable from a bug).
+
+    Returns (curve, source, fallback_reason) — reason is None when SER ran.
+    """
+    arousal, reason = ser.arousal_curve_ser(
+        y16k, segments, str(config.models_dir() / "ser"),
+        progress=lambda f: emit(0.9 + f * 0.08, "Estimating arousal…"),
+    )
+    if arousal is not None:
+        return arousal, "ser", None
+    emit(0.98, "Arousal model unavailable — shock scoring will use the DSP fallback")
+    return ser.arousal_curve_dsp(curves["dynamics"], curves["grid_sec"]), "dsp-proxy", reason
 
 
 class EventsStage(Stage):
@@ -179,20 +198,15 @@ class EventsStage(Stage):
         # --- Arousal (SER with DSP fallback) ------------------------------
         ctx.emit(0.9, "Estimating arousal…")
         t0 = time.monotonic()
-        from . import ser
-
-        arousal = ser.arousal_curve_ser(
-            y16k, asr["segments"], str(config.models_dir() / "ser"),
-            progress=lambda f: ctx.emit(0.9 + f * 0.08, "Estimating arousal…"),
+        arousal, arousal_source, arousal_fallback_reason = resolve_arousal(
+            y16k, asr["segments"], curves, ctx.emit
         )
-        arousal_source = "ser"
-        if arousal is None:
-            arousal = ser.arousal_curve_dsp(curves["dynamics"], curves["grid_sec"])
-            arousal_source = "dsp-proxy"
         bench["arousal_sec"] = round(time.monotonic() - t0, 1)
         curves["arousal"] = [round(float(v), 4) for v in arousal]
         curves["arousal_grid_sec"] = ser.GRID_SEC
         curves["arousal_source"] = arousal_source
+        if arousal_fallback_reason is not None:
+            curves["arousal_fallback_reason"] = arousal_fallback_reason
 
         curves_path = ctx.job_dir / "curves.json"
         curves_path.write_text(json.dumps(curves), encoding="utf-8")
@@ -210,6 +224,7 @@ class EventsStage(Stage):
             # re-runs every time.
             "settings_used": self._settings_used(ctx.settings),
             "arousal_source": arousal_source,
+            "arousal_fallback_reason": arousal_fallback_reason,
             "duration_sec": round(duration, 1),
             "benchmark": bench,
             # Measured constant, recorded once for M3's punch-in math:
