@@ -313,7 +313,9 @@ export default function Onboarding({ onDone }: Props) {
                 : `${hardwareLabel(hw)} — ${
                     sixtyMinEstimate(hw) != null
                       ? `a 60 min video ≈ ${sixtyMinEstimate(hw)} min`
-                      : 'first run — no estimate yet; measured from your first job'
+                      : /* not "first run" — a changed configuration also
+                           voids the estimate (F7) */
+                        'no estimate for this setup yet; measured from your first full run'
                   }`}
             </p>
           )}

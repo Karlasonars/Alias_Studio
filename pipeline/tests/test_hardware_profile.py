@@ -69,6 +69,22 @@ def _record_full_run(job_id: str, run_started: float, stage_sec: float = 30.0) -
         t += stage_sec
 
 
+def test_cpu_threads_ignores_torchs_live_thread_setting(monkeypatch):
+    """The profile key includes cpu_threads, and torch.get_num_threads() is
+    ambient library state: on the reference laptop it answered 1 in one run
+    and 6 in others within the same week, splitting one machine into two
+    profiles and voiding the estimate (test-day F7). The count must derive
+    from the machine alone."""
+    import os
+
+    import torch
+
+    from publikclip_pipeline import hardware
+
+    monkeypatch.setattr(torch, "get_num_threads", lambda: 1)
+    assert hardware.cpu_threads() == max(1, (os.cpu_count() or 4) // 2)
+
+
 def test_profile_key_splits_on_device_and_ignores_identity_fields():
     gpu_key = hardware_profile.profile_key(GPU_SUMMARY)
     assert hardware_profile.profile_key(CPU_SUMMARY) != gpu_key

@@ -199,7 +199,7 @@ describe('the hardware sentence is honest (T-10, E1-F03)', () => {
     commands.get_hardware_profile = () => null
     commands.probe_hardware = () => gpuProfile({ estimate_ratio: null, estimate_jobs: 0 })
     await reachWarningStep()
-    expect(screen.getByText(/first run — no estimate yet/)).toBeTruthy()
+    expect(screen.getByText(/no estimate for this setup yet/)).toBeTruthy()
     expect(callsTo('probe_hardware')).toBe(1)
   })
 

@@ -204,13 +204,17 @@ def onnx_providers() -> list[str]:
 def cpu_threads() -> int:
     """Worker threads for CPU inference. ctranslate2's default is
     conservative; matching the physical core count is a free win on the CPU
-    path and harmless on the GPU one."""
-    try:
-        import torch
+    path and harmless on the GPU one.
 
-        return max(1, int(torch.get_num_threads()))
-    except Exception:  # noqa: BLE001
-        return max(1, (os.cpu_count() or 4) // 2)
+    Derived from the machine, never from torch.get_num_threads(): that is
+    ambient library state, and on the reference laptop it answered 1 in one
+    run and 6 in others within the same week. The hardware profile keys on
+    this number, so the drift split one machine into two profiles — the full
+    run's timings landed under one key, later runs under another, and the
+    estimate honestly refused to sum the orphaned halves (test-day F7). A
+    profile key must describe the machine, not whatever a library last set.
+    """
+    return max(1, (os.cpu_count() or 4) // 2)
 
 
 def summary() -> dict:
