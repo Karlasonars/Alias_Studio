@@ -38,6 +38,7 @@ export default function KeyModal({ onClose }: Props) {
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
   const [rejected, setRejected] = useState(false)
+  const [unverified, setUnverified] = useState(false)
 
   useEffect(() => {
     invoke<{ has_gemini_key: boolean }>('get_setup_state').then((s) =>
@@ -53,9 +54,15 @@ export default function KeyModal({ onClose }: Props) {
     if (res.status === 'rejected') {
       setRejected(true)
       setSaved(false)
+      setUnverified(false)
       return
     }
     setRejected(false)
+    // "unverified" means saved WITHOUT the check (offline) — collapsing it
+    // into a bare SAVED ✓ made the copy lie during the offline hand test:
+    // onboarding said so, this modal did not (test-day F6). Same wording as
+    // onboarding, so the two surfaces cannot tell different stories.
+    setUnverified(res.status === 'unverified')
     setSaved(true)
     setHasKey(true)
   }
@@ -87,6 +94,12 @@ export default function KeyModal({ onClose }: Props) {
             {rejected ? 'REJECTED ✗ — RETRY' : saved ? 'SAVED ✓' : 'SAVE KEY'}
           </button>
         </div>
+        {unverified && (
+          <p className="ig-message mono">
+            Saved — but Google could not be reached to verify it (offline?). It
+            will be checked on first use.
+          </p>
+        )}
         <p className="audit-label" style={{ marginTop: 22 }}>PEXELS (STOCK VISUALS)</p>
         <PexelsField />
         <p className="ig-message mono">
