@@ -37,3 +37,38 @@ export function fmt(t: number): string {
   const s = (t % 60).toFixed(1)
   return `${m}:${s.padStart(4, '0')}`
 }
+
+/** How usePlayer's rAF loop must place the source <video> inside the 9:16
+ *  stage for one trajectory crop box.
+ *
+ *  Mirrors renderer.letterbox_geometry's decision (§5.8): a crop wider than
+ *  9:16 is scaled to the stage's WIDTH and letterboxed with vertically
+ *  centred bars — not scaled to its height. The old math always filled the
+ *  stage height and discarded the crop width, so a gameplay-framed clip
+ *  previewed as a tight podcast crop, and re-rendering changed nothing the
+ *  user could see (test-day finding 2). The crop boxes already carry the
+ *  content box's aspect ratio, so the bar decision needs no second
+ *  _resolve_content_box on this side of the boundary.
+ *
+ *  `clipTopPx`/`clipBottomPx` cut the source rows above and below the crop:
+ *  once the crop no longer fills the stage vertically, those rows would
+ *  otherwise show through where the bars belong. */
+export function monitorLayout(
+  crop: { x: number; y: number; w: number; h: number },
+  videoW: number,
+  videoH: number,
+  stageW: number,
+  stageH: number
+): { widthPx: number; tx: number; ty: number; clipTopPx: number; clipBottomPx: number; letterboxed: boolean } {
+  const letterboxed = crop.w / crop.h > stageW / stageH
+  const s = letterboxed ? stageW / crop.w : stageH / crop.h
+  const padY = letterboxed ? (stageH - crop.h * s) / 2 : 0
+  return {
+    widthPx: videoW * s,
+    tx: -crop.x * s,
+    ty: padY - crop.y * s,
+    clipTopPx: crop.y * s,
+    clipBottomPx: (videoH - (crop.y + crop.h)) * s,
+    letterboxed
+  }
+}

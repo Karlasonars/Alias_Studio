@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Cut, EditContext, EditState } from '../../types'
-import { fmt } from './shared'
+import { fmt, monitorLayout } from './shared'
 
 /** Player machinery: the source video, the throttled seek queue, and the rAF
  *  loop driving the playhead, the crop-following monitor and the jump-cut
@@ -67,11 +67,12 @@ export function usePlayer(
           playheadRef.current.style.left = `${frac * 100}%`
         }
         // Vertical monitor: follow the camera trajectory — position the
-        // source video inside the 9:16 stage so the crop rect fills it.
+        // source video inside the 9:16 stage the way the renderer frames it:
+        // a 9:16-or-narrower crop fills the stage, a wider (gameplay) crop is
+        // letterboxed. monitorLayout mirrors letterbox_geometry (§5.8).
         const stage = stageRef.current
         const c = ctxRef.current
         if (stage && c && v.videoWidth) {
-          const Ch = stage.clientHeight
           const traj = c.trajectory
           let crop: number[]
           if (traj && traj.frames.length) {
@@ -86,11 +87,19 @@ export function usePlayer(
             crop = [(v.videoWidth - w) / 2, 0, w, h]
           }
           const [cx, cy, cw, chh] = crop
-          const s = Ch / chh
-          v.style.width = `${v.videoWidth * s}px`
+          const L = monitorLayout(
+            { x: cx, y: cy, w: cw, h: chh },
+            v.videoWidth, v.videoHeight,
+            stage.clientWidth, stage.clientHeight
+          )
+          v.style.width = `${L.widthPx}px`
           v.style.maxWidth = 'none'
-          v.style.transform = `translate(${-cx * s}px, ${-cy * s}px)`
-          void cw
+          v.style.transform = `translate(${L.tx}px, ${L.ty}px)`
+          // Bars only exist when letterboxed; an empty clip-path elsewhere
+          // keeps the podcast path pixel-identical to the pre-fix math.
+          v.style.clipPath = L.letterboxed
+            ? `inset(${L.clipTopPx}px 0 ${L.clipBottomPx}px 0)`
+            : ''
         }
         if (timeLabelRef.current) {
           timeLabelRef.current.textContent = `${fmt(t)} / out ${fmt(e.end)}`
