@@ -361,12 +361,18 @@ export interface HardwareSummary {
 }
 
 export interface HardwareProfile {
-  summary: HardwareSummary
-  key: string
+  /** absent when the shell built the object only to carry env_forced —
+   *  a forced device with no profile file yet must still be visible */
+  summary?: HardwareSummary | null
+  key?: string
   /** processing seconds per source second under the CURRENT key; null
    *  until every stage has a measurement under it — honest, not blank */
-  estimate_ratio: number | null
-  estimate_jobs: number
+  estimate_ratio?: number | null
+  estimate_jobs?: number
+  /** PUBLIKCLIP_DEVICE as the SHELL sees it right now — what the sidecar
+   *  will inherit. The file's summary.forced lags until a job-end probe,
+   *  which is how a forced session kept showing GPU numbers (F3/T-10). */
+  env_forced?: 'cpu' | 'cuda'
 }
 
 /** save_gemini_key verifies with one cheap call before accepting (E1-F02).
