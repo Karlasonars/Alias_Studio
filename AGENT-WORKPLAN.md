@@ -670,12 +670,24 @@ rule that remains for exactly those.
 Blocked by  nothing — but it needs a repro before it needs a fix
 ```
 
-Seen once on a real job: `failed — score: OSError(22, 'Invalid argument')`. Errno 22
-on Windows usually means an illegal path character, and that job's title contains a
-comma. Unconfirmed and possibly transient. **Reproduce first.** If it turns on the
-title, it is P0 — it means a class of ordinary videos cannot be processed. A second
-job the same day failed with `score: No candidate produced a scoreable transcript`,
-which may be unrelated and may not be.
+Seen once on a real job: `failed — score: OSError(22, 'Invalid argument')`.
+
+**The comma-title theory is retired (test-day audit, 2026-08-31).** The original
+note guessed an illegal path character from the job's comma-carrying title. The
+audit killed that three ways: a comma is a legal Windows filename character; the
+title never reaches any path or ffmpeg argument (it lands only in SQLite, the
+UI, and the export copier, which sanitizes it — verified by grep of every
+subprocess and file-write site in scoring, none title-derived); and decisively,
+the same comma-titled source ("Make Us Laugh, Win $1,000 …") ran all eight
+stages to completion on the same machine on 2026-08-30. Same title, same
+stage, success. Whatever errno 22 was, the title is innocent — this is not P0.
+
+Still open as an unexplained transient. Leading guess: a write to stdout after
+the shell-side pipe reader went away — Windows reports that as EINVAL
+(errno 22), not BrokenPipe, which fits "seen once, never again, nothing wrong
+with the job". The signature stays code "unknown" / "OSError errno 22" until
+reproduced. A second job the same day failed with `score: No candidate produced
+a scoreable transcript`, which may be unrelated and may not be.
 
 ### T-38 · The SER model has never loaded                 [P1, found in T-11]
 
