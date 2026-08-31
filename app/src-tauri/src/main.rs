@@ -860,12 +860,32 @@ async fn save_gemini_key(key: String) -> Result<Value, String> {
 /// the shell only ever reads the file. Probing from here would mean a
 /// `uv run` one-shot plus nvidia-smi's 20 s worst case per view - the
 /// T-08 poll lesson. Returns null when no profile exists yet.
+///
+/// `env_forced` is the one thing the file cannot carry: the file's summary
+/// is only rewritten at job end, so a PUBLIKCLIP_DEVICE set for THIS
+/// session is invisible in it until a job completes — the owner forced CPU
+/// and the screen kept promising the GPU's speed (test-day F3, T-10's rule
+/// broken). The shell reads its own environment for free — quiet_command
+/// inherits it, so what we report here is exactly what the sidecar will see.
 #[tauri::command]
 fn get_hardware_profile() -> Result<Value, String> {
-    Ok(fs::read_to_string(home_dir().join("hardware_profile.json"))
+    let mut profile = fs::read_to_string(home_dir().join("hardware_profile.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    // Same normalization as python's hardware._forced(): cpu/cuda only.
+    let forced = std::env::var("PUBLIKCLIP_DEVICE")
+        .ok()
+        .map(|v| v.trim().to_lowercase())
+        .filter(|v| v == "cpu" || v == "cuda");
+    if let Some(device) = forced {
+        if !profile.is_object() {
+            // No profile yet: forcing must still be visible, not less so.
+            profile = json!({});
+        }
+        profile["env_forced"] = json!(device);
+    }
+    Ok(profile)
 }
 
 /// The one deliberate probe: run `publikclip hardware` (which persists

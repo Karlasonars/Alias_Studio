@@ -153,7 +153,9 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
             <p>
               {sixtyMinEstimate(hardware) != null
                 ? `60 min video ≈ ${sixtyMinEstimate(hardware)} min`
-                : 'first run — no estimate yet'}
+                : /* not "first run" — a changed configuration also voids the
+                     estimate, and calling that a first run lied (F7) */
+                  'no estimate for this setup yet — measured from the first full run'}
             </p>
           </div>
         )}

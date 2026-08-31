@@ -20,6 +20,17 @@ export function useClipEdit(jobId: string, clipIndex: number) {
   const reload = useCallback(() => {
     api.editContext(jobId, clipIndex)
       .then((c) => {
+        // `edit context` reports failures as {ok:false,error} on stdout, and
+        // the shell returns any JSON line as a SUCCESSFUL invoke — so a
+        // failure payload used to land here as ctx, leave edit undefined,
+        // and pin the screen on "loading timeline…" forever with the error
+        // swallowed (test-day F4, seen on an installed build). Anything
+        // without the context's shape is a failure to surface, not a
+        // context to render.
+        if (!c || !c.window || !c.edit) {
+          setError((c as { error?: string } | null)?.error ?? 'could not load the timeline')
+          return
+        }
         setCtx(c)
         setEdit(c.edit)
       })

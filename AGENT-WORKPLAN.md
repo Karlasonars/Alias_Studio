@@ -670,12 +670,24 @@ rule that remains for exactly those.
 Blocked by  nothing — but it needs a repro before it needs a fix
 ```
 
-Seen once on a real job: `failed — score: OSError(22, 'Invalid argument')`. Errno 22
-on Windows usually means an illegal path character, and that job's title contains a
-comma. Unconfirmed and possibly transient. **Reproduce first.** If it turns on the
-title, it is P0 — it means a class of ordinary videos cannot be processed. A second
-job the same day failed with `score: No candidate produced a scoreable transcript`,
-which may be unrelated and may not be.
+Seen once on a real job: `failed — score: OSError(22, 'Invalid argument')`.
+
+**The comma-title theory is retired (test-day audit, 2026-08-31).** The original
+note guessed an illegal path character from the job's comma-carrying title. The
+audit killed that three ways: a comma is a legal Windows filename character; the
+title never reaches any path or ffmpeg argument (it lands only in SQLite, the
+UI, and the export copier, which sanitizes it — verified by grep of every
+subprocess and file-write site in scoring, none title-derived); and decisively,
+the same comma-titled source ("Make Us Laugh, Win $1,000 …") ran all eight
+stages to completion on the same machine on 2026-08-30. Same title, same
+stage, success. Whatever errno 22 was, the title is innocent — this is not P0.
+
+Still open as an unexplained transient. Leading guess: a write to stdout after
+the shell-side pipe reader went away — Windows reports that as EINVAL
+(errno 22), not BrokenPipe, which fits "seen once, never again, nothing wrong
+with the job". The signature stays code "unknown" / "OSError errno 22" until
+reproduced. A second job the same day failed with `score: No candidate produced
+a scoreable transcript`, which may be unrelated and may not be.
 
 ### T-38 · The SER model has never loaded                 [P1, found in T-11]
 
@@ -707,7 +719,47 @@ lasted, and it is the standing argument for showing `missing` in the UI.
 
 Both also surface as raw Python `repr` in the UI, which is T-13's whole subject.
 
-### T-39 · The recommended brain was pinned to a dead alias     [DONE 2026-08-28]
+### T-41 · Blur-letterbox clips stutter for their first seconds in players  [open — the FILE is ruled out]
+
+```
+Blocked by  a discriminating observation only the owner's screen can give
+Touches     nothing yet — do not touch an encoder flag; read below first
+```
+
+Test-day finding 1, measured to a standstill (2026-08-31). The symptom is
+real — VLC and Windows Media Player both stutter the first ~1–3 s of a
+blur-letterbox re-render, the same clip with black bars plays cleanly, and
+the editor preview (a CSS simulation that runs no ffmpeg) shows nothing —
+but every file-side hypothesis was measured on the owner's own laptop and
+refuted:
+
+- **Bitrate ("too heavy to decode")**: blur ≈ 2× black, exactly as the
+  smooth-gradient theory predicts — but the absolute numbers are trivial.
+  The stutter clip peaks at 4.6 Mbps (avg 2.8); its first seconds are the
+  *lightest*; the first GOP is 1.8 s / 1.0 Mbps, not the largest.
+- **Decode cost**: the blur clip software-decodes at 252 fps on ONE thread
+  (10× realtime; 1072 fps multithreaded), and hardware-decodes through
+  D3D11VA — the same old NVIDIA driver VLC/WMP use — at ~600 fps, within
+  3 % of the black clip.
+- **Container**: byte-level identical structure across the blur/black pair —
+  High@L4.0, 2 B-frames, faststart moov first, same fps/pix_fmt, monotonic
+  gap-free PTS, audio starts aligned.
+- **The two render paths agree** (checked, not assumed — the question §5.8
+  raises for encoders): `render_clip` and `render_clip_edit` both take codec
+  flags from `renderer.video_encoder_args` and set identical mux flags; the
+  only difference is filtergraph construction, which cannot affect the
+  produced stream's decodability. There is one encoder, not two.
+
+No encoder flag was changed: both candidate causes were measured and both
+were refuted, and moving flags until a symptom shifts explains nothing.
+What remains is the players' presentation layer on that machine — plausibly
+the video-output path of the same NVIDIA driver that is too old for its own
+NVENC API (blur makes every frame full-canvas motion, so presentation does
+strictly more work). The 30-second discriminators, in order: (1) VLC →
+Preferences → Input/Codecs → Hardware-accelerated decoding: **Disable**,
+replay the blur clip; (2) play the same file on any other machine; (3)
+update the NVIDIA driver — it is due regardless. Each outcome names the
+next owner: if (1) or (2) clears it, this is the driver, not the product.
 
 ```
 Merged      Settings.gemini_model (default gemini-3.6-flash, §5.1's four

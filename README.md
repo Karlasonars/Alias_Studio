@@ -161,6 +161,16 @@ cd app && npm install && npm run tauri dev
 `PUBLIKCLIP_DEVICE=cpu` forces every model back onto the CPU — the first thing
 to try when diagnosing a suspected GPU problem.
 
+On an installed build the variable must reach the app's process: **close the
+app first**, set the variable in a terminal, then launch the exe from that
+same terminal — e.g. in PowerShell,
+`$env:PUBLIKCLIP_DEVICE = 'cpu'; & "$env:LOCALAPPDATA\Alias Studio\Alias Studio.exe"`
+(right-click the app's shortcut → Open file location if it installed
+elsewhere; setting the variable while the app is already running does
+nothing). The studio's
+hardware line confirms it took effect: it reads
+`forced CPU (PUBLIKCLIP_DEVICE)` instead of naming your GPU.
+
 [SPECIFICATION.md](SPECIFICATION.md) is the engineering reference: the eight
 stages and what each one produces, the checkpoint contract that decides what
 re-runs, the settings model, the two render paths and how they are kept in
