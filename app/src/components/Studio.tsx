@@ -39,7 +39,7 @@ interface Props {
   queued: number
   hardware: HardwareProfile | null
   onCancel: () => void
-  onRun: (source: string, llm: string, captions: string, gameplayAmount: number) => void
+  onRun: (source: string, llm: string, captions: string, gameplayAmount: number, letterboxFill: string) => void
   onOpenLoop: () => void
   onOpenQueue: () => void
   onOpenSettings: () => void
@@ -52,6 +52,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
   const [gameplayAmount, setGameplayAmount] = useState(0)
+  const [letterboxFill, setLetterboxFill] = useState('black')
   const [showKey, setShowKey] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   // T-14: the resume picker for one rail job. info=null while the one-shot
@@ -94,7 +95,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
     if (!source.trim()) return
-    onRun(source.trim(), llm, captions, gameplayAmount)
+    onRun(source.trim(), llm, captions, gameplayAmount, letterboxFill)
     setSource('')
   }
 
@@ -267,6 +268,25 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   gameplay
                 </button>
               </div>
+              {/* E6-F09: the job-level letterbox fill, decided BEFORE the cut
+                  instead of re-rendered into N clips afterwards. Only shown
+                  at gameplay framing — a podcast crop is exactly 9:16, bars
+                  never exist, and a control that does nothing is a lie
+                  (§5.2). Per-clip editor choices still win over this. */}
+              {gameplayAmount > 0 && (
+                <div className="opt-group">
+                  <span className="opt-label">edges</span>
+                  {(['black', 'blur'] as const).map((fill) => (
+                    <button
+                      key={fill}
+                      className={`opt ${letterboxFill === fill ? 'opt-on' : ''}`}
+                      onClick={() => setLetterboxFill(fill)}
+                    >
+                      {fill === 'black' ? 'black' : 'blurred'}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
 
