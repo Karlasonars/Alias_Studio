@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..camera.stage import sans_letterbox_fill
 from ..jobs.queue import Stage, StageContext, StageError
 
 
@@ -133,6 +134,21 @@ def _clip_edits_fingerprint(job_dir: Path) -> dict:
     return out
 
 
+def _effective_fill(edit: dict, settings) -> str:
+    """The letterbox fill one clip actually renders with: its explicit
+    per-clip value when set, else the job default (E6-F09). An untouched
+    clip stores no fill key (None is dropped everywhere), so it follows the
+    default; an explicit value — even one equal to the current default —
+    stays put when the default changes.
+
+    One function for run() AND the fingerprint (§5.8 applied inside a
+    stage): resolving twice is how a fingerprint drifts from the thing it
+    protects. The editor's render path (edits/render_clip.py) keeps its own
+    copy of this expression against ClipEdit attributes; that copy predates
+    this helper and is adjacent, not consequential."""
+    return (edit or {}).get("letterbox_fill") or settings.camera.letterbox_fill
+
+
 def _audio_fingerprint(ctx: StageContext) -> dict:
     return {"lufs": ctx.settings.lufs_target, "true_peak": ctx.settings.true_peak_db}
 
@@ -153,8 +169,35 @@ class RenderStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("caption_preset") != ctx.settings.caption_preset:
             return False  # restyle requested → re-render
-        if data.get("camera_settings") != ctx.settings.camera.__dict__:
-            return False  # framing/camera restyle requested → re-render
+        if "fills" in data:
+            # Fill-aware checkpoint (E6-F09). The job-level fill reaches only
+            # the clips without an explicit per-clip value, so it is compared
+            # as the RESOLVED per-clip result, never as a raw camera field: a
+            # job whose clips all carry explicit fills must not re-render on
+            # a default change, because the default never applied to them.
+            # Known corner, accepted: a structurally-edited clip without an
+            # explicit fill sits in the map too, so a default change can
+            # re-run the stage even though adoption then keeps that clip
+            # unchanged — over-invalidation only, never a lost edit.
+            if sans_letterbox_fill(data.get("camera_settings") or {}) != sans_letterbox_fill(
+                ctx.settings.camera.__dict__
+            ):
+                return False  # framing/camera restyle requested → re-render
+            edits = _load_clip_edits(ctx.job_dir)
+            fills_now = {
+                str(o.get("clip")): _effective_fill(edits.get(str(o.get("clip"))) or {}, ctx.settings)
+                for o in data.get("outputs", [])
+            }
+            if data["fills"] != fills_now:
+                return False  # the fill some clip renders with changed
+        else:
+            # Legacy checkpoint, written before the fills map existed: the
+            # old strict compare, byte for byte. Anything cleverer either
+            # invalidates every render on disk the moment the feature
+            # arrives (T-39's lesson) or quietly weakens invalidation for
+            # old jobs — a fill change must still re-render them.
+            if data.get("camera_settings") != ctx.settings.camera.__dict__:
+                return False  # framing/camera restyle requested → re-render
         # Caption style edits (font/size/colors/words-per-caption) are burned
         # into the pixels, so they invalidate the render exactly like a preset
         # switch does. The saved-preset fingerprint covers edits made to the
@@ -221,12 +264,17 @@ class RenderStage(Stage):
         clip_edits = _load_clip_edits(ctx.job_dir)
         previous = _previous_outputs(ctx.job_dir)
         kept_from_editor: list[int] = []
+        # Resolved fill per output clip, adopted ones included — the
+        # fingerprint recomputes this same map with the same helper, and it
+        # must cover every clip artifacts_ok will iterate.
+        fills: dict[str, str] = {}
 
         for i, clip in enumerate(clips):
             traj_path = camera["trajectories"].get(str(i))
             if not traj_path or not Path(traj_path).exists():
                 continue
             edit = clip_edits.get(str(i)) or {}
+            fills[str(i)] = _effective_fill(edit, ctx.settings)
 
             # A clip the editor reshaped cannot be reproduced here; re-rendering
             # it from the job settings would throw that work away.
@@ -276,7 +324,7 @@ class RenderStage(Stage):
             }
             clip_lufs = edit.get("lufs_target")
             clip_peak = edit.get("true_peak_db")
-            clip_fill = edit.get("letterbox_fill") or ctx.settings.camera.letterbox_fill
+            clip_fill = fills[str(i)]
 
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_doc = ass_mod.build_ass(
@@ -335,4 +383,9 @@ class RenderStage(Stage):
             "audio": _audio_fingerprint(ctx),
             "encoder": _encoder_fingerprint(ctx),
             "clip_edits": _clip_edits_fingerprint(ctx.job_dir),
+            # Presence of this key is what routes artifacts_ok onto the
+            # fill-aware path; old checkpoints without it keep the legacy
+            # strict camera compare. Keys match outputs exactly: every clip
+            # with a trajectory lands in both.
+            "fills": fills,
         }

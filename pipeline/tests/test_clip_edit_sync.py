@@ -342,6 +342,103 @@ def test_render_cache_is_invalidated_by_a_clip_style_edit(tmp_path, ctx):
 
 
 # ---------------------------------------------------------------------------
+# Render stage: the job-level letterbox fill (E6-F09) — a default, not a
+# replacement. Untouched clips follow it; explicit per-clip values ignore it;
+# the fingerprint invalidates exactly the jobs the default actually reaches.
+
+
+def _fill_aware_payload(ctx, tmp_path, fills):
+    """A checkpoint as run() now writes it, with the fills map present."""
+    outputs = []
+    for key in fills:
+        mp4 = tmp_path / f"clip_{int(key):02d}.mp4"
+        mp4.write_bytes(b"x")
+        outputs.append({"clip": int(key), "path": str(mp4)})
+    return {
+        "outputs": outputs,
+        "caption_preset": ctx.settings.caption_preset,
+        "camera_settings": dict(ctx.settings.camera.__dict__),
+        "caption_style": render_stage._caption_style_fingerprint(ctx),
+        "audio": render_stage._audio_fingerprint(ctx),
+        "encoder": render_stage._encoder_fingerprint(ctx),
+        "clip_edits": render_stage._clip_edits_fingerprint(tmp_path),
+        "fills": dict(fills),
+    }
+
+
+def test_the_job_fill_reaches_a_clip_without_an_explicit_value(ctx):
+    assert render_stage._effective_fill({}, ctx.settings) == "black"
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert render_stage._effective_fill({}, ctx.settings) == "blur"
+    # a null in clip_edits.json is "inherit", not a value — the editor's
+    # reset-to-job button writes exactly this
+    assert render_stage._effective_fill({"letterbox_fill": None}, ctx.settings) == "blur"
+
+
+def test_an_explicit_clip_fill_survives_a_default_change(ctx):
+    """The whole feature: explicitly 'black' is not the same as never
+    touched, even while 'black' IS the current default."""
+    edit = {"letterbox_fill": "black"}
+    assert render_stage._effective_fill(edit, ctx.settings) == "black"
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert render_stage._effective_fill(edit, ctx.settings) == "black"
+
+
+def test_a_fill_default_change_invalidates_a_job_of_untouched_clips(tmp_path, ctx):
+    data = _fill_aware_payload(ctx, tmp_path, {"0": "black", "1": "black"})
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+
+
+def test_a_fill_default_change_spares_a_job_where_every_clip_is_explicit(tmp_path, ctx):
+    """The test that catches the naive version: when every clip carries an
+    explicit fill, the default never applied to any of them, and changing it
+    must not re-render an hour of finished clips."""
+    write_edits(tmp_path, {"0": {"letterbox_fill": "black"}, "1": {"letterbox_fill": "blur"}})
+    data = _fill_aware_payload(ctx, tmp_path, {"0": "black", "1": "blur"})
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+
+
+def test_camera_fields_the_render_compare_keeps_still_invalidate(tmp_path, ctx):
+    data = _fill_aware_payload(ctx, tmp_path, {"0": "black"})
+    ctx.settings.camera.gameplay_amount = 0.5
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+
+
+def test_legacy_render_checkpoints_keep_the_strict_fill_behaviour(tmp_path, ctx):
+    """Every checkpoint on disk today lacks the fills map. It must stay
+    valid when nothing changed (the feature arriving invalidates nothing —
+    T-39's lesson) and still re-render on a fill change, as it always has."""
+    mp4 = tmp_path / "clip_00.mp4"
+    mp4.write_bytes(b"x")
+    data = {
+        "outputs": [{"clip": 0, "path": str(mp4)}],
+        "caption_preset": ctx.settings.caption_preset,
+        "camera_settings": dict(ctx.settings.camera.__dict__),
+        "caption_style": render_stage._caption_style_fingerprint(ctx),
+        "audio": render_stage._audio_fingerprint(ctx),
+        "encoder": render_stage._encoder_fingerprint(ctx),
+        "clip_edits": {},
+    }
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+
+
+def test_run_records_the_fills_map_it_will_be_asked_about():
+    """Crude on purpose (§5.2's tradition): if run() stops storing "fills",
+    every NEW checkpoint silently takes the legacy path and the fill-aware
+    fingerprint evaporates with every other test still green."""
+    import inspect
+
+    src = inspect.getsource(render_stage.RenderStage.run)
+    assert '"fills": fills' in src
+
+
+# ---------------------------------------------------------------------------
 # Scoring stage: the model is part of the fingerprint (T-39, §5.1 place 3)
 
 

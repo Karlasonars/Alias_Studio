@@ -200,7 +200,7 @@ is how a shipped setting ended up dead:
 | `candidates` | `fingerprint_ok(...)` — the only caller | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | two strict `!=` on `__dict__` (`camera` minus `letterbox_fill`, which is render-only; `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
-| `render` | six strict comparisons | no |
+| `render` | strict comparisons, camera versioned: checkpoints with a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` plus the **resolved** per-clip fill; older checkpoints keep the full strict compare | no |
 
 Two live consequences, both worth knowing before you touch any of this:
 

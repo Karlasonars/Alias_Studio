@@ -435,7 +435,7 @@ that did not need one.
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | strict `!=` on `camera_settings` (minus `letterbox_fill`, which is render-only and used to re-run the whole DIRECT pass) and `retention_settings`, plus `clip_framing` | no |
-| `render` | six strict comparisons: `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` | no |
+| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits`, plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte | no |
 
 **`fingerprint_ok` has three callers** — `candidates`, `events` and, since
 T-39, `scoring` (the naive strict fix for the new `gemini_model` key would
