@@ -86,6 +86,8 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
         settings.camera.speaker_change = args.camera
     if args.gameplay_amount is not None:  # 0.0 is a legitimate value, not falsy-skippable
         settings.camera.gameplay_amount = args.gameplay_amount
+    if getattr(args, "letterbox_fill", None):  # choices bar '', so truthy is safe here
+        settings.camera.letterbox_fill = args.letterbox_fill
     return settings
 
 
@@ -684,6 +686,10 @@ def main(argv: list[str] | None = None) -> int:
         "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
     )
+    p_run.add_argument(
+        "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
+        help="what fills the bars once framing letterboxes: black bars or a blurred copy",
+    )
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -694,6 +700,10 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.add_argument(
         "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
+    )
+    p_resume.add_argument(
+        "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
+        help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
     # hardware_profile.STAGES is the light-import copy of cli._stages()'s
     # order (a test pins them equal); argparse must not pay the torch tax.
@@ -739,6 +749,10 @@ def main(argv: list[str] | None = None) -> int:
     p_create.add_argument(
         "--gameplay-amount", dest="gameplay_amount", type=float, default=None,
         help="0.0 (podcast/tight face crop) .. 1.0 (gameplay/full-frame letterboxed)",
+    )
+    p_create.add_argument(
+        "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
+        help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(

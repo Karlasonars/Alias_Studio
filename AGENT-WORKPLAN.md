@@ -10,6 +10,15 @@ branch, one PR. Do not start a task whose blockers are unmerged.
 covers the stage you are touching, then the requirement in `PRODUCT-REQUIREMENTS.md`.
 Do not read the whole PRD — it is 78 pages and most of it is not your task.
 
+**Before building anything: check whether it already exists and is merely
+unreachable.** Three times now a "missing feature" was a shipped one nobody could
+reach: `hardware.summary()` had no caller (T-10), `jobs.pending` had no reader
+(T-08), and `letterbox_fill` sat complete behind the settings panel while users
+re-rendered N clips by hand to get what it already did (E6-F09). Two of the three
+were found only because somebody read the code before writing any. The grep is
+minutes; rebuilding a shipped feature — or worse, shipping a second copy of one —
+costs a review cycle and leaves two implementations to drift.
+
 **`CLAUDE.md` wins on any conflict.** `SPECIFICATION.md` has drifted: its §5, §15 and
 §17 still carry the pre-correction fingerprint table, test counts and house rules.
 Read it for architecture and intent, not for current fact. T-23 fixes it.
@@ -761,8 +770,35 @@ replay the blur clip; (2) play the same file on any other machine; (3)
 update the NVIDIA driver — it is due regardless. Each outcome names the
 next owner: if (1) or (2) clears it, this is the driver, not the product.
 
+### T-42 · Job-level dead-space removal                       [open, next candidate after E6-F09]
+
 ```
-Merged      Settings.gemini_model (default gemini-3.6-flash, §5.1's four
+Blocked by  nothing merged; blocked in DESIGN by the batch renderer's
+            deliberate lack of structural graphs — read below before scoping
+Touches     render/stage.py, edits/render_clip.py or their common ground,
+            config.Settings (a new job-level default: §5.1's four places in
+            full), Studio deck (conditional, like E6-F09's edges group)
+Proves it   a job-level "remove dead space" reaching a clip the editor never
+            touched, WITHOUT overwriting any structurally-edited clip
+Watch out   _has_structural_edits() treats dead-space removal as structural,
+            and drop_reproducible_outputs / the adoption path in render
+            run() both lean on that — a job-level default moves the line
+            between "reproducible from settings" and "only the editor could
+            have made this"
+```
+
+Found while scoping E6-F09 and deliberately left out of it: **it passes the
+annoyance test and fails on implementation reality, because the batch stage
+deliberately builds no trim/concat graphs and a job-level default would mean
+teaching it the editor's.** Dead-space removal is per-clip-only today, so a
+user who wants it everywhere toggles it N times per job — the same
+shape of complaint E6-F09 fixed for the fill. But the fill was style (the
+batch path applies style per clip); this is structure, and the render
+stage's whole adoption design rests on structure being something it cannot
+reproduce. The honest implementation routes batch rendering of such clips
+through the edit path's graph (PRD T3's "preview render path" family) rather
+than growing a second trim/concat builder. Whoever picks this up inherits
+that reasoning — do not rediscover it from the diff.
             places) + the scoring circuit breaker + honest failure messages;
             cost claims updated ($0.15 → ~$1.20/hr, new model's prices)
 Proves it   tests/test_scoring_breaker.py (4) — 4 consecutive total failures

@@ -266,3 +266,32 @@ describe('enqueue while a job is running answers on screen [defect 1]', () => {
     expect(screen.getByText('■ CANCEL')).toBeTruthy()
   })
 })
+
+describe('the letterbox fill is decided before CUT IT (E6-F09)', () => {
+  it('the edges control exists only where bars can exist', async () => {
+    await mountStudio()
+    // podcast framing crops to exactly 9:16 — bars never exist, and a
+    // control that changes nothing would be a §5.2 lie
+    expect(screen.queryByText('edges')).toBeNull()
+    fireEvent.click(screen.getByText('gameplay'))
+    expect(screen.getByText('edges')).toBeTruthy()
+    expect(screen.getByText('blurred')).toBeTruthy()
+    fireEvent.click(screen.getByText('podcast'))
+    expect(screen.queryByText('edges')).toBeNull()
+  })
+
+  it('CUT IT carries the chosen fill into the enqueue', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-fill'
+    fireEvent.click(screen.getByText('gameplay'))
+    fireEvent.click(screen.getByText('blurred'))
+    fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
+      target: { value: 'C:/videos/gameplay.mp4' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
+    expect(call?.[1]).toMatchObject({ gameplayAmount: 1, letterboxFill: 'blur' })
+  })
+})

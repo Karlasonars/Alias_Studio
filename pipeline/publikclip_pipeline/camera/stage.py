@@ -42,6 +42,21 @@ def _framing_fingerprint(job_dir: Path) -> dict:
     return out
 
 
+def sans_letterbox_fill(camera_dict: dict) -> dict:
+    """A camera-settings dict without `letterbox_fill`.
+
+    The fill is render-only: nothing in camera/ reads it (the director's
+    content box comes from `gameplay_amount` alone), yet the strict
+    `__dict__` compare in artifacts_ok re-ran the whole DIRECT pass —
+    minutes of ASD — every time the fill changed. Excluded symmetrically,
+    on the stored dict and the current one, so checkpoints written before
+    this exclusion (which stored the key) stay valid. Render's fingerprint
+    imports this same function for its own camera compare, so the two
+    stages cannot disagree about which camera fields are render-only.
+    """
+    return {k: v for k, v in camera_dict.items() if k != "letterbox_fill"}
+
+
 def _settings_for_clip(settings, edit: dict):
     """The job's settings with this clip's framing overrides on top.
 
@@ -70,7 +85,9 @@ class CameraStage(Stage):
     schema_version = 1
 
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
-        if data.get("camera_settings") != ctx.settings.camera.__dict__:
+        if sans_letterbox_fill(data.get("camera_settings") or {}) != sans_letterbox_fill(
+            ctx.settings.camera.__dict__
+        ):
             return False  # camera style changed → re-direct
         # Punch-in shape/frequency is baked into the trajectory's zoom
         # envelope, so retention edits invalidate it exactly like a camera

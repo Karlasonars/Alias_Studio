@@ -630,6 +630,7 @@ async fn enqueue_job(
     llm: Option<String>,
     captions: Option<String>,
     gameplay_amount: Option<f64>,
+    letterbox_fill: Option<String>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
     if let Some(mode) = llm {
@@ -643,6 +644,10 @@ async fn enqueue_job(
     if let Some(g) = gameplay_amount {
         args.push("--gameplay-amount".to_string());
         args.push(g.to_string());
+    }
+    if let Some(fill) = letterbox_fill {
+        args.push("--letterbox-fill".to_string());
+        args.push(fill);
     }
     let created = one_shot_json(&args).ok_or_else(|| "enqueue produced no answer".to_string())?;
     let job_id = created["job_id"]

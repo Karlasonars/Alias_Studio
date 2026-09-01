@@ -33,6 +33,23 @@ def isolated_home(tmp_path, monkeypatch):
     yield
 
 
+def test_enqueue_flag_sets_the_job_letterbox_fill(capsys):
+    """E6-F09's whole chain below the UI: `jobs create --letterbox-fill`
+    must land on the job's settings snapshot, exactly as the deck's other
+    three controls do — and without the flag the saved default governs."""
+    from publikclip_pipeline import cli
+
+    assert cli.main(["jobs", "create", "C:/nowhere/a.mp4", "--letterbox-fill", "blur"]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.camera.letterbox_fill == "blur"
+
+    assert cli.main(["jobs", "create", "C:/nowhere/b.mp4"]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.camera.letterbox_fill == "black"
+
+
 # ---------------------------------------------------------------------------
 # Persistence
 
