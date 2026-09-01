@@ -199,7 +199,7 @@ is how a shipped setting ended up dead:
 | `events` | `curves.json` exists + `fingerprint_ok` on `laughter_specialist` | yes |
 | `candidates` | `fingerprint_ok(...)` — the only caller | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
-| `camera` | two strict `!=` on `__dict__` (`camera`, `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
+| `camera` | two strict `!=` on `__dict__` (`camera` minus `letterbox_fill`, which is render-only; `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
 | `render` | six strict comparisons | no |
 
 Two live consequences, both worth knowing before you touch any of this:

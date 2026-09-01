@@ -434,7 +434,7 @@ that did not need one.
 | `events` | `curves.json` exists, then `fingerprint_ok` on `laughter_specialist` | yes |
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
-| `camera` | strict `!=` on `camera_settings` and `retention_settings`, plus `clip_framing` | no |
+| `camera` | strict `!=` on `camera_settings` (minus `letterbox_fill`, which is render-only and used to re-run the whole DIRECT pass) and `retention_settings`, plus `clip_framing` | no |
 | `render` | six strict comparisons: `caption_preset`, `camera_settings`, `caption_style`, `audio`, `encoder`, `clip_edits` | no |
 
 **`fingerprint_ok` has three callers** — `candidates`, `events` and, since

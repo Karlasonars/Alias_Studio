@@ -137,6 +137,30 @@ def test_a_job_with_no_edits_file_is_not_forced_to_re_direct(tmp_path, ctx):
     assert camera_stage.CameraStage().artifacts_ok(ctx, data) is True
 
 
+def test_camera_cache_survives_a_letterbox_fill_change(tmp_path, ctx):
+    """letterbox_fill is render-only — nothing in camera/ reads it — yet the
+    strict __dict__ compare re-ran the whole DIRECT pass (minutes of ASD)
+    whenever the fill changed. A checkpoint stored BEFORE the exclusion
+    carries the key on its side too, which is why the exclusion is applied to
+    both sides: old checkpoints stay valid, and only fields the director
+    actually reads can invalidate them."""
+    traj = tmp_path / "trajectory_00.json"
+    traj.write_text("{}")
+    data = {
+        "trajectories": {"0": str(traj)},
+        # a pre-exclusion checkpoint: the stored dict includes the fill
+        "camera_settings": dict(ctx.settings.camera.__dict__),
+        "retention_settings": ctx.settings.retention.__dict__,
+        "clip_framing": {},
+    }
+    assert camera_stage.CameraStage().artifacts_ok(ctx, data) is True
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert camera_stage.CameraStage().artifacts_ok(ctx, data) is True
+    # a field the director DOES read still invalidates exactly as before
+    ctx.settings.camera.gameplay_amount = 0.5
+    assert camera_stage.CameraStage().artifacts_ok(ctx, data) is False
+
+
 # ---------------------------------------------------------------------------
 # Render stage: structural edits are never overwritten
 
