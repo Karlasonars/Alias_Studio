@@ -21,8 +21,18 @@ import type {
 } from './types'
 
 export const api = {
-  enqueueJob: (source: string, llm: string, captions: string, gameplayAmount: number, letterboxFill: string) =>
-    invoke<string>('enqueue_job', { source, llm, captions, gameplayAmount, letterboxFill }),
+  enqueueJob: (
+    source: string,
+    llm: string,
+    captions: string,
+    gameplayAmount: number,
+    letterboxFill: string,
+    ranking: boolean,
+    rankingCount: number
+  ) =>
+    invoke<string>('enqueue_job', {
+      source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount
+    }),
   startQueue: () => invoke<void>('start_queue'),
   setQueuePaused: (paused: boolean) => invoke<void>('set_queue_paused', { paused }),
   queueState: () => invoke<QueueStateResult>('queue_state'),

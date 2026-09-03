@@ -23,6 +23,9 @@ export const STAGE_LABELS: Record<string, string> = {
 }
 
 const CAPTION_PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
+// E18-F01: the top-N choices. Eight is where the list still fits the bar
+// gameplay framing leaves at the top (captions/ranking.py:band_for).
+const RANKING_COUNTS = [3, 4, 5, 6, 7, 8]
 
 interface Props {
   jobs: JobSummary[]
@@ -39,7 +42,15 @@ interface Props {
   queued: number
   hardware: HardwareProfile | null
   onCancel: () => void
-  onRun: (source: string, llm: string, captions: string, gameplayAmount: number, letterboxFill: string) => void
+  onRun: (
+    source: string,
+    llm: string,
+    captions: string,
+    gameplayAmount: number,
+    letterboxFill: string,
+    ranking: boolean,
+    rankingCount: number
+  ) => void
   onOpenLoop: () => void
   onOpenQueue: () => void
   onOpenSettings: () => void
@@ -53,6 +64,10 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   const [captions, setCaptions] = useState('classic')
   const [gameplayAmount, setGameplayAmount] = useState(0)
   const [letterboxFill, setLetterboxFill] = useState('black')
+  // E18-F01: the output format. Off = individual clips, as always; on = one
+  // ranking video of the top `rankingCount` moments and no clips (D-17).
+  const [ranking, setRanking] = useState(false)
+  const [rankingCount, setRankingCount] = useState(5)
   const [showKey, setShowKey] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   // T-14: the resume picker for one rail job. info=null while the one-shot
@@ -95,7 +110,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
     if (!source.trim()) return
-    onRun(source.trim(), llm, captions, gameplayAmount, letterboxFill)
+    onRun(source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
     setSource('')
   }
 
@@ -287,7 +302,43 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   ))}
                 </div>
               )}
+              {/* E18-F01: the output unit, decided before the cut like the
+                  rest of the deck. The count only exists while ranking is
+                  on — shown always, it would be a control that changes
+                  nothing (§5.2). */}
+              <div className="opt-group">
+                <span className="opt-label">format</span>
+                <button className={`opt ${!ranking ? 'opt-on' : ''}`} onClick={() => setRanking(false)}>
+                  clips
+                </button>
+                <button className={`opt ${ranking ? 'opt-on' : ''}`} onClick={() => setRanking(true)}>
+                  ranking
+                </button>
+              </div>
+              {ranking && (
+                <div className="opt-group">
+                  <span className="opt-label">moments</span>
+                  {RANKING_COUNTS.map((n) => (
+                    <button
+                      key={n}
+                      className={`opt ${rankingCount === n ? 'opt-on' : ''}`}
+                      onClick={() => setRankingCount(n)}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+            {/* At podcast framing the crop fills the canvas and there is no
+                bar for the list to sit in, so it is drawn over the top of
+                the picture (owner's decision, E18-F03). Say so here, where
+                the framing is chosen, not after the render. */}
+            {ranking && gameplayAmount === 0 && (
+              <p className="opt-hint">
+                at podcast framing the list sits over the top of the picture — gameplay framing gives it its own band
+              </p>
+            )}
           </section>
 
           {(running || Object.keys(stages).length > 0) && (

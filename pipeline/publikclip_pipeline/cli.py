@@ -88,6 +88,14 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
         settings.camera.gameplay_amount = args.gameplay_amount
     if getattr(args, "letterbox_fill", None):  # choices bar '', so truthy is safe here
         settings.camera.letterbox_fill = args.letterbox_fill
+    # E18-F01. on|off rather than store_true so resume can tell "not
+    # mentioned" (keep the job's snapshot) from "turn it off".
+    ranking = getattr(args, "ranking", None)
+    if ranking is not None:
+        settings.ranking.enabled = ranking == "on"
+    ranking_count = getattr(args, "ranking_count", None)
+    if ranking_count is not None:
+        settings.ranking.count = max(1, int(ranking_count))
     return settings
 
 
@@ -109,7 +117,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # before. Without the flag, resume behaves exactly as it always has.
     if getattr(args, "from_stage", None):
         queue.invalidate_stage(job, args.from_stage)
-    if args.llm or args.captions or args.camera or args.gameplay_amount is not None:
+    if (
+        args.llm or args.captions or args.camera or args.gameplay_amount is not None
+        or getattr(args, "ranking", None) is not None
+        or getattr(args, "ranking_count", None) is not None
+    ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
         )
@@ -672,6 +684,20 @@ def cmd_ig(args: argparse.Namespace) -> int:
     return 2
 
 
+
+def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
+    """E18-F01's two flags, identical on run, resume and `jobs create` so
+    enqueueing a job cannot drift from running one."""
+    parser.add_argument(
+        "--ranking", choices=["on", "off"], default=None,
+        help="on: emit ONE ranking video of the top moments instead of individual clips",
+    )
+    parser.add_argument(
+        "--ranking-count", dest="ranking_count", type=int, default=None,
+        help="how many top moments the ranking video plays (default 5)",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="publikclip")
     parser.add_argument("--jsonl", action="store_true", help="machine-readable progress on stdout")
@@ -690,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
         "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
+    _add_ranking_flags(p_run)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -705,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
+    _add_ranking_flags(p_resume)
     # hardware_profile.STAGES is the light-import copy of cli._stages()'s
     # order (a test pins them equal); argparse must not pay the torch tax.
     p_resume.add_argument(
@@ -754,6 +782,7 @@ def main(argv: list[str] | None = None) -> int:
         "--letterbox-fill", dest="letterbox_fill", choices=["black", "blur"], default=None,
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
+    _add_ranking_flags(p_create)
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(
         "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"

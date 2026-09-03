@@ -631,6 +631,8 @@ async fn enqueue_job(
     captions: Option<String>,
     gameplay_amount: Option<f64>,
     letterbox_fill: Option<String>,
+    ranking: Option<bool>,
+    ranking_count: Option<u32>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
     if let Some(mode) = llm {
@@ -648,6 +650,16 @@ async fn enqueue_job(
     if let Some(fill) = letterbox_fill {
         args.push("--letterbox-fill".to_string());
         args.push(fill);
+    }
+    // E18-F01. The flag is on|off, never absent when the deck sent it:
+    // python's snapshot must record the choice, not inherit a default.
+    if let Some(on) = ranking {
+        args.push("--ranking".to_string());
+        args.push(if on { "on" } else { "off" }.to_string());
+    }
+    if let Some(n) = ranking_count {
+        args.push("--ranking-count".to_string());
+        args.push(n.to_string());
     }
     let created = one_shot_json(&args).ok_or_else(|| "enqueue produced no answer".to_string())?;
     let job_id = created["job_id"]

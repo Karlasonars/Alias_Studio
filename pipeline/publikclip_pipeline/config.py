@@ -257,6 +257,25 @@ class PerformanceSettings:
 
 
 # ---------------------------------------------------------------------------
+# Ranking video (E18): ONE vertical file from the top-N finalists, played
+# back to back under a numbered list that fills in as the viewer watches.
+# Consumed by render/stage.py + render/ranking.py and nowhere earlier — it is
+# an output-format switch, so it must never reach selection, scoring or the
+# camera pass (E18-F01: turning it on invalidates render and nothing before).
+
+
+@dataclass
+class RankingSettings:
+    # On: the job emits the montage instead of per-clip files — one format
+    # or the other, never both (D-17).
+    enabled: bool = False
+    # How many of the finalists play. Deliberately NOT clips.select_count:
+    # that one sizes the visual pass and re-runs scoring when it changes.
+    # This one only picks the top N of what scoring already ranked.
+    count: int = 5
+
+
+# ---------------------------------------------------------------------------
 # Copywriting: titles and hooks. Consumed by copywriting/titles.py and
 # copywriting/hooks.py, which run on demand rather than as pipeline stages —
 # regenerating a title must never invalidate a render.
@@ -338,6 +357,7 @@ class Settings:
     titles: TitleSettings = field(default_factory=TitleSettings)
     descriptions: DescriptionSettings = field(default_factory=DescriptionSettings)
     hooks: HookSettings = field(default_factory=HookSettings)
+    ranking: RankingSettings = field(default_factory=RankingSettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
@@ -368,6 +388,7 @@ class Settings:
             "titles": {**self.titles.__dict__, "styles": list(self.titles.styles)},
             "descriptions": self.descriptions.__dict__.copy(),
             "hooks": {**self.hooks.__dict__, "types": list(self.hooks.types)},
+            "ranking": self.ranking.__dict__.copy(),
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
@@ -412,6 +433,7 @@ class Settings:
             titles=titles,
             descriptions=_build(DescriptionSettings, data.get("descriptions")),
             hooks=hooks,
+            ranking=_build(RankingSettings, data.get("ranking")),
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),

@@ -467,3 +467,112 @@ def test_old_scoring_checkpoints_survive_the_model_setting_arriving(ctx):
     # model change still invalidates that same old checkpoint.
     ctx.settings.gemini_model = "gemini-9.9-flash"
     assert stage.artifacts_ok(ctx, {"settings_used": stored}) is False
+
+
+# ---------------------------------------------------------------------------
+# Render stage: the output unit (E18-F01) — ranking mode invalidates render
+# and NOTHING before it, and checkpoints from before the mode existed stay
+# valid until the user actually flips it
+
+
+def _clip_render_checkpoint(ctx) -> dict:
+    """A clip-mode checkpoint exactly as the stage writes one today, minus
+    the file entries (nothing needs to exist for the settings compares)."""
+    return {"outputs": [], "fills": {}, **render_stage._fingerprint(ctx)}
+
+
+def test_ranking_mode_invalidates_render_and_nothing_before_it(ctx, tmp_path):
+    from publikclip_pipeline.candidates import stage as candidates_stage
+    from publikclip_pipeline.events import stage as events_stage
+
+    render = render_stage.RenderStage()
+    camera = camera_stage.CameraStage()
+    scoring = scoring_stage.ScoreStage()
+    candidates = candidates_stage.CandidatesStage()
+    events = events_stage.EventsStage()
+    (tmp_path / "curves.json").write_text("{}", encoding="utf-8")
+
+    stored = {
+        "render": _clip_render_checkpoint(ctx),
+        "camera": {
+            "camera_settings": ctx.settings.camera.__dict__.copy(),
+            "retention_settings": ctx.settings.retention.__dict__.copy(),
+            "trajectories": {},
+        },
+        "scoring": {"settings_used": scoring._settings_used(ctx)},
+        "candidates": {"settings_used": candidates._settings_used(ctx)},
+        "events": {"settings_used": events._settings_used(ctx.settings)},
+    }
+    assert render.artifacts_ok(ctx, stored["render"]) is True
+
+    ctx.settings.ranking.enabled = True
+    ctx.settings.ranking.count = 7
+    # the output unit changed: a per-clip render is not a ranking video
+    assert render.artifacts_ok(ctx, stored["render"]) is False
+    # ...and selection, scoring and the camera pass are the same work
+    assert camera.artifacts_ok(ctx, stored["camera"]) is True
+    assert scoring.artifacts_ok(ctx, stored["scoring"]) is True
+    assert candidates.artifacts_ok(ctx, stored["candidates"]) is True
+    assert events.artifacts_ok(ctx, stored["events"]) is True
+
+
+def test_a_render_checkpoint_from_before_ranking_existed_stays_valid(ctx):
+    """T-39's lesson, applied: the key is absent from every checkpoint on
+    disk and the mode defaults off, so the feature arriving re-renders
+    nothing."""
+    legacy = _clip_render_checkpoint(ctx)
+    assert "ranking" not in legacy
+    assert render_stage.RenderStage().artifacts_ok(ctx, legacy) is True
+
+
+def test_a_ranking_checkpoint_serves_only_a_ranking_job(ctx):
+    ctx.settings.ranking.enabled = True
+    montage = {
+        **_clip_render_checkpoint(ctx),
+        "ranking": {"count": ctx.settings.ranking.count, "order": []},
+    }
+    stage = render_stage.RenderStage()
+    assert stage.artifacts_ok(ctx, montage) is True
+    ctx.settings.ranking.count += 1
+    assert stage.artifacts_ok(ctx, montage) is False  # a different top N
+    ctx.settings.ranking.count -= 1
+    ctx.settings.ranking.enabled = False
+    assert stage.artifacts_ok(ctx, montage) is False  # clips wanted, a montage stored
+
+
+def test_the_fill_default_reaches_a_montage_through_its_segments(ctx, tmp_path):
+    """The fills compare iterates the montage's segments, not its single
+    output entry: with one entry it would compare a one-clip map against
+    the N-clip map run() stored and invalidate every ranking checkpoint."""
+    ctx.settings.ranking.enabled = True
+    ctx.settings.ranking.count = 2
+    montage = {
+        **_clip_render_checkpoint(ctx),
+        "outputs": [],
+        "fills": {"1": "black", "0": "black"},
+        "ranking": {"count": 2, "order": [1, 0]},
+    }
+    stage = render_stage.RenderStage()
+    assert stage.artifacts_ok(ctx, montage) is True
+    ctx.settings.camera.letterbox_fill = "blur"
+    assert stage.artifacts_ok(ctx, montage) is False
+    # an explicit per-segment fill keeps the default off that segment
+    write_edits(tmp_path, {"1": {"letterbox_fill": "black"}, "0": {"letterbox_fill": "black"}})
+    montage["clip_edits"] = render_stage._clip_edits_fingerprint(tmp_path)
+    assert stage.artifacts_ok(ctx, montage) is True
+
+
+def test_previous_outputs_never_adopt_a_montage(tmp_path):
+    """A clip-mode run after a ranking run must not carry the montage
+    forward as clip 0's editor version — its `clip` is only the rank-1
+    index for the review panel."""
+    montage = tmp_path / "ranking.mp4"
+    montage.write_bytes(b"mp4")
+    kept = tmp_path / "clip_01.mp4"
+    kept.write_bytes(b"mp4")
+    (tmp_path / "render.json").write_text(json.dumps({"data": {"outputs": [
+        {"clip": 0, "path": str(montage), "montage": True},
+        {"clip": 1, "path": str(kept)},
+    ]}}), encoding="utf-8")
+    assert list(render_stage._previous_outputs(tmp_path)) == ["1"]
+    assert render_stage._previous_montage(tmp_path)["path"] == str(montage)

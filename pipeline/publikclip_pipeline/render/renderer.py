@@ -264,7 +264,16 @@ def render_clip(
     timeout: float = 1800.0,
     hardware_encode: bool = False,
     letterbox_fill: str = "black",
+    edge_fade_s: float = 0.0,
 ) -> None:
+    """One clip, one ffmpeg run.
+
+    `edge_fade_s` fades the audio in and out over that many seconds at each
+    end. Zero (the default) adds no filter at all, so a standalone clip's
+    command line is byte-identical to what it always was; the ranking
+    montage (render/ranking.py) sets it because a hard cut mid-waveform
+    clicks, and in a montage the click is followed by more audio instead
+    of the end of the file."""
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
     if not boxes:
@@ -291,12 +300,18 @@ def render_clip(
 
     vcodec = video_encoder_args(hardware_encode)
 
+    af_parts = [f"loudnorm=I={lufs}:TP={true_peak}:LRA=11"]
+    if edge_fade_s > 0:
+        fade = min(edge_fade_s, duration / 2)
+        af_parts.append(f"afade=t=in:st=0:d={fade:.3f}")
+        af_parts.append(f"afade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}")
+
     args = [
         ffmpeg_bin.ffmpeg(), "-y", "-v", "error",
         "-ss", f"{clip_start:.3f}", "-t", f"{duration:.3f}",
         "-i", media_path,
         "-vf", ",".join(vf_parts),
-        "-af", f"loudnorm=I={lufs}:TP={true_peak}:LRA=11",
+        "-af", ",".join(af_parts),
         *vcodec,
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
@@ -308,6 +323,44 @@ def render_clip(
     cmd_path.unlink(missing_ok=True)
     if proc.returncode != 0:
         raise RuntimeError(f"Render failed: {(proc.stderr or '')[-800:]}")
+
+
+def concat_copy(parts: list[Path], out_path: Path, timeout: float = 600.0) -> None:
+    """Join already-rendered segments into one file without re-encoding.
+
+    The concat demuxer plus `-c copy` is a remux: every segment keeps the
+    single encode it got from render_clip, so the montage carries no second
+    lossy generation (E18-F02: it must not look worse than the clips it is
+    made of). This is only valid because every segment of one job comes out
+    of render_clip with one argument set — same encoder flags, 1080x1920,
+    setsar=1, yuv420p, aac 192k at 48 kHz, fps inherited from the one
+    source — and each starts on its own keyframe. Measured before this was
+    written: frame counts concatenate exactly, and the audio runs one AAC
+    frame (21.3 ms) long regardless of segment count, which is tail padding,
+    not drift.
+
+    The list file uses forward slashes and the demuxer's own quoting
+    (single quotes, an embedded quote closes-escapes-reopens), the same
+    portable form _q uses for filter options; `-safe 0` is needed because
+    absolute paths are "unsafe" to the demuxer by default."""
+    list_path = out_path.with_suffix(".concat.txt")
+    lines = []
+    for part in parts:
+        text = str(part).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{text}'")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    args = [
+        ffmpeg_bin.ffmpeg(), "-y", "-v", "error",
+        "-f", "concat", "-safe", "0", "-i", str(list_path),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-map_metadata", "-1",
+        str(out_path),
+    ]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    list_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Concat failed: {(proc.stderr or '')[-800:]}")
 
 
 def verify_output(out_path: Path, expected_duration: float) -> dict:

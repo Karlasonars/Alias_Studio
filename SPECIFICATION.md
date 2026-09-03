@@ -373,6 +373,27 @@ before it is reported.
 **Per-clip style overrides are applied here**, and clips with structural edits
 are protected — see [§7](#7-per-clip-editing).
 
+**Ranking mode (E18).** With `Settings.ranking.enabled` the stage hands off to
+`render/ranking.py` and writes ONE file, `clips/ranking.mp4`, instead of
+per-clip files — one format or the other, never both (D-17). The top
+`ranking.count` finalists (those with a trajectory) play as a countdown, rank
+N first. Every segment goes through the same `render_clip` as a standalone
+clip would, with the list for that segment (`captions/ranking.py`) spliced
+into its own ASS document — the list is static within a segment, so it rides
+the one subtitles burn — and a 15 ms audio edge fade. The segments are then
+joined by `renderer.concat_copy`, a concat-demuxer remux: the video is encoded
+once and the montage carries no second lossy generation. Segment files are
+deleted once the montage verifies; their ASS documents stay. The list sits in
+the top letterbox bar when framing leaves one, sized from the tightest bar
+among the segments so it never moves at a cut; at podcast framing there is no
+bar and it is drawn over the picture behind a translucent band — the owner's
+decision, recorded in that module. Structurally-edited clips are not adopted
+into a montage (the segment needs the list burned in); they render from job
+settings and the stage says so. The checkpoint keeps the clip-mode keys and
+adds `ranking` (`count`, `rendered`, `order`, `title`, `segments`, `band`);
+its single `outputs` entry carries `montage: true` and the rank-1 clip's
+index, so the review panel's audit shows the winning moment.
+
 ---
 
 ## 5. The checkpoint contract
@@ -435,7 +456,7 @@ that did not need one.
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | strict `!=` on `camera_settings` (minus `letterbox_fill`, which is render-only and used to re-run the whole DIRECT pass) and `retention_settings`, plus `clip_framing` | no |
-| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits`, plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte | no |
+| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits`, plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte. **Output unit first (E18):** a checkpoint carrying a `ranking` key serves only a job with `ranking.enabled`, and vice versa, with a strict compare on `ranking.count`; the `fills` map is recomputed over the montage's segments (`_fill_keys`) rather than its one output entry. Checkpoints from before the key existed lack it and the mode defaults off, so nothing on disk re-rendered when the feature arrived | no |
 
 **`fingerprint_ok` has three callers** — `candidates`, `events` and, since
 T-39, `scoring` (the naive strict fix for the new `gemini_model` key would

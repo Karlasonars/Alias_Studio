@@ -37,6 +37,17 @@ EMPHASIS_RMS_QUANTILE = 0.85
 
 PLAY_RES_X = 1080
 PLAY_RES_Y = 1920
+# The side margin every style uses (MarginL/MarginR) — the horizontal half of
+# the caption safe zone. Named so the ranking overlay can share it rather than
+# guess a second number.
+SIDE_MARGIN = 60
+# Top safe zone, in PlayRes px. Captions only ever encoded the BOTTOM of the
+# platform chrome (each preset's margin_v keeps them above the caption/like
+# stack), so nothing here knew where the top ended until the ranking list
+# (E18-F03) needed to sit under the "Following | For You" bar. Sized to clear
+# that bar on the three target platforms with room to spare; it is the one
+# number in this file that is not derived from a preset.
+TOP_SAFE_PX = 160
 
 _PUNCT_BREAK = re.compile(r"[.!?,;:]$")
 _NUMERIC = re.compile(r"\d")
@@ -304,7 +315,7 @@ def _esc(text: str) -> str:
     return text.replace("{", "(").replace("}", ")").replace("\\", "/")
 
 
-def _header(preset: Preset) -> str:
+def _header(preset: Preset, extra_styles: str = "") -> str:
     bold = -1 if preset.bold else 0
     return (
         "[Script Info]\n"
@@ -318,10 +329,12 @@ def _header(preset: Preset) -> str:
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Cap,{preset.font},{preset.size},{preset.primary},{preset.primary},"
         f"{preset.outline_color},&H96000000,{bold},0,0,0,100,100,0,0,1,"
-        f"{preset.outline},{preset.shadow},2,60,60,{preset.margin_v},1\n"
+        f"{preset.outline},{preset.shadow},2,{SIDE_MARGIN},{SIDE_MARGIN},{preset.margin_v},1\n"
         f"Style: Tag,{preset.font},{int(preset.size * 0.55)},{preset.event_tag_color},"
         f"{preset.event_tag_color},{preset.outline_color},&H96000000,0,-1,0,0,100,100,0,0,1,"
-        f"{max(2, preset.outline - 2)},0,2,60,60,{preset.margin_v + int(preset.size * 1.5)},1\n\n"
+        f"{max(2, preset.outline - 2)},0,2,{SIDE_MARGIN},{SIDE_MARGIN},"
+        f"{preset.margin_v + int(preset.size * 1.5)},1\n"
+        f"{extra_styles}\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Text\n"
     )
@@ -349,14 +362,22 @@ def build_ass(
     preset_name: str = "classic",
     emoji_ok: bool = False,
     overrides: dict | None = None,
+    extra_styles: str = "",
+    extra_events: str = "",
 ) -> str:
     """The full ASS document for one clip. `events` carry clip-relative
     start/end + type; only bus-detected non-speech events become tags.
 
     `overrides` patches the resolved preset for this render only (the app's
-    per-job caption tweaks), on top of any saved edits to the preset."""
+    per-job caption tweaks), on top of any saved edits to the preset.
+
+    `extra_styles` / `extra_events` are ready-made ASS lines spliced into the
+    two sections, so an overlay that must ride the same burn (the ranking
+    list, captions/ranking.py) shares this document instead of costing a
+    second subtitles pass. Empty by default: a plain clip's document is
+    byte-identical to what it was before the parameters existed."""
     preset = resolve_preset(preset_name, overrides)
-    lines = [_header(preset)]
+    lines = [_header(preset, extra_styles)]
 
     for chunk in chunk_words(words, preset.max_words, preset.pause_break):
         for i, word in enumerate(chunk.words):
@@ -380,6 +401,7 @@ def build_ass(
             f"Dialogue: 1,{_fmt_time(start)},{_fmt_time(end)},Tag,,0,0,0,"
             f"{{\\alpha&H30&}}{label}\n"
         )
+    lines.append(extra_events)
     return "".join(lines)
 
 
