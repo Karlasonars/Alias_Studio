@@ -194,3 +194,24 @@ def test_stage_order_stays_in_sync_with_the_real_pipeline():
     from publikclip_pipeline import cli
 
     assert tuple(s.name for s in cli._stages()) == hardware_profile.STAGES
+
+
+def test_invalidating_render_drops_a_ranking_montage(tmp_path):
+    """A montage is never adopted, so it is always reproducible: resume
+    from render must unlink it. Without the explicit unlink the adoption
+    map skips the entry (it is not a clip's file) and the resume is a
+    silent no-op for every ranking job."""
+    job = queue.create_job("file", "C:/x.mp4", _settings_json())
+    clips_dir = job.dir / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    montage = clips_dir / "ranking.mp4"
+    montage.write_bytes(b"mp4")
+    queue.write_checkpoint(job, "render", 1, {
+        "outputs": [{"clip": 0, "path": str(montage), "duration": 12.0, "montage": True}],
+        "kept_from_editor": [],
+        "ranking": {"count": 3, "order": [2, 1, 0]},
+    })
+    result = queue.invalidate_stage(job, "render")
+    assert result["dropped_clips"] == [0]
+    assert not montage.exists()
+    assert queue.checkpoint_path(job, "render").exists()

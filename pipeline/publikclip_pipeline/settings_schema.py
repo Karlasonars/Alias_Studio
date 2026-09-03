@@ -222,6 +222,19 @@ GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "key": "ranking",
+        "label": "Ranking video",
+        "help": "One vertical file instead of separate clips: the top moments play back to back under a numbered list that fills in as the viewer watches. The same moments, the same framing and captions — only the output format changes.",
+        "cost": COST_CHEAP,
+        "cost_note": "Changing these re-renders only. Selection, scoring and the camera pass are untouched.",
+        "fields": [
+            {"key": "ranking.enabled", "label": "Ranking video", "type": "bool",
+             "help": "On: the job produces one ranking video and no individual clips. Off: individual clips, as before. Switching re-renders; nothing earlier re-runs."},
+            {"key": "ranking.count", "label": "Moments", "type": "number", "min": 2, "max": 8, "step": 1,
+             "help": "How many of the top-ranked moments play. Independent of 'Clips to render' — it only picks from what scoring already ranked, so changing it re-renders and never rescores. Fewer than 8 fit comfortably above gameplay footage; above a podcast crop the list sits over the picture."},
+        ],
+    },
+    {
         "key": "descriptions",
         "label": "Descriptions",
         "help": "The caption pasted under the video. Longer than the title and doing a different job: the context and searchable words the title had no room for.",
