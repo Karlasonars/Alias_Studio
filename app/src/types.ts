@@ -210,6 +210,20 @@ export interface RenderOutput {
   duration: number
   words: number
   event_tags: number
+  /** E18: this entry is the whole ranking video, not one clip's file. Its
+   * `clip` is the rank-1 index so the audit panel shows the winning moment. */
+  montage?: boolean
+}
+
+/** E18: what a ranking render recorded about itself. Present on render.json
+ * only when the job rendered in ranking mode. */
+export interface RankingSummary {
+  count: number
+  rendered: number
+  order: number[]
+  title: string
+  segments: { clip: number; rank: number; offset: number; duration: number }[]
+  band: { top: number; line_h: number; boxed: boolean }
 }
 
 export interface JobResults {
@@ -228,6 +242,7 @@ export interface JobResults {
     // Clips a restyle deliberately left alone: their editor version has cuts
     // or bounds the whole-job render cannot reproduce.
     kept_from_editor?: number[]
+    ranking?: RankingSummary
   } | null
   events: {
     counts: Record<string, number>
