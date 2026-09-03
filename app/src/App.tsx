@@ -259,7 +259,15 @@ export default function App() {
   }, [refreshJobs, appendLog, refreshHardware])
 
   const startRun = useCallback(
-    async (source: string, llm: string, captions: string, gameplayAmount: number, letterboxFill: string) => {
+    async (
+      source: string,
+      llm: string,
+      captions: string,
+      gameplayAmount: number,
+      letterboxFill: string,
+      ranking: boolean,
+      rankingCount: number
+    ) => {
       // While a job is running this only enqueues - the running job's log
       // and stage bars must not be cleared out from under it.
       const wasIdle = !runningRef.current
@@ -274,7 +282,7 @@ export default function App() {
       }
       setEnqueueing((n) => n + 1)
       try {
-        await api.enqueueJob(source, llm, captions, gameplayAmount, letterboxFill)
+        await api.enqueueJob(source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
         if (!wasIdle) {
           // A busy-enqueue used to change nothing on screen - the rail
           // refreshes only on run events, so six presses queued six

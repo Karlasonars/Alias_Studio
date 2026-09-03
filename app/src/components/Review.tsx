@@ -52,6 +52,11 @@ function fmtTime(t: number): string {
 export default function Review({ results, onBack, onRestyle }: Props) {
   const outputs = results.render?.outputs ?? []
   const clips = results.score?.clips ?? []
+  // E18: a ranking job has ONE output, the montage. Its entry's `clip` is
+  // the rank-1 index, which is exactly what the audit should show; what it
+  // must not offer is the clip editor, whose re-render makes a standalone
+  // file that has nothing to do with the montage.
+  const ranking = results.render?.ranking
   const [selected, setSelected] = useState(0)
   const [exported, setExported] = useState<Record<number, string>>({})
   const currentPreset = results.render?.caption_preset ?? 'classic'
@@ -110,7 +115,10 @@ export default function Review({ results, onBack, onRestyle }: Props) {
         <div className="review-title-block">
           <h1 className="review-title">{results.ingest?.title ?? results.job_id}</h1>
           <p className="review-sub mono">
-            {outputs.length} clips · scored by {results.score?.model ?? '—'} ·{' '}
+            {ranking && outputs[0]
+              ? `ranking video · ${ranking.rendered} moments · ${fmtTime(outputs[0].duration)}`
+              : `${outputs.length} clips`}{' '}
+            · scored by {results.score?.model ?? '—'} ·{' '}
             {results.score?.llm_mode === 'ollama' ? 'LOCAL ESTIMATE' : 'standard confidence'} ·{' '}
             {results.candidates?.heatmap_present ? 'replay heatmap in play' : 'no public heatmap'}
             {/* T-38: the degradation §5.9 requires the user to be able to
@@ -181,8 +189,10 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               style={{ animationDelay: `${i * 50}ms` }}
             >
               <span className="film-score mono">{Math.round(clip?.score ?? out.score)}</span>
-              <span className="film-time mono">{clip ? fmtTime(clip.start) : ''}</span>
-              <span className="film-platform">{out.best_platform}</span>
+              <span className="film-time mono">
+                {out.montage ? fmtTime(out.duration) : clip ? fmtTime(clip.start) : ''}
+              </span>
+              <span className="film-platform">{out.montage ? ranking?.title ?? 'ranking' : out.best_platform}</span>
             </button>
           )
         })}
@@ -199,9 +209,11 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               playsInline
             />
             <div className="monitor-actions">
-              <button className="btn-secondary" onClick={() => setEditing(pair.out!.clip)}>
-                ✎ EDIT CLIP (bounds · cuts · visuals)
-              </button>
+              {!pair.out.montage && (
+                <button className="btn-secondary" onClick={() => setEditing(pair.out!.clip)}>
+                  ✎ EDIT CLIP (bounds · cuts · visuals)
+                </button>
+              )}
               <button className="btn-primary" onClick={() => doExport(pair.out!, pair.clip!)}>
                 {exported[pair.out.clip] ? 'EXPORTED ✓' : 'EXPORT MP4'}
               </button>

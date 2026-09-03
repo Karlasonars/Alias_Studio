@@ -473,6 +473,15 @@ body {
   transition: all 0.15s;
 }
 .opt-on { border-color: var(--amber); color: var(--amber); background: rgba(var(--amber-rgb), 0.08); }
+/* one-line consequence of a deck choice (E18: the list over the picture at
+   podcast framing) — quiet, under the options, never a wall */
+.opt-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  margin: 10px 0 0;
+}
 
 /* the podcast <-> gameplay framing dial (Studio pre-run picker uses .opt
    pills instead; this is the continuous version, used post-render) */

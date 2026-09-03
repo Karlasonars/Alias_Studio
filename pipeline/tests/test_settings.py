@@ -619,3 +619,44 @@ def test_everything_cached_runs_nothing():
     again = [_Recorder("a"), _Recorder("b")]
     queue.run_stages(job, again, lambda *a: None)
     assert [s.runs for s in again] == [0, 0]
+
+
+def test_enqueue_flags_set_the_job_ranking_mode(capsys):
+    """E18-F01's chain below the UI: `jobs create --ranking on
+    --ranking-count 7` lands on the job's settings snapshot; without the
+    flags the group keeps its defaults, off and 5."""
+    from publikclip_pipeline import cli
+
+    assert cli.main([
+        "jobs", "create", "C:/nowhere/a.mp4", "--ranking", "on", "--ranking-count", "7",
+    ]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.ranking.enabled is True and saved.ranking.count == 7
+
+    assert cli.main(["jobs", "create", "C:/nowhere/b.mp4"]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.ranking.enabled is False and saved.ranking.count == 5
+
+
+def test_resume_ranking_flags_reach_the_job_snapshot(monkeypatch):
+    """`resume --ranking off` must be able to turn the mode OFF, which is
+    why the flag is on|off rather than a store_true: a bare presence check
+    cannot say "off", and cmd_resume's guard has to see the flag at all —
+    a flag it does not list is silently inert (the letterbox_fill flag is
+    in exactly that state today, and has its own task)."""
+    from publikclip_pipeline import cli
+
+    settings = config.Settings()
+    settings.ranking.enabled = True
+    job = queue.create_job("file", "C:/nowhere/c.mp4", json.dumps(settings.to_json()))
+    monkeypatch.setattr(cli, "_execute", lambda job, jsonl: 0)
+
+    assert cli.main(["resume", job.id, "--ranking", "off"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.ranking.enabled is False
+
+    assert cli.main(["resume", job.id, "--ranking-count", "3"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.ranking.count == 3 and saved.ranking.enabled is False  # untouched by the count flag
