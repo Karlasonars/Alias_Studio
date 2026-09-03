@@ -1251,6 +1251,31 @@ Pārbūvēta laika ass, kas vienā vietā rāda visu, kas klipā notiek.
 
 ---
 
+**E6-F09 · Kadra malu aizpildījums izvēlams pirms darba sākuma** · `P1` · visi
+
+> **Jauna prasība** (nepilnība E6, atrasta testēšanā). `camera.letterbox_fill`
+> eksistē kopš pirmās versijas ar noklusējumu `"black"`, un abi renderēšanas
+> ceļi to jau atrisina pareizi. Bet tas dzīvo ⚙ Iestatījumos, kur neviens to
+> nemeklē pirms darba, un studijas panelī — tajā, uz kura lietotājs skatās
+> pirms CUT IT — tā nav. Rezultāts: lietotājs izvēlas gameplay kadrējumu,
+> sagaida darbu, un pēc tam pārrenderē **katru klipu atsevišķi**, lai uzliktu
+> izplūdinātās malas. Prasība nav pievienot iestatījumu — tā ir novietot
+> esošo tur, kur lēmums tiek pieņemts.
+>
+> *Trešais gadījums, kad "trūkstoša funkcija" izrādījās nosūtīta funkcija bez
+> sasniedzama ceļa — sk. arī `hardware.summary()` bez izsaucēja un
+> `jobs.pending` bez lasītāja.*
+
+*Pieņemšanas kritēriji:*
+- Studijas panelī ir grupa **malas: melnas | izplūdinātas**, kas parādās tikai pie gameplay kadrējuma — pie podcast izgriezums ir tieši 9:16, joslu nav, un tukša vadīkla būtu §5.2 pārkāpums.
+- Izvēle iet pa to pašu ķēdi, ko pārējās paneļa vadīklas, ar karogu uz `run`, `resume` un `jobs create`, lai rindā ielikšana nevar atšķirties no palaišanas.
+- Darba līmeņa vērtība ir **noklusējums, ne aizvietotājs**: klips bez skaidri uzstādītas vērtības to manto; klips, kuram lietotājs redaktorā vērtību ir uzstādījis, to patur arī tad, kad noklusējums mainās — arī tad, ja uzstādītā vērtība sakrīt ar veco noklusējumu.
+- Aizpildījuma maiņa **nepārdzen kameras posmu**. Tā ir tikai renderēšanas vērtība, un līdz šim tās maiņa maksāja minūtes ASD darba par kaut ko, ko `camera/` nemaz nelasa.
+- Renderēšanas kontrolpunkts noveco tikai tad, ja noklusējums tiešām attiecas vismaz uz vienu klipu. Darbs, kura visiem klipiem aizpildījums ir uzstādīts skaidri, netiek pārrenderēts.
+- Esošie kontrolpunkti uz diska paliek derīgi — funkcijas ierašanās viena pati nedrīkst likt pārrēķināt nevienu jau pabeigtu darbu.
+
+---
+
 ## E7 — Subtitri, stils un zīmola komplekti
 
 **Mērķis:** klips izskatās pēc lietotāja zīmola, nevis pēc mūsu noklusējuma.
