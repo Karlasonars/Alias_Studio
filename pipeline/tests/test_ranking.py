@@ -405,21 +405,27 @@ class LabelClient:
     """Stands in for the LLM behind the label engine: answers with a label
     unique to the moment (its first transcript word), raises for a moment
     whose transcript carries `poison`, answers four words for one carrying
-    `wordy`, and counts every call — the determinism guard is a count."""
+    `wordy` — on every ask, or only on the first when it `relents` — and
+    counts every call. The determinism guard is a count."""
 
-    def __init__(self, poison: str | None = None, wordy: str | None = None):
+    def __init__(self, poison: str | None = None, wordy: str | None = None, relents: bool = False):
         self.poison = poison
         self.wordy = wordy
+        self.relents = relents
         self.calls: list[str] = []
+        self.asked: dict[str, int] = {}
 
     def generate_json(self, prompt, schema, images=None):
         self.calls.append(prompt)
         transcript = prompt.split("Transcript:\n", 1)[1].split("\n", 1)[0].split()
+        first = transcript[0]
+        self.asked[first] = self.asked.get(first, 0) + 1
         if self.poison and self.poison in transcript:
             raise RuntimeError("model down")
-        if self.wordy and self.wordy in transcript:
-            return {"label": " ".join(transcript[:4]), "grounded_in": transcript[0]}
-        return {"label": f"moment {transcript[0]}", "grounded_in": transcript[0]}
+        wordy = self.wordy and self.wordy in transcript
+        if wordy and not (self.relents and self.asked[first] > 1):
+            return {"label": " ".join(transcript[:4]), "grounded_in": first}
+        return {"label": f"moment {first}", "grounded_in": first}
 
 
 def _install(monkeypatch, client) -> list:
@@ -573,12 +579,41 @@ def test_one_failed_label_blanks_one_entry_and_the_rest_render(tmp_path, source,
 
 
 def test_an_unusable_answer_is_a_blank_entry_that_says_what_was_answered(tmp_path, source, monkeypatch):
-    ctx, _ = _labelled_job(tmp_path, source, monkeypatch, LabelClient(wordy="w12"))
+    """Two unusable answers — the first and its one retry — are a blank
+    entry, and label_errors records both, with the text that was
+    rejected (E18-F04 amendment)."""
+    client = LabelClient(wordy="w12")
+    ctx, _ = _labelled_job(tmp_path, source, monkeypatch, client)
     data = render_stage.RenderStage().run(ctx)
     assert data["ranking"]["labels"]["1"] is None
     assert data["ranking"]["label_errors"]["1"] == (
-        "moment #2: the model's answer 'w12 w13 w14 w15' was rejected (longer than 3 words)"
+        "moment #2: the model's answers 'w12 w13 w14 w15' (longer than 3 words) and "
+        "'w12 w13 w14 w15' (longer than 3 words) were both rejected"
     )
+    assert len(client.calls) == 4  # three moments, one retry — not a loop
+
+
+def test_a_retried_label_is_stored_and_reused_like_any_other(tmp_path, source, monkeypatch):
+    """The retry happens inside the first generation: an answer the filter
+    rejected, then a good one, lands on the checkpoint like any label — and
+    the re-render reuses it without a call, as the determinism guard
+    demands of every label."""
+    client = LabelClient(wordy="w12", relents=True)
+    ctx, _ = _labelled_job(tmp_path, source, monkeypatch, client)
+    stage = render_stage.RenderStage()
+    data = stage.run(ctx)
+    assert len(client.calls) == 4
+    assert data["ranking"]["labels"]["1"] == {
+        "text": "moment w12", "grounded_in": "w12", "start": 6.0, "end": 10.0,
+    }
+    assert data["ranking"]["label_errors"] == {}
+    _checkpoint(tmp_path, data)
+
+    ctx.settings.caption_preset = "beast"
+    again = LabelClient()
+    built = _install(monkeypatch, again)
+    assert stage.run(ctx)["ranking"]["labels"] == data["ranking"]["labels"]
+    assert again.calls == [] and built == []
 
 
 def test_a_fatal_llm_error_blanks_the_rest_without_asking(tmp_path, source, monkeypatch):

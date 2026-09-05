@@ -85,6 +85,23 @@ def _same_moment(stored: object, clip: dict) -> bool:
         return False
 
 
+def _blank_reason(out: dict) -> str:
+    """Why a moment has no label, for label_errors: every answer the filter
+    rejected — the retry's too (E18-F04 amendment) — with the text that was
+    rejected, and the call error when an attempt did not answer at all.
+    "Why is number 3 blank" is answered in the job dir by this string."""
+    rejected = [f"{a['proposed']!r} ({a['rejected_because']})" for a in out.get("attempts") or []]
+    if out.get("error"):
+        if rejected:
+            return f"the model's answer {rejected[0]} was rejected, and the retry failed: {out['error']}"
+        return str(out["error"])
+    if len(rejected) > 1:
+        return f"the model's answers {' and '.join(rejected)} were both rejected"
+    if rejected:
+        return f"the model's answer {rejected[0]} was rejected"
+    return "no label"
+
+
 def moment_labels(
     ctx: StageContext, inputs: RenderInputs, ranked: list[int]
 ) -> tuple[dict[str, dict | None], dict[str, str]]:
@@ -152,9 +169,7 @@ def moment_labels(
                 "end": end,
             }
             continue
-        reason = out["error"] or (
-            f"the model's answer {out['proposed']!r} was rejected ({out['rejected_because']})"
-        )
+        reason = _blank_reason(out)
         blank(i, reason)
         if out["fatal"]:
             for j in pending[n + 1:]:
