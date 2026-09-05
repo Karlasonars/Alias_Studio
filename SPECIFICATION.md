@@ -140,7 +140,7 @@ publikclip/
 │   │   ├── render/               stage 8  — ffmpeg → finished MP4s
 │   │   │
 │   │   ├── captions/             ASS subtitle generation + fonts
-│   │   ├── copywriting/          titles, descriptions, hooks
+│   │   ├── copywriting/          titles, descriptions, hooks, moment labels
 │   │   ├── edits/                per-clip editing + single-clip render
 │   │   ├── insights/             Instagram feedback loop
 │   │   ├── models/               weight registry + specs
@@ -390,9 +390,28 @@ bar and it is drawn over the picture behind a translucent band — the owner's
 decision, recorded in that module. Structurally-edited clips are not adopted
 into a montage (the segment needs the list burned in); they render from job
 settings and the stage says so. The checkpoint keeps the clip-mode keys and
-adds `ranking` (`count`, `rendered`, `order`, `title`, `segments`, `band`);
-its single `outputs` entry carries `montage: true` and the rank-1 clip's
-index, so the review panel's audit shows the winning moment.
+adds `ranking` (`count`, `rendered`, `order`, `title`, `segments`, `band`,
+`labels`, `label_errors`); its single `outputs` entry carries `montage: true`
+and the rank-1 clip's index, so the review panel's audit shows the winning
+moment.
+
+**Moment labels (E18-F04).** Before the segment loop the stage asks
+`copywriting/labels.py` for the one to three words next to each number —
+one LLM call per moment, the title engine's honesty rule in the prompt and
+a filter behind it (over three words, sentence punctuation, empty, over the
+column budget: rejected, never trimmed, because the text goes into pixels
+nobody can edit). A label is an output of the render, not a setting of it:
+`ranking.labels` keys each moment's clip index to `{text, grounded_in,
+start, end}`, a later render reuses every stored label for the same moment
+(bounds, not just index) verbatim and builds no client when nothing is
+missing, and `artifacts_ok` never reads them — a model's word choice must
+not invalidate a render, and the same job re-rendered burns the same words.
+A moment that gets no label (client unbuildable, call failed, answer
+rejected) plays with its number alone, the reason in `ranking.label_errors`;
+a re-run of the stage retries it, a cached render keeps the blank. Clip mode
+makes no LLM call. Nothing regenerates or edits a label in this version
+(D-17). This is the one copywriting engine called from inside a stage;
+`copywriting/__init__.py` says why.
 
 ---
 

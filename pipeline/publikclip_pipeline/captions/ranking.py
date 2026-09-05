@@ -39,6 +39,7 @@ segments, so the list never moves at a cut.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import ass as ass_mod
@@ -111,7 +112,9 @@ def overlay_styles(preset: ass_mod.Preset, band: Band) -> str:
     """The [V4+ Styles] lines the overlay needs, in the caption preset's
     face and colours so the list matches the captions' brand. Top-left
     aligned (7): an event's own MarginV is then its distance from the top,
-    so every line is placed by margin and no \\pos arithmetic is needed."""
+    so every line is placed by margin and no \\pos arithmetic is needed.
+    The label column (E18-F04) is the entry face again, NUMBER_COLUMN to
+    the right, placed the same way — so the numbers never move for it."""
     bold = -1 if preset.bold else 0
     entry_size = max(24, int(band.line_h * 0.8))
     m = ass_mod.SIDE_MARGIN
@@ -119,6 +122,8 @@ def overlay_styles(preset: ass_mod.Preset, band: Band) -> str:
     return (
         f"Style: RankTitle,{preset.font},{TITLE_SIZE},{common},{preset.outline},0,7,{m},{m},0,1\n"
         f"Style: RankEntry,{preset.font},{entry_size},{common},{preset.outline},0,7,{m},{m},0,1\n"
+        f"Style: RankLabel,{preset.font},{entry_size},{common},{preset.outline},0,7,"
+        f"{m + NUMBER_COLUMN},{m},0,1\n"
         # The backing band: a drawing, so no font is involved and one shape
         # covers the whole list instead of a box per line.
         "Style: RankBand,Inter,20,&H00000000,&H00000000,&H00000000,&H00000000,0,0,0,0,"
@@ -131,6 +136,7 @@ def overlay_events(
     band: Band,
     play_index: int,
     duration: float,
+    labels: Sequence[str | None] | None = None,
 ) -> str:
     """The Dialogue lines for ONE segment: the title, the backing band when
     there is no bar, and every entry 1..N in the state it has during this
@@ -138,9 +144,10 @@ def overlay_events(
     colour, faded in at the segment start), or still to come (dimmed, digits
     only). `play_index` is this segment's position in play order, 0-based.
 
-    Entry text (the label, E18-F04) is not in this version: the reveal is
-    the number lighting up. The text column is reserved (NUMBER_COLUMN) so
-    labels can arrive without moving the numbers.
+    `labels[row]` is the entry text for rank row+1 (E18-F04), None or absent
+    for an entry that has none. A label appears WITH its number, at the
+    reveal, and stays; the entries still to come show their digits alone,
+    because a pre-filled list kills the hook (D-17).
     """
     start, end = ass_mod._fmt_time(0.0), ass_mod._fmt_time(max(0.04, duration))
     order = play_order(band.count)
@@ -160,12 +167,20 @@ def overlay_events(
     for row in range(band.count):
         position = order.index(row)
         if position < play_index:
-            tags = f"{{\\c{preset.primary}}}"
+            state = f"\\c{preset.primary}"
         elif position == play_index:
-            tags = f"{{\\c{preset.active}\\fad({REVEAL_FADE_MS},0)}}"
+            state = f"\\c{preset.active}\\fad({REVEAL_FADE_MS},0)"
         else:
-            tags = f"{{\\c{preset.primary}\\alpha&H80&}}"
-        lines.append(
-            f"Dialogue: 2,{start},{end},RankEntry,,0,0,{band.entry_y(row)},{tags}{row + 1}\n"
-        )
+            state = f"\\c{preset.primary}\\alpha&H80&"
+        y = band.entry_y(row)
+        lines.append(f"Dialogue: 2,{start},{end},RankEntry,,0,0,{y},{{{state}}}{row + 1}\n")
+        label = labels[row] if labels and row < len(labels) else None
+        if label and position <= play_index:
+            text = ass_mod._esc(label.upper() if preset.uppercase else label)
+            # \q2, never wrap: the filter (copywriting/labels.py) keeps a
+            # label inside its column, and one that somehow is not gets cut
+            # at the frame edge rather than folded onto the next number.
+            lines.append(
+                f"Dialogue: 2,{start},{end},RankLabel,,0,0,{y},{{{state}\\q2}}{text}\n"
+            )
     return "".join(lines)

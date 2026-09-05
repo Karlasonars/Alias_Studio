@@ -6,7 +6,8 @@ enforced (not merely requested), hallucinated indices can't become real
 cuts, and "this is better" is only claimed when it measurably is.
 """
 
-from publikclip_pipeline.copywriting import hooks, titles
+from publikclip_pipeline.copywriting import hooks, labels, titles
+from publikclip_pipeline.scoring import llm
 
 
 class FakeClient:
@@ -255,3 +256,83 @@ def test_text_hook_is_length_capped():
     opts = hooks.HookOptions(max_shift_s=6.0, min_remaining_s=1.0)
     out = hooks.analyze(client, SENTENCES, _words(), 12.5, 40.0, opts)
     assert len(out["text_hook"]) <= 60
+
+
+# ---------------------------------------------------------------------------
+# Moment labels (E18-F04): burned into pixels, so the filter rejects rather
+# than repairs — a blank entry beats a wrong one nobody can edit
+
+
+def test_label_of_four_words_is_rejected():
+    out = labels.finalize({"label": "he finally admits it", "grounded_in": "g"})
+    assert out["label"] is None
+    assert out["rejected_because"] == "longer than 3 words"
+    assert out["proposed"] == "he finally admits it"  # kept, so the blank can be explained
+
+
+def test_label_with_sentence_punctuation_is_rejected():
+    for text in ("bath bomb.", "who did it?", "wait, what", "no: never"):
+        assert labels.finalize({"label": text})["rejected_because"] == "sentence punctuation", text
+
+
+def test_empty_label_is_rejected():
+    assert labels.finalize({"label": "   "})["rejected_because"] == "empty"
+    assert labels.finalize({})["rejected_because"] == "empty"
+    assert labels.finalize(None)["rejected_because"] == "empty"
+    assert labels.finalize(["not", "a", "dict"])["rejected_because"] == "empty"
+
+
+def test_bath_bomb_is_accepted():
+    out = labels.finalize({"label": ' "Bath bomb" ', "grounded_in": "the bath bomb went off"})
+    assert out["label"] == "Bath bomb" and out["rejected_because"] is None
+    assert out["grounded_in"] == "the bath bomb went off"
+
+
+def test_label_numbers_keep_their_dots_and_commas():
+    assert labels.finalize({"label": "3.5 hours"})["label"] == "3.5 hours"
+    assert labels.finalize({"label": "1,000 steps"})["label"] == "1,000 steps"
+
+
+def test_label_over_the_column_budget_is_rejected():
+    """Two words, but wider than the column next to the numbers."""
+    out = labels.finalize({"label": "extraordinarily unbelievable"})
+    assert out["rejected_because"] == f"longer than {labels.MAX_CHARS} characters"
+
+
+def test_label_emoji_are_dropped_not_burned():
+    assert labels.finalize({"label": "bath bomb 💣"})["label"] == "bath bomb"
+    assert labels.finalize({"label": "💣"})["rejected_because"] == "empty"
+
+
+def test_label_prompt_carries_the_honesty_rule():
+    text = labels.prompt("some transcript", "a summary")
+    assert "Do not invent facts" in text
+    assert "three words" in text and "some transcript" in text and "a summary" in text
+
+
+def test_generate_returns_the_validated_label():
+    client = FakeClient({"label": "bath bomb", "grounded_in": "the bath bomb"})
+    out = labels.generate(client, "the bath bomb went off", "a bath bomb")
+    assert out["label"] == "bath bomb" and out["error"] is None and out["fatal"] is False
+    assert len(client.prompts) == 1 and "the bath bomb went off" in client.prompts[0]
+
+
+def test_raising_client_yields_none_not_an_exception():
+    class Raising:
+        def generate_json(self, prompt, schema, images=None):
+            raise RuntimeError("model down")
+
+    out = labels.generate(Raising(), "transcript", "summary")
+    assert out["label"] is None
+    assert "model down" in out["error"] and out["fatal"] is False
+
+
+def test_a_fatal_llm_error_is_relayed_as_fatal():
+    """A rejected key fails every further call the same way; the stage
+    reads this flag to stop asking instead of failing N times."""
+    class Rejected:
+        def generate_json(self, prompt, schema, images=None):
+            raise llm.LlmError("Gemini rejected the API key.", code="gemini-key-rejected")
+
+    out = labels.generate(Rejected(), "t", "s")
+    assert out["label"] is None and out["fatal"] is True

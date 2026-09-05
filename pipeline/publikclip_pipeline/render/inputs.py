@@ -105,6 +105,19 @@ def clip_captions(inputs: RenderInputs, start: float, end: float) -> tuple[list,
     return words, clip_events
 
 
+def clip_transcript(inputs: RenderInputs, start: float, end: float) -> str:
+    """The words spoken inside one clip, as plain text — what a moment's
+    label (E18-F04) is grounded in. Same window rule as clip_captions, a
+    word belongs to the clip its start falls in, so the label is asked
+    about exactly the words the captions will show."""
+    return " ".join(
+        w["word"]
+        for seg in inputs.segments
+        for w in seg.get("words", [])
+        if start <= w["start"] < end
+    )
+
+
 def clip_style(ctx: StageContext, edit: dict) -> dict:
     """The style overrides the batch paths CAN honour for one clip, so a
     restyle doesn't silently undo them. (The framing dial is baked into the
