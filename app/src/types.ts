@@ -210,20 +210,32 @@ export interface RenderOutput {
   duration: number
   words: number
   event_tags: number
-  /** E18: this entry is the whole ranking video, not one clip's file. Its
-   * `clip` is the rank-1 index so the audit panel shows the winning moment. */
+  /** E18: this entry is a whole ranking video, not one clip's file. Its
+   * `clip` is the rank-1 index so the audit panel shows the winning moment;
+   * `ranks` is the global rank range it plays (1–5, then 6–10). */
   montage?: boolean
+  ranks?: [number, number]
 }
 
-/** E18: what a ranking render recorded about itself. Present on render.json
- * only when the job rendered in ranking mode. */
-export interface RankingSummary {
-  count: number
+/** E18: one ranking video, as the render recorded it. */
+export interface RankingMontage {
+  path: string
+  ranks: [number, number]
   rendered: number
   order: number[]
   title: string
   segments: { clip: number; rank: number; offset: number; duration: number }[]
+}
+
+/** E18: what a ranking render recorded about itself. Present on render.json
+ * only when the job rendered in ranking mode. Since D-18 the clips are in
+ * `outputs` as always, first; the montage entries follow them. */
+export interface RankingSummary {
+  count: number
   band: { top: number; line_h: number; boxed: boolean }
+  montages: RankingMontage[]
+  /** Why there is one video and not two, when that is the case. */
+  note?: string | null
 }
 
 export interface JobResults {

@@ -1,6 +1,7 @@
-"""Ranking mode of the render stage (E18-F02): ONE vertical file from the
-top-N finalists, played back to back as a countdown under the numbered
-list of captions/ranking.py.
+"""Ranking mode of the render stage (E18-F02, E18-F06): vertical files from
+the top finalists, each played back to back as a countdown under the
+numbered list of captions/ranking.py — two of them, moments 1..N and
+N+1..2N, beside the clips the stage renders anyway (D-18).
 
 Shape: every segment is rendered exactly as a standalone clip would be —
 the same render_clip, the same trajectory, captions and letterbox fill —
@@ -9,15 +10,17 @@ the segments are then joined by a remux (renderer.concat_copy). The video
 is encoded once; the montage carries no second lossy generation, which is
 E18-F02's "must not look worse than the clips it is made of".
 
-What this deliberately does not do: adopt editor-reshaped clips. The batch
-path keeps an editor's file for a structurally-edited clip; a montage
+What this deliberately does not do: adopt editor-reshaped clips. The clip
+loop keeps an editor's file for a structurally-edited clip; a montage
 cannot, because the segment needs the list burned in. Such a segment
-renders from job settings and the stage says so. No per-clip files survive:
-the segment files are the concat inputs and are deleted once the montage
-verifies (D-17: one format, not both). The caption documents stay, as they
-do for clips.
+renders from job settings and the stage says so. The segment files are
+the concat inputs and are deleted once the montage verifies; the caption
+documents stay, as they do for clips. D-17's "one format, not both" was
+reversed by D-18 after the owner saw the first version: the clips render
+first and always (render/stage.py), and the montages are appended to the
+same checkpoint.
 
-Moment labels (E18-F04): before the segment loop, every moment gets the
+Moment labels (E18-F04): before the first segment, every moment gets the
 one to three words that sit next to its number, from copywriting/labels.py
 — one LLM call per moment, burned into the segment's caption document
 with the rest of the list. Labels are an OUTPUT of the render, not a
@@ -39,10 +42,12 @@ from ..jobs.queue import StageContext, StageError
 from ..scoring import llm as llm_mod
 from . import renderer
 from .inputs import RenderInputs, clip_captions, clip_style, clip_transcript
-from .stage import _fills_for, _has_structural_edits, _previous_render
+from .stage import _has_structural_edits, _previous_montages, _previous_render
 
-MONTAGE_NAME = "ranking.mp4"
-SEGMENT_NAME = "ranking_seg_{:02d}"
+# The file name carries the global rank range the video plays — ranking_1-5,
+# ranking_6-10 — so the library rail, which reads the directory, can tell
+# which is which. Segments: ranking_1-5_seg_00.
+MONTAGE_STEM = "ranking_{}-{}"
 # A hard cut mid-waveform clicks; in a montage the click is followed by more
 # audio rather than the end of the file. Short enough to be inaudible as a
 # fade, long enough to take the edge off the discontinuity.
@@ -183,47 +188,158 @@ def moment_labels(
     return labels, errors
 
 
-def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -> dict:
+def montage_slices(ranked: list[int], count: int) -> list[list[int]]:
+    """The moment slices the videos play, in rank order: ranks 1..N, then
+    N+1..2N — the second only when it is a full N, so both videos are the
+    same "TOP N" with the same list length and the same geometry (E18-F06:
+    one series). A partial second slice is not a smaller video; it is no
+    video, and render_montages says why."""
+    count = max(1, int(count))
+    first, second = ranked[:count], ranked[count:2 * count]
+    slices = [first] if first else []
+    if len(second) == count:
+        slices.append(second)
+    return slices
+
+
+def _shortfall_note(have: int, count: int, select_count: int) -> str:
+    """Why only one video, with the setting that decides it named: the
+    second needs 2N finalists with a camera pass, and the camera pass
+    covers clips.select_count finalists — a setting this mode must not
+    touch itself, since changing it re-runs scoring and the camera pass
+    (E18-F05: switching the mode invalidates nothing before render)."""
+    note = (
+        f"The second ranking video needs {2 * count} finalists with a camera pass; "
+        f"this job has {have}, so one ranking video was made."
+    )
+    if select_count < 2 * count:
+        note += (
+            f" 'Clips to render' is {select_count}; set it to at least {2 * count} "
+            "(a re-run: selection re-scores) for two."
+        )
+    return note
+
+
+def render_montages(
+    ctx: StageContext, inputs: RenderInputs, fills: dict[str, str]
+) -> tuple[list[dict], dict]:
+    """Every ranking video this job gets, after the clip loop (D-18: as
+    well as the clips, never instead). Returns the montage output entries —
+    the stage appends them to the clip entries — and the `ranking` summary
+    the checkpoint carries. `fills` is the clip loop's resolved map: the
+    segments ARE those clips, so they render with those fills."""
     settings = ctx.settings
     count = int(settings.ranking.count)
-    ranked = ranked_clips(inputs.clips, inputs.trajectories, count)
+    ranked = ranked_clips(inputs.clips, inputs.trajectories, 2 * count)
     if not ranked:
         raise StageError("No clips were rendered.", code="no-clips-rendered")
-    n = len(ranked)
-    if n < count:
-        ctx.emit(-1, f"Only {n} of the top {count} moments have a camera pass — the ranking video uses {n}.")
+    slices = montage_slices(ranked, count)
+    note = None
+    if len(slices) < 2:
+        note = _shortfall_note(len(ranked), count, settings.clips.select_count)
+        ctx.emit(-1, note)
+    if len(slices[0]) < count:
+        ctx.emit(
+            -1,
+            f"Only {len(slices[0])} of the top {count} moments have a camera pass — "
+            f"the ranking video uses {len(slices[0])}.",
+        )
 
-    # Play order is a countdown over rank positions; `order` is the clip
-    # index playing at each position. Its keys are what the fills map and
-    # the fingerprint iterate (stage._fill_keys).
-    order = [ranked[p] for p in overlay.play_order(n)]
+    # The previous render's videos go before anything is written: their
+    # names carry the rank range, so a count change would otherwise leave
+    # the old files beside the new ones, and the library rail reads the
+    # directory, not the checkpoint.
+    for previous in _previous_montages(ctx.job_dir):
+        path = Path(str(previous.get("path", "")))
+        if path.name and path.exists():
+            path.unlink(missing_ok=True)
+
+    used = [i for ranked_slice in slices for i in ranked_slice]
     trajectories = {
         i: json.loads(Path(inputs.trajectories[str(i)]).read_text(encoding="utf-8"))
-        for i in order
+        for i in used
     }
-    total = sum(float(inputs.clips[i]["end"]) - float(inputs.clips[i]["start"]) for i in order)
-    ctx.emit(-1, f"Ranking video: {n} moments, {_fmt_total(total)} total.")
-
-    # One band for every segment, sized by the tightest top bar among them —
-    # the list must not move at a cut. A segment without a bar (podcast
+    # One band for the whole series (E18-F06): the tightest top bar among
+    # EVERY segment of every video, so the list never moves at a cut and
+    # never differs between the two. A segment without a bar (podcast
     # framing) contributes 0 and forces the boxed layout for all of them.
+    # Sized for the list length both share — a short first video only
+    # exists when there is no second.
     bars = []
     for traj in trajectories.values():
         geometry = renderer.letterbox_geometry(traj.get("content_w", 0), traj.get("content_h", 0))
         bars.append(geometry[1] if geometry else 0)
-    band = overlay.band_for(bars, n)
+    band = overlay.band_for(bars, len(slices[0]))
     if band.boxed:
         ctx.emit(-1, "No letterbox bar at this framing — the list sits over the top of the picture.")
     job_preset = ass_mod.resolve_preset(settings.caption_preset, settings.captions.overrides)
     styles = overlay.overlay_styles(job_preset, band)
 
-    # The text next to each number, before the first encode: it is burned
-    # into every segment's document. In rank order, as the overlay draws
-    # its rows; a None row draws the number alone.
-    labels, label_errors = moment_labels(ctx, inputs, ranked)
-    label_texts = [(labels.get(str(i)) or {}).get("text") for i in ranked]
+    # The text next to each number, before the first encode, for every
+    # moment of every video: one map, one reuse rule (moment_labels).
+    labels, label_errors = moment_labels(ctx, inputs, used)
 
-    fills = _fills_for([str(i) for i in order], inputs.clip_edits, settings)
+    entries: list[dict] = []
+    records: list[dict] = []
+    for m, ranked_slice in enumerate(slices):
+        ranks = (m * count + 1, m * count + len(ranked_slice))
+        entry, record = _render_one(
+            ctx, inputs, ranked_slice, ranks, trajectories, band, styles, job_preset,
+            labels, fills, index=m + 1, total=len(slices),
+        )
+        entries.append(entry)
+        records.append(record)
+    return entries, {
+        "count": count,
+        "band": {"top": band.top, "line_h": band.line_h, "boxed": band.boxed},
+        # One record per video, in series order (ranks 1..N first). Presence
+        # of this list is the shape version: a `ranking` without it is the
+        # one-montage checkpoint E18-F02..F04 wrote, which artifacts_ok
+        # retires because it has no clip files.
+        "montages": records,
+        "note": note,
+        # E18-F04. An output, not a fingerprint: artifacts_ok never reads
+        # these. `labels` is what the next render reuses (moment_labels);
+        # `label_errors` is why a blank entry is blank.
+        "labels": labels,
+        "label_errors": label_errors,
+    }
+
+
+def _render_one(
+    ctx: StageContext,
+    inputs: RenderInputs,
+    ranked: list[int],
+    ranks: tuple[int, int],
+    trajectories: dict[int, dict],
+    band: overlay.Band,
+    styles: str,
+    job_preset: ass_mod.Preset,
+    labels: dict,
+    fills: dict[str, str],
+    *,
+    index: int,
+    total: int,
+) -> tuple[dict, dict]:
+    """One ranking video from `ranked` (its moments, rank order): the
+    countdown of segments, each through render_clip with the list spliced
+    into its own caption document, then the remux. `ranks` is the global
+    rank range it plays — its file name and what the review panel shows;
+    inside the video the list counts 1..N, so both videos are "TOP N"."""
+    settings = ctx.settings
+    n = len(ranked)
+    stem = MONTAGE_STEM.format(ranks[0], ranks[1])
+    # Play order is a countdown over rank positions; `order` is the clip
+    # index playing at each position.
+    order = [ranked[p] for p in overlay.play_order(n)]
+    label_texts = [(labels.get(str(i)) or {}).get("text") for i in ranked]
+    total_s = sum(float(inputs.clips[i]["end"]) - float(inputs.clips[i]["start"]) for i in order)
+    ctx.emit(
+        -1,
+        f"Ranking video {index} of {total} (moments {ranks[0]}–{ranks[1]}): "
+        f"{n} moments, {_fmt_total(total_s)} total.",
+    )
+
     segment_paths: list[Path] = []
     segments: list[dict] = []
     words_total = 0
@@ -235,13 +351,13 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
         rank = ranked.index(i) + 1
         start, end = float(clip["start"]), float(clip["end"])
         duration = end - start
-        ctx.emit(k / max(1, n), f"Rendering moment #{rank} ({k + 1}/{n})…")
+        ctx.emit(k / max(1, n), f"Rendering moment #{rank} of video {index} ({k + 1}/{n})…")
         if _has_structural_edits(edit, clip):
             ctx.emit(-1, f"Moment #{rank}: editor bounds/cuts cannot join a montage — rendered from job settings.")
 
         words, clip_events = clip_captions(inputs, start, end)
         style = clip_style(ctx, edit)
-        ass_path = inputs.out_dir / f"{SEGMENT_NAME.format(k)}.ass"
+        ass_path = inputs.out_dir / f"{stem}_seg_{k:02d}.ass"
         ass_doc = ass_mod.build_ass(
             words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
             overrides=style["overrides"],
@@ -250,7 +366,7 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
         )
         ass_path.write_text(ass_doc, encoding="utf-8")
 
-        seg_path = inputs.out_dir / f"{SEGMENT_NAME.format(k)}.mp4"
+        seg_path = inputs.out_dir / f"{stem}_seg_{k:02d}.mp4"
         try:
             renderer.render_clip(
                 inputs.media, seg_path, start, end, trajectories[i],
@@ -283,15 +399,15 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
         words_total += len(words)
         tags_total += len(clip_events)
 
-    out_path = inputs.out_dir / MONTAGE_NAME
-    ctx.emit(0.98, "Joining the moments…")
+    out_path = inputs.out_dir / f"{stem}.mp4"
+    ctx.emit(0.98, f"Joining the moments of video {index}…")
     try:
         renderer.concat_copy(segment_paths, out_path)
     except RuntimeError as err:
         raise StageError(
             "The ranking video failed to join.", code="render-failed", detail=str(err)
         ) from err
-    check = renderer.verify_output(out_path, total)
+    check = renderer.verify_output(out_path, total_s)
     if not check["ok"]:
         raise StageError(
             f"The ranking video failed verification (duration {check['duration']:.1f}s, "
@@ -302,41 +418,26 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
         seg_path.unlink(missing_ok=True)
 
     top = inputs.clips[ranked[0]]
-    return {
-        "outputs": [
-            {
-                # The rank-1 clip's index, so the review panel's audit shows
-                # the winning moment. `montage` is what tells the checkpoint
-                # readers this entry is not that clip's own file.
-                "clip": ranked[0],
-                "path": str(out_path),
-                "score": top["score"],
-                "best_platform": top["best_platform"],
-                "duration": round(check["duration"], 2),
-                "words": words_total,
-                "event_tags": tags_total,
-                "montage": True,
-            }
-        ],
-        "kept_from_editor": [],
-        "emoji_ok": inputs.emoji_ok,
-        "captions_burned": inputs.captions_ok,
-        **fingerprint,
-        "fills": fills,
-        # Presence of this key is what routes artifacts_ok onto the ranking
-        # path; `count` is the setting as rendered, `rendered` how many
-        # moments actually existed.
-        "ranking": {
-            "count": count,
-            "rendered": n,
-            "order": order,
-            "title": overlay.title_for(n),
-            "segments": segments,
-            "band": {"top": band.top, "line_h": band.line_h, "boxed": band.boxed},
-            # E18-F04. An output, not a fingerprint: artifacts_ok never reads
-            # these. `labels` is what the next render reuses (moment_labels);
-            # `label_errors` is why a blank entry is blank.
-            "labels": labels,
-            "label_errors": label_errors,
-        },
+    entry = {
+        # The rank-1 clip's index, so the review panel's audit shows the
+        # winning moment. `montage` is what tells the checkpoint readers
+        # this entry is not that clip's own file; `ranks` is which video.
+        "clip": ranked[0],
+        "path": str(out_path),
+        "score": top["score"],
+        "best_platform": top["best_platform"],
+        "duration": round(check["duration"], 2),
+        "words": words_total,
+        "event_tags": tags_total,
+        "montage": True,
+        "ranks": [ranks[0], ranks[1]],
     }
+    record = {
+        "path": str(out_path),
+        "ranks": [ranks[0], ranks[1]],
+        "rendered": n,
+        "order": order,
+        "title": overlay.title_for(n),
+        "segments": segments,
+    }
+    return entry, record

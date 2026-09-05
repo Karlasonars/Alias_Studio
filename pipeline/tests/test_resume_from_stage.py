@@ -215,3 +215,29 @@ def test_invalidating_render_drops_a_ranking_montage(tmp_path):
     assert result["dropped_clips"] == [0]
     assert not montage.exists()
     assert queue.checkpoint_path(job, "render").exists()
+
+
+def test_invalidating_render_drops_the_clips_and_both_ranking_videos(tmp_path):
+    """D-18's mixed checkpoint: the clips are reproducible as ever and so
+    are both montages — all go, and the report is the clip indices, each
+    once, however many montages fronted a clip."""
+    job = queue.create_job("file", "C:/x.mp4", _settings_json())
+    clips_dir = job.dir / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    files = {name: clips_dir / name for name in ("clip_00.mp4", "clip_01.mp4", "ranking_1-1.mp4", "ranking_2-2.mp4")}
+    for path in files.values():
+        path.write_bytes(b"mp4")
+    queue.write_checkpoint(job, "render", 1, {
+        "outputs": [
+            {"clip": 0, "path": str(files["clip_00.mp4"]), "duration": 4.0},
+            {"clip": 1, "path": str(files["clip_01.mp4"]), "duration": 4.0},
+            {"clip": 0, "path": str(files["ranking_1-1.mp4"]), "duration": 4.0, "montage": True, "ranks": [1, 1]},
+            {"clip": 1, "path": str(files["ranking_2-2.mp4"]), "duration": 4.0, "montage": True, "ranks": [2, 2]},
+        ],
+        "kept_from_editor": [],
+        "ranking": {"count": 1, "montages": [{"path": str(files["ranking_1-1.mp4"])}, {"path": str(files["ranking_2-2.mp4"])}]},
+    })
+    result = queue.invalidate_stage(job, "render")
+    assert result["dropped_clips"] == [0, 1]
+    assert not any(path.exists() for path in files.values())
+    assert queue.checkpoint_path(job, "render").exists()

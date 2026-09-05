@@ -224,14 +224,14 @@ GROUPS: list[dict[str, Any]] = [
     {
         "key": "ranking",
         "label": "Ranking video",
-        "help": "One vertical file instead of separate clips: the top moments play back to back under a numbered list that fills in as the viewer watches. The same moments, the same framing and captions — only the output format changes.",
+        "help": "Two vertical files beside the clips: the top moments play back to back under a numbered list that fills in as the viewer watches — moments 1 to N in the first video, the next N in the second. The same moments, the same framing and captions; the clips are rendered as always.",
         "cost": COST_CHEAP,
         "cost_note": "Changing these re-renders only. Selection, scoring and the camera pass are untouched.",
         "fields": [
-            {"key": "ranking.enabled", "label": "Ranking video", "type": "bool",
-             "help": "On: the job produces one ranking video and no individual clips. Off: individual clips, as before. Switching re-renders; nothing earlier re-runs."},
-            {"key": "ranking.count", "label": "Moments", "type": "number", "min": 2, "max": 8, "step": 1,
-             "help": "How many of the top-ranked moments play. Independent of 'Clips to render' — it only picks from what scoring already ranked, so changing it re-renders and never rescores. Fewer than 8 fit comfortably above gameplay footage; above a podcast crop the list sits over the picture."},
+            {"key": "ranking.enabled", "label": "Ranking videos", "type": "bool",
+             "help": "On: the job produces its individual clips AND two ranking videos (one when there are not enough finalists for two — the log says why). Off: clips only, as before. Switching re-renders; nothing earlier re-runs."},
+            {"key": "ranking.count", "label": "Moments per video", "type": "number", "min": 2, "max": 8, "step": 1,
+             "help": "How many top-ranked moments one ranking video plays; the second video takes the next N, so two need 'Clips to render' at 2N or more. Independent of that setting — this only slices what scoring already ranked, so changing it re-renders and never rescores. Fewer than 8 fit comfortably above gameplay footage; above a podcast crop the list sits over the picture."},
         ],
     },
     {

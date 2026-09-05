@@ -296,21 +296,23 @@ describe('the letterbox fill is decided before CUT IT (E6-F09)', () => {
   })
 })
 
-describe('the output format is decided before CUT IT (E18-F01)', () => {
+describe('the ranking videos are decided before CUT IT (E18-F01, D-18)', () => {
   it('the moments control exists only while ranking is on', async () => {
     await mountStudio()
-    // clips is the default and the count would change nothing — §5.2
+    // off is the default and the count would change nothing — §5.2
     expect(screen.queryByText('moments')).toBeNull()
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     expect(screen.getByText('moments')).toBeTruthy()
     expect(screen.getByText('5').className).toContain('opt-on')
-    fireEvent.click(screen.getByText('clips'))
+    // D-18: the deck says the clips are made either way
+    expect(screen.getByText(/beside the clips/)).toBeTruthy()
+    fireEvent.click(screen.getByText('off'))
     expect(screen.queryByText('moments')).toBeNull()
   })
 
   it('says where the list goes at podcast framing, and only there', async () => {
     await mountStudio()
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     expect(screen.getByText(/list sits over the top of the picture/)).toBeTruthy()
     fireEvent.click(screen.getByText('gameplay'))
     expect(screen.queryByText(/list sits over the top of the picture/)).toBeNull()
@@ -319,7 +321,7 @@ describe('the output format is decided before CUT IT (E18-F01)', () => {
   it('CUT IT carries the format and the count into the enqueue', async () => {
     await mountStudio()
     commands.enqueue_job = () => 'job-rank'
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     fireEvent.click(screen.getByText('7'))
     fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
       target: { value: 'C:/videos/stream.mp4' }

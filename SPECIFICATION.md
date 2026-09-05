@@ -373,29 +373,44 @@ before it is reported.
 **Per-clip style overrides are applied here**, and clips with structural edits
 are protected — see [§7](#7-per-clip-editing).
 
-**Ranking mode (E18).** With `Settings.ranking.enabled` the stage hands off to
-`render/ranking.py` and writes ONE file, `clips/ranking.mp4`, instead of
-per-clip files — one format or the other, never both (D-17). The top
-`ranking.count` finalists (those with a trajectory) play as a countdown, rank
-N first. Every segment goes through the same `render_clip` as a standalone
-clip would, with the list for that segment (`captions/ranking.py`) spliced
-into its own ASS document — the list is static within a segment, so it rides
-the one subtitles burn — and a 15 ms audio edge fade. The segments are then
-joined by `renderer.concat_copy`, a concat-demuxer remux: the video is encoded
-once and the montage carries no second lossy generation. Segment files are
-deleted once the montage verifies; their ASS documents stay. The list sits in
-the top letterbox bar when framing leaves one, sized from the tightest bar
-among the segments so it never moves at a cut; at podcast framing there is no
-bar and it is drawn over the picture behind a translucent band — the owner's
-decision, recorded in that module. Structurally-edited clips are not adopted
-into a montage (the segment needs the list burned in); they render from job
-settings and the stage says so. The checkpoint keeps the clip-mode keys and
-adds `ranking` (`count`, `rendered`, `order`, `title`, `segments`, `band`,
-`labels`, `label_errors`); its single `outputs` entry carries `montage: true`
-and the rank-1 clip's index, so the review panel's audit shows the winning
-moment.
+**Ranking mode (E18).** With `Settings.ranking.enabled` the stage renders its
+clips exactly as in clip mode and then, from the same finalists, up to two
+ranking videos (D-18: as well as the clips, never instead — D-17's one-format
+clause is reversed; the play-order reveal and the absence of label editing
+stand). The top `ranking.count` finalists with a trajectory make
+`clips/ranking_1-5.mp4` and the next N make `clips/ranking_6-10.mp4`
+(E18-F06); the second exists only as a full N, so both are the same "TOP N",
+and when there are not 2N finalists the stage makes one and says why, naming
+`clips.select_count` when that is the reason. Every segment goes through the
+same `render_clip` as a standalone clip would, with the list for that segment
+(`captions/ranking.py`) spliced into its own ASS document — the list is static
+within a segment, so it rides the one subtitles burn — and a 15 ms audio edge
+fade. The segments are then joined by `renderer.concat_copy`, a concat-demuxer
+remux: the video is encoded once and the montage carries no second lossy
+generation. Segment files are deleted once the montage verifies; their ASS
+documents stay; the previous render's montage files are unlinked before new
+ones are written, since their names carry the rank range. One band for the
+whole series, sized from the tightest top bar among every segment of both
+videos, so the list never moves at a cut and never differs between them; at
+podcast framing there is no bar and it is drawn over the picture behind a
+translucent band — the owner's decision, recorded in that module.
+Structurally-edited clips keep their editor file as clip entries but are not
+adopted into a montage (the segment needs the list burned in); that segment
+renders from job settings and the stage says so. The checkpoint is the
+clip-mode checkpoint with the montage entries appended to `outputs` — clip
+entries first, each montage entry carrying `montage: true`, `ranks`, and its
+rank-1 clip's index so the review panel's audit shows the winning moment — plus
+a `ranking` key (`count`, `band`, `montages` — one record per video with
+`path`, `ranks`, `rendered`, `order`, `title`, `segments` — `note`, `labels`,
+`label_errors`). `artifacts_ok` tells three shapes apart: no `ranking` key is
+a clip checkpoint and serves a clip job; a `ranking` without `montages` is the
+one-montage checkpoint E18-F02..F04 wrote, which has no clip files and now
+serves nothing, so those few re-render once; `ranking.montages` serves a
+ranking job with the same count. Crosswise stays invalid: switching the mode
+re-renders (E18-F01).
 
-**Moment labels (E18-F04).** Before the segment loop the stage asks
+**Moment labels (E18-F04).** Before the first segment of any video is
+encoded, the stage asks, once for every moment of both videos,
 `copywriting/labels.py` for the one to three words next to each number —
 one LLM call per moment, the title engine's honesty rule in the prompt and
 a filter behind it (over three words, sentence punctuation, empty, over the

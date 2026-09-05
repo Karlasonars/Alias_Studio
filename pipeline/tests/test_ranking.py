@@ -143,11 +143,26 @@ def test_ranked_clips_takes_the_top_n_that_have_a_camera_pass(tmp_path):
     assert ranking.ranked_clips(clips, trajectories, 5) == [0, 2, 3]
 
 
-def test_fill_keys_follow_the_output_unit():
+def test_fill_keys_are_the_clip_entries_in_either_mode():
     clip_mode = {"outputs": [{"clip": 0}, {"clip": 3}]}
     assert render_stage._fill_keys(clip_mode) == ["0", "3"]
-    montage = {"outputs": [{"clip": 0, "montage": True}], "ranking": {"order": [2, 1, 0]}}
-    assert render_stage._fill_keys(montage) == ["2", "1", "0"]
+    # D-18: the montage entries share their rank-1 clips' indices and are
+    # not fills of their own
+    mixed = {
+        "outputs": [{"clip": 0}, {"clip": 1}, {"clip": 0, "montage": True}, {"clip": 1, "montage": True}],
+        "ranking": {"count": 1, "montages": [{}, {}]},
+    }
+    assert render_stage._fill_keys(mixed) == ["0", "1"]
+
+
+def test_montage_slices_take_two_full_lists_or_one():
+    """E18-F06: ranks 1..N and N+1..2N. The second exists only as a full N,
+    so both videos are the same TOP N; a partial second slice is no video."""
+    assert ranking.montage_slices(list(range(10)), 5) == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+    assert ranking.montage_slices(list(range(12)), 5) == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+    assert ranking.montage_slices(list(range(6)), 5) == [[0, 1, 2, 3, 4]]
+    assert ranking.montage_slices(list(range(3)), 5) == [[0, 1, 2]]
+    assert ranking.montage_slices([], 5) == []
 
 
 def test_edge_fade_is_absent_from_a_plain_clip_and_present_in_a_segment(tmp_path, monkeypatch):
@@ -257,7 +272,9 @@ def _seed(job_dir: Path, source: Path, windows, content_box) -> dict:
 
 
 def test_montage_smoke(tmp_path, source):
-    """The whole ranking branch: three moments → one file, a countdown, the
+    """The whole ranking branch on real pixels: three moments → the three
+    clips exactly as clip mode makes them PLUS one ranking video (a second
+    needs six finalists — said, and written down), a countdown, the
     segments gone, the frame count exact, and a checkpoint the stage then
     accepts as its own."""
     settings = config.Settings()
@@ -268,20 +285,33 @@ def test_montage_smoke(tmp_path, source):
 
     data = render_stage.RenderStage().run(ctx)
 
-    assert len(data["outputs"]) == 1
-    out = data["outputs"][0]
+    clip_entries = [o for o in data["outputs"] if not o.get("montage")]
+    montages = [o for o in data["outputs"] if o.get("montage")]
+    # the clips, as always, and first (D-18)
+    assert [o["clip"] for o in clip_entries] == [0, 1, 2]
+    assert data["outputs"][:3] == clip_entries
+    assert all(Path(o["path"]).name == f"clip_{o['clip']:02d}.mp4" for o in clip_entries)
+    assert all(Path(o["path"]).exists() for o in clip_entries)
+    # one ranking video: a second needs six finalists, and this job says so
+    assert len(montages) == 1
+    out = montages[0]
     assert out["montage"] is True and out["clip"] == 0  # rank 1 fronts the entry
-    assert Path(out["path"]).name == "ranking.mp4" and Path(out["path"]).exists()
-    assert data["ranking"]["order"] == [2, 1, 0]           # countdown
-    assert data["ranking"]["title"] == "TOP 3"
+    assert out["ranks"] == [1, 3]
+    assert Path(out["path"]).name == "ranking_1-3.mp4" and Path(out["path"]).exists()
+    video = data["ranking"]["montages"]
+    assert len(video) == 1 and video[0]["path"] == out["path"] and video[0]["ranks"] == [1, 3]
+    assert video[0]["order"] == [2, 1, 0]                  # countdown
+    assert video[0]["title"] == "TOP 3"
+    assert [s["offset"] for s in video[0]["segments"]] == [0.0, 4.0, 8.0]
+    assert [s["rank"] for s in video[0]["segments"]] == [3, 2, 1]
     assert data["ranking"]["band"]["boxed"] is False       # full-frame content: a real bar
-    assert [s["offset"] for s in data["ranking"]["segments"]] == [0.0, 4.0, 8.0]
-    assert [s["rank"] for s in data["ranking"]["segments"]] == [3, 2, 1]
-    assert list(data["fills"]) == ["2", "1", "0"]
+    assert "needs 6 finalists" in data["ranking"]["note"]
+    assert any("needs 6 finalists" in m for m in ctx.messages)
+    assert list(data["fills"]) == ["0", "1", "2"]          # the clip entries' keys
     assert data["kept_from_editor"] == []
-    # one format, not both: the segment files are gone, their documents stay
-    assert not list((tmp_path / "clips").glob("ranking_seg_*.mp4"))
-    assert len(list((tmp_path / "clips").glob("ranking_seg_*.ass"))) == 3
+    # the segment files are gone, their documents stay
+    assert not list((tmp_path / "clips").glob("ranking_*_seg_*.mp4"))
+    assert len(list((tmp_path / "clips").glob("ranking_1-3_seg_*.ass"))) == 3
     # the total length, said before the first encode (E18-F02)
     assert any("3 moments, 0:12 total" in m for m in ctx.messages)
     # E18-F04 with no client to build (the no_real_llm stand-in below, the
@@ -324,7 +354,9 @@ def test_podcast_framing_puts_the_list_over_the_picture(tmp_path, source):
     data = render_stage.RenderStage().run(ctx)
     assert data["ranking"]["band"]["boxed"] is True
     assert any("over the top of the picture" in m for m in ctx.messages)
-    assert renderer.verify_output(Path(data["outputs"][0]["path"]), 4.0)["ok"]
+    montage = data["outputs"][-1]
+    assert montage["montage"] is True and montage["ranks"] == [1, 2]
+    assert renderer.verify_output(Path(montage["path"]), 4.0)["ok"]
 
 
 def test_segments_are_concat_compatible_and_the_list_is_in_the_pixels(tmp_path, source):
@@ -492,9 +524,11 @@ def _label_lines(doc: str) -> list[tuple[str, str]]:
     return out
 
 
-def _segment_docs(job_dir: Path, n: int) -> list[str]:
+def _segment_docs(job_dir: Path, stem: str, n: int) -> list[str]:
+    """The caption documents of one video's segments, in play order —
+    `stem` is the video's rank range, e.g. ranking_1-3."""
     return [
-        (job_dir / "clips" / f"ranking_seg_{k:02d}.ass").read_text(encoding="utf-8")
+        (job_dir / "clips" / f"{stem}_seg_{k:02d}.ass").read_text(encoding="utf-8")
         for k in range(n)
     ]
 
@@ -568,9 +602,9 @@ def test_one_failed_label_blanks_one_entry_and_the_rest_render(tmp_path, source,
     assert "model down" in result["label_errors"]["1"]
     assert len(client.calls) == 3
     assert sum("shows the number only" in m for m in ctx.messages) == 1
-    assert Path(data["outputs"][0]["path"]).exists()
+    assert Path(data["outputs"][-1]["path"]).exists()  # the montage, after the clips
     # play order is rank 3 (clip 2), rank 2 (clip 1, blank), rank 1 (clip 0)
-    docs = _segment_docs(tmp_path, 3)
+    docs = _segment_docs(tmp_path, "ranking_1-3", 3)
     assert [t for _, t in _label_lines(docs[0])] == ["moment w24"]
     assert [t for _, t in _label_lines(docs[1])] == ["moment w24"]  # rank 2 revealed, nothing to show
     assert [t for _, t in _label_lines(docs[2])] == ["moment w0", "moment w24"]
@@ -656,7 +690,7 @@ def test_a_re_render_reuses_the_stored_labels_and_makes_no_llm_call(tmp_path, so
     assert again["ranking"]["labels"] == data["ranking"]["labels"]  # ...which burns the same words
     assert second.calls == [] and built == []  # without one call, or even a client
     assert again["ranking"]["label_errors"] == {}
-    last = _segment_docs(tmp_path, 3)[2]
+    last = _segment_docs(tmp_path, "ranking_1-3", 3)[2]
     assert [t for _, t in _label_lines(last)] == ["MOMENT W0", "MOMENT W12", "MOMENT W24"]  # beast uppercases
 
 
@@ -720,3 +754,171 @@ def test_clip_mode_makes_no_llm_call(tmp_path, source, monkeypatch):
     data = render_stage.RenderStage().run(ctx)
     assert len(data["outputs"]) == 2 and "ranking" not in data
     assert built == [] and client.calls == []
+
+
+# ---------------------------------------------------------------------------
+# D-18: the clips stay, and there are two ranking videos (E18-F05, E18-F06)
+
+
+TEN_WINDOWS = [(2.0 * k, 2.0 * k + 2.0) for k in range(10)]  # over the 20 s source
+
+
+def _ranking_job(tmp_path, source, monkeypatch, windows, count=5, enabled=True, client=None):
+    """A job over `windows` on fake encoders, ranking on unless told
+    otherwise; labels come from `client` (a LabelClient by default)."""
+    _fake_encoders(monkeypatch)
+    settings = config.Settings()
+    settings.ranking.enabled = enabled
+    settings.ranking.count = count
+    prior = _seed(tmp_path, source, list(windows), (1280, 720))
+    ctx = FakeCtx(tmp_path, settings, prior)
+    _install(monkeypatch, client or LabelClient())
+    return ctx
+
+
+def _split(data):
+    clip_entries = [o for o in data["outputs"] if not o.get("montage")]
+    montages = [o for o in data["outputs"] if o.get("montage")]
+    return clip_entries, montages
+
+
+def test_ranking_mode_renders_the_clips_and_the_montages(tmp_path, source, monkeypatch):
+    """E18-F05: ranking on adds the videos and takes nothing away — the same
+    clip files, in the same entries, as the same job with ranking off."""
+    off = render_stage.RenderStage().run(
+        _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS, enabled=False)
+    )
+    assert "ranking" not in off and len(off["outputs"]) == 10
+    on = render_stage.RenderStage().run(_ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS))
+    clip_entries, montages = _split(on)
+    assert [o["clip"] for o in clip_entries] == [o["clip"] for o in off["outputs"]] == list(range(10))
+    assert [o["path"] for o in clip_entries] == [o["path"] for o in off["outputs"]]
+    assert on["outputs"][:10] == clip_entries  # clip entries first
+    assert on["fills"] == off["fills"]
+    assert len(montages) == 2
+    assert all(Path(o["path"]).exists() for o in on["outputs"])
+
+
+def test_two_montages_from_ten_finalists(tmp_path, source, monkeypatch):
+    """E18-F06: ranks 1..5 and 6..10, each a countdown of its own five, each
+    fronted by its rank-1 clip, each named by its range."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS)
+    data = render_stage.RenderStage().run(ctx)
+    _, montages = _split(data)
+    assert [o["ranks"] for o in montages] == [[1, 5], [6, 10]]
+    assert [o["clip"] for o in montages] == [0, 5]
+    assert [Path(o["path"]).name for o in montages] == ["ranking_1-5.mp4", "ranking_6-10.mp4"]
+    records = data["ranking"]["montages"]
+    assert [r["order"] for r in records] == [[4, 3, 2, 1, 0], [9, 8, 7, 6, 5]]
+    assert [r["path"] for r in records] == [o["path"] for o in montages]
+    assert [[s["rank"] for s in r["segments"]] for r in records] == [[5, 4, 3, 2, 1]] * 2
+    assert data["ranking"]["note"] is None
+    assert data["ranking"]["count"] == 5
+    # one label per moment of both videos
+    assert set(data["ranking"]["labels"]) == {str(i) for i in range(10)}
+    assert any("video 1 of 2 (moments 1–5)" in m for m in ctx.messages)
+    assert any("video 2 of 2 (moments 6–10)" in m for m in ctx.messages)
+
+
+def test_six_finalists_make_one_montage_and_say_why(tmp_path, source, monkeypatch):
+    """E18-F06: not enough for two → one full TOP 5, not a second video of
+    one moment — and a line that names the number and the setting."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS[:6])
+    ctx.settings.clips.select_count = 6
+    data = render_stage.RenderStage().run(ctx)
+    clip_entries, montages = _split(data)
+    assert len(clip_entries) == 6 and len(montages) == 1
+    assert montages[0]["ranks"] == [1, 5]
+    note = data["ranking"]["note"]
+    assert "needs 10 finalists" in note and "this job has 6" in note
+    assert "'Clips to render' is 6" in note and "at least 10" in note
+    assert note in ctx.messages
+    # the sixth finalist is a clip like any other, just in no video
+    assert "5" in data["fills"] and "5" not in data["ranking"]["labels"]
+
+
+def test_the_shortfall_note_names_the_setting_only_when_it_is_the_reason(tmp_path, source, monkeypatch):
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS[:6])
+    ctx.settings.clips.select_count = 12  # room for two; this source just had six with a camera pass
+    data = render_stage.RenderStage().run(ctx)
+    assert "needs 10 finalists" in data["ranking"]["note"]
+    assert "Clips to render" not in data["ranking"]["note"]
+
+
+def test_both_montages_share_one_title_and_geometry(tmp_path, source, monkeypatch):
+    """E18-F06: one series. The same title, the same band, the list drawn
+    at the same place — the styles block of every segment document is
+    identical across the two videos, and so are the entries' rows."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS)
+    data = render_stage.RenderStage().run(ctx)
+    assert [r["title"] for r in data["ranking"]["montages"]] == ["TOP 5", "TOP 5"]
+    first = _segment_docs(tmp_path, "ranking_1-5", 5)
+    second = _segment_docs(tmp_path, "ranking_6-10", 5)
+
+    def styles(doc: str) -> str:
+        return doc.split("[Events]")[0]
+
+    def rows(doc: str) -> list[str]:  # MarginV of every entry: where each row sits
+        return [ln.split(",")[7] for ln in doc.splitlines() if ",RankEntry," in ln]
+
+    assert {styles(d) for d in first + second} == {styles(first[0])}
+    assert rows(first[0]) == rows(second[0]) and len(rows(first[0])) == 5
+    assert "TOP 5" in first[0] and "TOP 5" in second[0]
+
+
+def test_a_failure_in_the_second_montage_leaves_the_first_byte_identical(tmp_path, source, monkeypatch):
+    """Within a run the two videos are built from disjoint slices: a label
+    failure in the second (rank 7, clip 6) changes nothing in the first —
+    its documents are byte-identical to a run where nothing failed. What
+    this does NOT claim is cache-level independence: the stage has one
+    checkpoint, and whatever invalidates it re-renders everything, clips
+    included, as it always has (the PR says why)."""
+    healthy = _ranking_job(tmp_path / "a", source, monkeypatch, TEN_WINDOWS)
+    render_stage.RenderStage().run(healthy)
+    clean = _segment_docs(tmp_path / "a", "ranking_1-5", 5)
+    # clip 6 plays 12–14 s: its transcript starts at w24
+    poisoned = _ranking_job(
+        tmp_path / "b", source, monkeypatch, TEN_WINDOWS, client=LabelClient(poison="w24")
+    )
+    data = render_stage.RenderStage().run(poisoned)
+    assert data["ranking"]["labels"]["6"] is None
+    assert list(data["ranking"]["label_errors"]) == ["6"]
+    assert len(data["ranking"]["montages"]) == 2
+    assert _segment_docs(tmp_path / "b", "ranking_1-5", 5) == clean
+
+
+def test_ranking_mode_still_adopts_a_structurally_edited_clip(tmp_path, source, monkeypatch):
+    """E18-F05: the editor works on the clips as always. A clip the editor
+    reshaped keeps its file in the clip entries — adopted, not re-rendered —
+    while its montage segment renders from job settings and says so."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS[:3], count=3)
+    edited = tmp_path / "clips" / "clip_01_edited.mp4"
+    edited.parent.mkdir(exist_ok=True)
+    edited.write_bytes(b"edited")
+    (tmp_path / "clip_edits.json").write_text(
+        json.dumps({"1": {"start": 2.5, "end": 4.0}}), encoding="utf-8"
+    )
+    _checkpoint(tmp_path, {"outputs": [{"clip": 1, "path": str(edited), "duration": 1.5, "edited": True}]})
+    data = render_stage.RenderStage().run(ctx)
+    clip_entries, montages = _split(data)
+    assert data["kept_from_editor"] == [1]
+    assert clip_entries[1]["path"] == str(edited) and edited.read_bytes() == b"edited"
+    assert len(montages) == 1
+    assert [s["clip"] for s in data["ranking"]["montages"][0]["segments"]] == [2, 1, 0]
+    assert any("cannot join a montage" in m for m in ctx.messages)
+
+
+def test_a_re_render_unlinks_the_previous_montages_first(tmp_path, source, monkeypatch):
+    """The file names carry the rank range, so a count change would leave
+    the old videos beside the new ones — and the library rail reads the
+    directory. The previous checkpoint's montages go before anything is
+    written."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS)
+    data = render_stage.RenderStage().run(ctx)
+    old = [Path(o["path"]) for o in _split(data)[1]]
+    assert [p.name for p in old] == ["ranking_1-5.mp4", "ranking_6-10.mp4"]
+    _checkpoint(tmp_path, data)
+    ctx.settings.ranking.count = 4
+    again = render_stage.RenderStage().run(ctx)
+    assert [Path(o["path"]).name for o in _split(again)[1]] == ["ranking_1-4.mp4", "ranking_5-8.mp4"]
+    assert not any(p.exists() for p in old)

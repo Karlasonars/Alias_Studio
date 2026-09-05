@@ -660,3 +660,20 @@ def test_resume_ranking_flags_reach_the_job_snapshot(monkeypatch):
     assert cli.main(["resume", job.id, "--ranking-count", "3"]) == 0
     saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
     assert saved.ranking.count == 3 and saved.ranking.enabled is False  # untouched by the count flag
+
+
+def test_resume_letterbox_fill_flag_reaches_the_job_snapshot(monkeypatch):
+    """`resume --letterbox-fill blur` was parsed, applied by
+    _apply_setting_flags, and then never reached the job: cmd_resume's
+    guard did not list the flag, so the settings were never re-saved — a
+    shipped flag that did nothing (§5.2). The snapshot must change."""
+    from publikclip_pipeline import cli
+
+    settings = config.Settings()
+    assert settings.camera.letterbox_fill == "black"
+    job = queue.create_job("file", "C:/nowhere/d.mp4", json.dumps(settings.to_json()))
+    monkeypatch.setattr(cli, "_execute", lambda job, jsonl: 0)
+
+    assert cli.main(["resume", job.id, "--letterbox-fill", "blur"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.camera.letterbox_fill == "blur"

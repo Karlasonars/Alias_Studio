@@ -525,54 +525,110 @@ def test_a_render_checkpoint_from_before_ranking_existed_stays_valid(ctx):
     assert render_stage.RenderStage().artifacts_ok(ctx, legacy) is True
 
 
-def test_a_ranking_checkpoint_serves_only_a_ranking_job(ctx):
+# Three checkpoint shapes are on disk (D-18), one test per shape: legacy
+# clip checkpoints without a `ranking` key, the one-montage checkpoints
+# E18-F02..F04 wrote (a `ranking` without `montages`, no clip files), and
+# the mixed shape — clips plus montages — the stage writes now.
+
+
+def test_shape_one_a_legacy_checkpoint_serves_a_clip_job_and_never_a_ranking_job(ctx):
+    legacy = _clip_render_checkpoint(ctx)
+    assert "ranking" not in legacy
+    stage = render_stage.RenderStage()
+    assert stage.artifacts_ok(ctx, legacy) is True
     ctx.settings.ranking.enabled = True
-    montage = {
+    assert stage.artifacts_ok(ctx, legacy) is False  # ranking videos wanted, none stored
+
+
+def test_shape_two_the_one_montage_checkpoint_serves_nothing_now(ctx):
+    """The shape between E18-F02 and D-18: one montage entry, no clip
+    files. A ranking job now needs the clips too, and a clip job always
+    did, so it re-renders once — only the ranking renders made in those
+    days pay it. The count matching is not enough."""
+    # `order` empty so that every OTHER compare passes: what retires this
+    # checkpoint must be the shape rule alone, not a fills mismatch
+    one_montage = {
         **_clip_render_checkpoint(ctx),
-        "ranking": {"count": ctx.settings.ranking.count, "order": []},
+        "ranking": {"count": ctx.settings.ranking.count, "order": [], "title": "TOP 2"},
     }
     stage = render_stage.RenderStage()
-    assert stage.artifacts_ok(ctx, montage) is True
-    ctx.settings.ranking.count += 1
-    assert stage.artifacts_ok(ctx, montage) is False  # a different top N
-    ctx.settings.ranking.count -= 1
+    ctx.settings.ranking.enabled = True
+    assert stage.artifacts_ok(ctx, one_montage) is False
     ctx.settings.ranking.enabled = False
-    assert stage.artifacts_ok(ctx, montage) is False  # clips wanted, a montage stored
+    assert stage.artifacts_ok(ctx, one_montage) is False
 
 
-def test_the_fill_default_reaches_a_montage_through_its_segments(ctx, tmp_path):
-    """The fills compare iterates the montage's segments, not its single
-    output entry: with one entry it would compare a one-clip map against
-    the N-clip map run() stored and invalidate every ranking checkpoint."""
+def test_shape_three_the_mixed_checkpoint_serves_a_ranking_job_with_the_same_count(ctx, tmp_path):
     ctx.settings.ranking.enabled = True
     ctx.settings.ranking.count = 2
-    montage = {
+    for name in ("clip_00.mp4", "clip_01.mp4", "ranking_1-2.mp4"):
+        (tmp_path / name).write_bytes(b"mp4")
+    mixed = {
         **_clip_render_checkpoint(ctx),
-        "outputs": [],
-        "fills": {"1": "black", "0": "black"},
-        "ranking": {"count": 2, "order": [1, 0]},
+        # the clip entries first, with their fills; the video after them
+        "outputs": [
+            {"clip": 0, "path": str(tmp_path / "clip_00.mp4")},
+            {"clip": 1, "path": str(tmp_path / "clip_01.mp4")},
+            {"clip": 0, "path": str(tmp_path / "ranking_1-2.mp4"), "montage": True, "ranks": [1, 2]},
+        ],
+        "fills": {"0": "black", "1": "black"},
+        "ranking": {"count": 2, "montages": [{"path": str(tmp_path / "ranking_1-2.mp4")}]},
     }
     stage = render_stage.RenderStage()
-    assert stage.artifacts_ok(ctx, montage) is True
+    assert stage.artifacts_ok(ctx, mixed) is True
+    ctx.settings.ranking.count = 3
+    assert stage.artifacts_ok(ctx, mixed) is False  # a different top N: both videos change
+    ctx.settings.ranking.count = 2
+    ctx.settings.ranking.enabled = False
+    assert stage.artifacts_ok(ctx, mixed) is False  # clips alone wanted: the mode switched
+    ctx.settings.ranking.enabled = True
+    (tmp_path / "ranking_1-2.mp4").unlink()
+    assert stage.artifacts_ok(ctx, mixed) is False  # a video gone from disk: the disk wins
+
+
+def test_the_fill_default_reaches_a_ranking_job_through_its_clip_entries(ctx, tmp_path):
+    """The fills compare iterates the clip entries, montage entries
+    skipped: a montage entry shares its rank-1 clip's index, and counting
+    it would compare a map with a duplicate key against the one run()
+    stored over the clips."""
+    ctx.settings.ranking.enabled = True
+    ctx.settings.ranking.count = 2
+    for name in ("clip_00.mp4", "clip_01.mp4", "ranking_1-2.mp4"):
+        (tmp_path / name).write_bytes(b"mp4")
+    mixed = {
+        **_clip_render_checkpoint(ctx),
+        "outputs": [
+            {"clip": 0, "path": str(tmp_path / "clip_00.mp4")},
+            {"clip": 1, "path": str(tmp_path / "clip_01.mp4")},
+            {"clip": 0, "path": str(tmp_path / "ranking_1-2.mp4"), "montage": True, "ranks": [1, 2]},
+        ],
+        "fills": {"0": "black", "1": "black"},
+        "ranking": {"count": 2, "montages": [{"path": str(tmp_path / "ranking_1-2.mp4")}]},
+    }
+    stage = render_stage.RenderStage()
+    assert render_stage._fill_keys(mixed) == ["0", "1"]
+    assert stage.artifacts_ok(ctx, mixed) is True
     ctx.settings.camera.letterbox_fill = "blur"
-    assert stage.artifacts_ok(ctx, montage) is False
-    # an explicit per-segment fill keeps the default off that segment
+    assert stage.artifacts_ok(ctx, mixed) is False
+    # an explicit per-clip fill keeps the default off that clip
     write_edits(tmp_path, {"1": {"letterbox_fill": "black"}, "0": {"letterbox_fill": "black"}})
-    montage["clip_edits"] = render_stage._clip_edits_fingerprint(tmp_path)
-    assert stage.artifacts_ok(ctx, montage) is True
+    mixed["clip_edits"] = render_stage._clip_edits_fingerprint(tmp_path)
+    assert stage.artifacts_ok(ctx, mixed) is True
 
 
 def test_previous_outputs_never_adopt_a_montage(tmp_path):
-    """A clip-mode run after a ranking run must not carry the montage
-    forward as clip 0's editor version — its `clip` is only the rank-1
-    index for the review panel."""
-    montage = tmp_path / "ranking.mp4"
-    montage.write_bytes(b"mp4")
+    """A run after a ranking run must not carry a montage forward as clip
+    0's editor version — its `clip` is only the rank-1 index for the
+    review panel. The montages are listed separately, in order."""
+    first = tmp_path / "ranking_1-2.mp4"
+    second = tmp_path / "ranking_3-4.mp4"
     kept = tmp_path / "clip_01.mp4"
-    kept.write_bytes(b"mp4")
+    for path in (first, second, kept):
+        path.write_bytes(b"mp4")
     (tmp_path / "render.json").write_text(json.dumps({"data": {"outputs": [
-        {"clip": 0, "path": str(montage), "montage": True},
         {"clip": 1, "path": str(kept)},
+        {"clip": 0, "path": str(first), "montage": True, "ranks": [1, 2]},
+        {"clip": 2, "path": str(second), "montage": True, "ranks": [3, 4]},
     ]}}), encoding="utf-8")
     assert list(render_stage._previous_outputs(tmp_path)) == ["1"]
-    assert render_stage._previous_montage(tmp_path)["path"] == str(montage)
+    assert [m["path"] for m in render_stage._previous_montages(tmp_path)] == [str(first), str(second)]

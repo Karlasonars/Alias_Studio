@@ -64,8 +64,9 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   const [captions, setCaptions] = useState('classic')
   const [gameplayAmount, setGameplayAmount] = useState(0)
   const [letterboxFill, setLetterboxFill] = useState('black')
-  // E18-F01: the output format. Off = individual clips, as always; on = one
-  // ranking video of the top `rankingCount` moments and no clips (D-17).
+  // E18-F01, D-18: the ranking videos. Off = the clips alone, as always;
+  // on = the clips AND up to two ranking videos, moments 1..N and N+1..2N
+  // (E18-F06). Never instead of the clips — D-17 said so and was reversed.
   const [ranking, setRanking] = useState(false)
   const [rankingCount, setRankingCount] = useState(5)
   const [showKey, setShowKey] = useState(false)
@@ -302,17 +303,18 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   ))}
                 </div>
               )}
-              {/* E18-F01: the output unit, decided before the cut like the
-                  rest of the deck. The count only exists while ranking is
+              {/* E18-F01, D-18: the ranking videos, decided before the cut
+                  like the rest of the deck — beside the clips, never
+                  instead of them. The count only exists while ranking is
                   on — shown always, it would be a control that changes
                   nothing (§5.2). */}
               <div className="opt-group">
-                <span className="opt-label">format</span>
+                <span className="opt-label">ranking videos</span>
                 <button className={`opt ${!ranking ? 'opt-on' : ''}`} onClick={() => setRanking(false)}>
-                  clips
+                  off
                 </button>
                 <button className={`opt ${ranking ? 'opt-on' : ''}`} onClick={() => setRanking(true)}>
-                  ranking
+                  on
                 </button>
               </div>
               {ranking && (
@@ -328,6 +330,14 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                     </button>
                   ))}
                 </div>
+              )}
+              {/* E18-F06: what "on" makes, said where it is chosen — the
+                  second video exists only when the job has 2N finalists. */}
+              {ranking && (
+                <p className="opt-hint">
+                  two ranking videos beside the clips — moments 1 to {rankingCount} and the next{' '}
+                  {rankingCount}; one, if the job renders fewer than {rankingCount * 2} clips
+                </p>
               )}
             </div>
             {/* At podcast framing the crop fills the canvas and there is no
