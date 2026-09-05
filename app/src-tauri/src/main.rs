@@ -633,6 +633,8 @@ async fn enqueue_job(
     letterbox_fill: Option<String>,
     ranking: Option<bool>,
     ranking_count: Option<u32>,
+    watermark_image: Option<String>,
+    watermark_text: Option<String>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
     if let Some(mode) = llm {
@@ -660,6 +662,18 @@ async fn enqueue_job(
     if let Some(n) = ranking_count {
         args.push("--ranking-count".to_string());
         args.push(n.to_string());
+    }
+    // E19-F02. Forwarded even when empty: "" is the deck's explicit "none",
+    // so a job never inherits a mark the deck did not show. Which file and
+    // where it sits are python's (the deck already imported the PNG through
+    // `settings watermark-import`; this is its stored path).
+    if let Some(path) = watermark_image {
+        args.push("--watermark-image".to_string());
+        args.push(path);
+    }
+    if let Some(text) = watermark_text {
+        args.push("--watermark-text".to_string());
+        args.push(text);
     }
     let created = one_shot_json(&args).ok_or_else(|| "enqueue produced no answer".to_string())?;
     let job_id = created["job_id"]

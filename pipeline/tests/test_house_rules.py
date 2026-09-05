@@ -99,11 +99,14 @@ CLIP_EDIT_RENDER_IRRELEVANT = {
     "pacing": "structural: only applies on the single-clip path, which owns its output",
 }
 
-#: Mirrors render/stage.py:_clip_edits_fingerprint
+#: Mirrors render/stage.py:_clip_edits_fingerprint. `burned_title` (E19-F01)
+#: is the one field of the publishing-copy family that DOES reach the
+#: pixels — which is exactly why it is a field of its own rather than a
+#: flag on `title`, whose exemption above stays true.
 RENDER_FINGERPRINT_FIELDS = {
     "start", "end", "caption_preset", "caption_overrides",
     "lufs_target", "true_peak_db", "letterbox_fill",
-    "remove_dead_space", "disabled_cuts",
+    "remove_dead_space", "disabled_cuts", "burned_title",
 }
 
 #: Mirrors camera/stage.py:_framing_fingerprint

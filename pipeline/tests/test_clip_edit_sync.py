@@ -307,6 +307,7 @@ def test_render_fingerprint_covers_every_style_the_stage_applies(tmp_path):
                 "caption_overrides": {"font_size": 90}, "lufs_target": -9.0,
                 "true_peak_db": -0.5, "letterbox_fill": "blur",
                 "remove_dead_space": True, "disabled_cuts": [1],
+                "burned_title": "The one that got away",
             }
         },
     )
@@ -314,14 +315,51 @@ def test_render_fingerprint_covers_every_style_the_stage_applies(tmp_path):
     assert set(fp) == {
         "start", "end", "caption_preset", "caption_overrides", "lufs_target",
         "true_peak_db", "letterbox_fill", "remove_dead_space", "disabled_cuts",
+        "burned_title",
     }
 
 
 def test_render_fingerprint_ignores_edits_the_render_cannot_see(tmp_path):
     """Opening the editor writes defaults for every field. Titles and
-    descriptions are not pixels — they must not force a re-encode."""
-    write_edits(tmp_path, {"0": {"title": "hello", "description": "world"}})
+    descriptions are not pixels — they must not force a re-encode. Nor may
+    the burned title's own default: the editor writes "" for every clip it
+    opens, and whitespace is the same nothing (E19-F01)."""
+    write_edits(
+        tmp_path,
+        {"0": {"title": "hello", "description": "world", "burned_title": ""},
+         "1": {"burned_title": "   "}},
+    )
     assert render_stage._clip_edits_fingerprint(tmp_path) == {}
+
+
+def test_a_burned_title_is_a_style_the_render_fingerprint_sees(tmp_path, ctx):
+    """§5.1 place 3 for E19-F01, in the template's shape: a checkpoint
+    that was valid stops being valid the moment a clip marks a title to
+    burn — and, because the title is a STYLE, the clip is re-rendered here
+    rather than adopted (the restyle-preserves-the-title test in
+    test_overlays.py is the other half). A title of only whitespace is not
+    a title, on the fingerprint side as on the render side."""
+    mp4 = tmp_path / "clip_00.mp4"
+    mp4.write_bytes(b"x")
+    data = {
+        "outputs": [{"clip": 0, "path": str(mp4)}],
+        "caption_preset": ctx.settings.caption_preset,
+        "camera_settings": ctx.settings.camera.__dict__,
+        "caption_style": render_stage._caption_style_fingerprint(ctx),
+        "audio": render_stage._audio_fingerprint(ctx),
+        "encoder": render_stage._encoder_fingerprint(ctx),
+        "clip_edits": {},
+    }
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+    write_edits(tmp_path, {"0": {"burned_title": "  "}})
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is True
+    write_edits(tmp_path, {"0": {"burned_title": "The bath bomb incident"}})
+    assert render_stage.RenderStage().artifacts_ok(ctx, data) is False
+    # the title is text over the pixels, not a reshaped clip: never structural
+    clip = {"start": 0.0, "end": 30.0}
+    assert render_stage._has_structural_edits(
+        {"start": 0.0, "end": 30.0, "burned_title": "The bath bomb incident"}, clip
+    ) is False
 
 
 def test_render_cache_is_invalidated_by_a_clip_style_edit(tmp_path, ctx):
@@ -614,6 +652,38 @@ def test_the_fill_default_reaches_a_ranking_job_through_its_clip_entries(ctx, tm
     write_edits(tmp_path, {"1": {"letterbox_fill": "black"}, "0": {"letterbox_fill": "black"}})
     mixed["clip_edits"] = render_stage._clip_edits_fingerprint(tmp_path)
     assert stage.artifacts_ok(ctx, mixed) is True
+
+
+def test_the_editor_sync_matches_a_clip_by_its_marker_not_its_position(tmp_path):
+    """E18-F05's declared follow-up (a). The editor's checkpoint sync used
+    to take the first entry with the clip's index, which was correct only
+    because the stage writes clip entries before montage entries — a rule
+    a comment remembered. A ranking video's entry carries its rank-1
+    clip's index (D-18), so the property the sync depends on is that it
+    never replaces an entry carrying the `montage` marker, whatever the
+    order. Adversarial order here: the montage entry first."""
+    from publikclip_pipeline.edits import render_clip as rc
+
+    montage = {"clip": 0, "path": str(tmp_path / "ranking_1-5.mp4"), "montage": True, "ranks": [1, 5]}
+    old = {"clip": 0, "path": str(tmp_path / "clip_00.mp4"), "words": 3}
+    (tmp_path / "render.json").write_text(
+        json.dumps({"data": {"outputs": [montage, old, {"clip": 1, "path": "b.mp4"}]}}),
+        encoding="utf-8",
+    )
+    new = {"clip": 0, "path": str(tmp_path / "clip_00.mp4"), "words": 9, "edited": True}
+    rc._sync_render_checkpoint(tmp_path, 0, new)
+    outputs = json.loads((tmp_path / "render.json").read_text(encoding="utf-8"))["data"]["outputs"]
+    assert outputs[0] == montage           # untouched, though it was first and carries index 0
+    assert outputs[1] == new               # the clip's own entry, replaced in place
+    assert outputs[2] == {"clip": 1, "path": "b.mp4"}
+    # the one-montage shape (E18-F02..F04) had no clip entry at all: the
+    # editor's render is appended, the montage still untouched
+    (tmp_path / "render.json").write_text(
+        json.dumps({"data": {"outputs": [montage]}}), encoding="utf-8"
+    )
+    rc._sync_render_checkpoint(tmp_path, 0, new)
+    outputs = json.loads((tmp_path / "render.json").read_text(encoding="utf-8"))["data"]["outputs"]
+    assert outputs == [montage, new]
 
 
 def test_previous_outputs_never_adopt_a_montage(tmp_path):

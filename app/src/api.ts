@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type {
   BootstrapStatus,
   CaptionPreset,
@@ -17,7 +18,8 @@ import type {
   SetupState,
   SetupStatusResult,
   SyncSummary,
-  TitlesResult
+  TitlesResult,
+  WatermarkImportResult
 } from './types'
 
 export const api = {
@@ -28,11 +30,28 @@ export const api = {
     gameplayAmount: number,
     letterboxFill: string,
     ranking: boolean,
-    rankingCount: number
+    rankingCount: number,
+    watermarkImage: string,
+    watermarkText: string
   ) =>
     invoke<string>('enqueue_job', {
-      source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount
+      source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+      watermarkImage, watermarkText
     }),
+  // E19-F02: the PNG picker. A plugin call rather than an invoke, but a
+  // Tauri boundary crossing all the same, so it lives here with the rest
+  // (the plugin and its `dialog:allow-open` capability were already in
+  // the shell; this is their first caller).
+  pickWatermarkImage: (): Promise<string | null> =>
+    openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'PNG image', extensions: ['png'] }]
+    }) as Promise<string | null>,
+  // The copy into PUBLIKCLIP_HOME/watermarks is python's (settings
+  // watermark-import): the job stores the returned path, not the picked one.
+  watermarkImport: (path: string) =>
+    invoke<WatermarkImportResult>('settings_tool', { args: ['watermark-import', path] }),
   startQueue: () => invoke<void>('start_queue'),
   setQueuePaused: (paused: boolean) => invoke<void>('set_queue_paused', { paused }),
   queueState: () => invoke<QueueStateResult>('queue_state'),

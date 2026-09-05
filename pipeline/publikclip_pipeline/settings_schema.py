@@ -269,6 +269,19 @@ GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "key": "watermark",
+        "label": "Watermark",
+        "help": "The channel mark on every output file — clips and ranking videos alike. Bottom centre: inside the letterbox bar where the framing leaves one, over the bottom of the picture at reduced opacity where it does not, and never over the captions. The deck before CUT IT is where it is normally chosen; these are the defaults a job starts from.",
+        "cost": COST_CHEAP,
+        "cost_note": "Changing these re-renders every clip and ranking video.",
+        "fields": [
+            {"key": "watermark.image", "label": "Watermark image", "type": "text",
+             "help": "Path to a PNG logo. Picking one on the deck copies it into the app's own folder and stores that path, so moving the original later breaks nothing. Wins over the word when both are set. The file's content is part of the render fingerprint: replacing the logo under the same name re-renders."},
+            {"key": "watermark.text", "label": "Watermark word", "type": "text",
+             "help": "A word instead of a picture — a channel name, a handle. Burned in the caption font through the same path as the captions. Used only when no image is set."},
+        ],
+    },
+    {
         "key": "titles",
         "label": "Titles",
         "help": "Generated title options for each clip. Several are written per clip so you can compare framings rather than accept the first thing the model says.",

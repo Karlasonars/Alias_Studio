@@ -16,7 +16,9 @@ import json
 from pathlib import Path
 
 from ..camera.stage import sans_letterbox_fill
+from ..captions import title as title_mod
 from ..jobs.queue import Stage, StageContext, StageError
+from . import watermark
 from .inputs import clip_captions, clip_style, load_inputs
 
 
@@ -178,6 +180,13 @@ def _clip_edits_fingerprint(job_dir: Path) -> dict:
             )
             if edit.get(k) not in (None, {}, [])
         }
+        # E19-F01: the burned title, resolved exactly as the render resolves
+        # it (whitespace-only is nothing), so the fingerprint cannot drift
+        # from the thing it protects. An untouched clip stores "" and stays
+        # out, as before the field existed.
+        burned = title_mod.burned_title(edit)
+        if burned:
+            relevant["burned_title"] = burned
         if relevant:
             out[key] = relevant
     return out
@@ -239,6 +248,7 @@ def _fingerprint(ctx: StageContext) -> dict:
         "audio": _audio_fingerprint(ctx),
         "encoder": _encoder_fingerprint(ctx),
         "clip_edits": _clip_edits_fingerprint(ctx.job_dir),
+        "watermark": watermark.fingerprint(ctx.settings),
     }
 
 
@@ -305,6 +315,13 @@ class RenderStage(Stage):
             return False  # loudness targets are baked in by loudnorm
         if data.get("encoder") != _encoder_fingerprint(ctx):
             return False
+        # E19-F02: the mark is in every output's pixels. {} for none is
+        # also what a checkpoint from before the setting existed reads as,
+        # so a job that never had a mark keeps its render (§4 rule 3); a
+        # logo replaced under the same path re-renders because the content
+        # hash, not the path, is what differs (§4 rule 1).
+        if (data.get("watermark") or {}) != watermark.fingerprint(ctx.settings):
+            return False
         # A clip edited in the editor renders differently from the job's
         # settings, so editing one must re-run this stage — otherwise the
         # edit is only visible until the next restyle overwrites it.
@@ -333,12 +350,14 @@ class RenderStage(Stage):
             from . import ranking
 
             montages, summary = ranking.render_montages(ctx, inputs, fills)
-            # Clip entries FIRST, montage entries after. A montage entry
-            # carries its rank-1 clip's index, and a reader that finds a
-            # clip by index and takes the first match (the editor's
-            # checkpoint sync, edits/render_clip.py) must find the clip's
-            # own file. Presence of `ranking` is the shape version
-            # artifacts_ok discriminates on (E18-F01, D-18).
+            # Clip entries first, montage entries after — the order the
+            # review panel lists them in. No reader depends on it any more:
+            # a montage entry carries its rank-1 clip's index, and every
+            # reader that finds a clip by index (the editor's checkpoint
+            # sync, _previous_outputs, _fill_keys) skips entries carrying
+            # the `montage` marker instead of trusting position. Presence
+            # of `ranking` is the shape version artifacts_ok discriminates
+            # on (E18-F01, D-18).
             data["outputs"] = outputs + montages
             data["ranking"] = summary
         return data
@@ -399,11 +418,25 @@ def _render_clips(
 
         words, clip_events = clip_captions(inputs, start, end)
         style = clip_style(ctx, edit)
+        preset = ass_mod.resolve_preset(style["preset"], style["overrides"])
+        # E19-F01: the title the user marked, reproduced here as a style —
+        # which is what lets a restyle keep it. E19-F02: the watermark,
+        # placed for THIS clip's framing and under its captions. Both
+        # through the functions the editor's render path calls (§5.8).
+        title_styles, title_events = title_mod.overlay(
+            preset, style["burned_title"], end - start
+        )
+        mark = watermark.compose(
+            inputs.watermark, trajectory.get("content_w", 0), trajectory.get("content_h", 0),
+            preset, end - start, say=lambda m: ctx.emit(-1, m),
+        )
 
         ass_path = inputs.out_dir / f"clip_{i:02d}.ass"
         ass_doc = ass_mod.build_ass(
             words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
             overrides=style["overrides"],
+            extra_styles=title_styles + mark.styles,
+            extra_events=title_events + mark.events,
         )
         ass_path.write_text(ass_doc, encoding="utf-8")
 
@@ -416,6 +449,7 @@ def _render_clips(
                 src_w=inputs.src_w, src_h=inputs.src_h,
                 hardware_encode=ctx.settings.performance.hardware_encode,
                 letterbox_fill=fills[str(i)],
+                overlay_vf=mark.vf,
             )
         except RuntimeError as err:
             # renderer's message leads with raw ffmpeg stderr — headline

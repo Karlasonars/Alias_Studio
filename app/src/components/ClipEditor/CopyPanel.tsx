@@ -15,13 +15,25 @@ interface Props {
  *  here runs until asked — and neither touches the render. This panel owns
  *  its five result/busy states outright: nothing outside it reads them,
  *  which is also why loading a batch of titles no longer re-renders the
- *  timeline. */
+ *  timeline.
+ *
+ *  E19-F01 is the one exception to "neither touches the render": marking a
+ *  variant to BURN writes `burned_title`, which the next render (either
+ *  path) puts into the pixels for the clip's whole length. It is a mark the
+ *  user makes here, never an automatic choice, and it is separate from
+ *  choosing the publishing title — the same variant can be both, or
+ *  neither. */
 export default function CopyPanel({ jobId, clipIndex, edit, setEdit, persist, setError }: Props) {
   const [titles, setTitles] = useState<TitlesResult | null>(null)
   const [hook, setHook] = useState<HookResult | null>(null)
   const [description, setDescription] = useState<DescriptionResult | null>(null)
   const [copied, setCopied] = useState(false)
   const [copyBusy, setCopyBusy] = useState<'titles' | 'description' | 'hook' | null>(null)
+
+  // The variants on the clip survive a restart (that is why they are
+  // saved), so the burn mark can be moved between them without paying to
+  // regenerate; a fresh batch replaces them on screen as it always did.
+  const variants = titles?.titles ?? edit.title_variants ?? []
 
   return (
     <div className="copy-block">
@@ -45,7 +57,7 @@ export default function CopyPanel({ jobId, clipIndex, edit, setEdit, persist, se
               }
             }}
           >
-            {copyBusy === 'titles' ? 'writing…' : titles ? 'regenerate' : 'generate'}
+            {copyBusy === 'titles' ? 'writing…' : variants.length ? 'regenerate' : 'generate'}
           </button>
         </div>
 
@@ -54,20 +66,43 @@ export default function CopyPanel({ jobId, clipIndex, edit, setEdit, persist, se
             <span className="mono copy-chosen-tag">chosen</span> {edit.title}
           </p>
         )}
+        {edit.burned_title && (
+          <p className="copy-chosen">
+            <span className="mono copy-chosen-tag">burned</span> {edit.burned_title}
+            <button
+              className="btn-ghost copy-unburn"
+              title="burn nothing into this clip"
+              onClick={() => persist({ ...edit, burned_title: '' })}
+            >
+              ×
+            </button>
+          </p>
+        )}
 
-        {titles?.titles.map((t, i) => (
-          <button
-            key={i}
-            className={`copy-title ${edit.title === t.text ? 'copy-title-on' : ''}`}
-            onClick={() => persist({ ...edit, title: t.text })}
-            title={t.why}
-          >
-            <span className="copy-title-text">{t.text}</span>
-            <span className="copy-title-meta mono">
-              {t.style} · {t.chars}
-            </span>
-          </button>
-        ))}
+        {variants.map((t, i) => {
+          const burning = !!edit.burned_title && edit.burned_title === t.text
+          return (
+            <div key={i} className={`copy-title ${edit.title === t.text ? 'copy-title-on' : ''}`}>
+              <button
+                className="copy-title-pick"
+                onClick={() => persist({ ...edit, title: t.text })}
+                title={t.why}
+              >
+                <span className="copy-title-text">{t.text}</span>
+                <span className="copy-title-meta mono">
+                  {t.style} · {t.chars}
+                </span>
+              </button>
+              <button
+                className={`opt copy-burn ${burning ? 'opt-on' : ''}`}
+                title="burn this title into the clip — top of the frame, for the whole clip"
+                onClick={() => persist({ ...edit, burned_title: burning ? '' : t.text })}
+              >
+                {burning ? 'burning' : 'burn'}
+              </button>
+            </div>
+          )
+        })}
         {titles && titles.titles.length === 0 && (
           <p className="copy-empty">
             every variant was rejected by your title rules — loosen the length

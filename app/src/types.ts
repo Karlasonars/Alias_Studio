@@ -111,6 +111,16 @@ export interface HookResult {
   note?: string
 }
 
+/** E19-F02: `settings watermark-import` — the picked PNG copied into the
+ *  app's own folder; `path` is what the job stores, never the picked one. */
+export interface WatermarkImportResult {
+  ok: boolean
+  error?: string
+  path?: string
+  name?: string
+  bytes?: number
+}
+
 /* ---------- settings ---------- */
 
 export interface SettingsField {
@@ -554,6 +564,10 @@ export interface EditState {
   title_variants: { text: string; style: string; why: string; chars: number }[]
   description: string
   description_meta: Record<string, unknown>
+  /** E19-F01: the variant marked to burn into the clip, for its whole
+   *  length; '' burns nothing. Separate from `title` (publishing copy),
+   *  which never reaches the pixels. */
+  burned_title: string
   remove_dead_space: boolean; disabled_cuts: number[]
   overlays: OverlayItem[]
   // Per-clip overrides of the re-render-cost settings. Partial patches:

@@ -40,7 +40,7 @@ from ..captions import ranking as overlay
 from ..copywriting import labels as labels_mod
 from ..jobs.queue import StageContext, StageError
 from ..scoring import llm as llm_mod
-from . import renderer
+from . import renderer, watermark
 from .inputs import RenderInputs, clip_captions, clip_style, clip_transcript
 from .stage import _has_structural_edits, _previous_montages, _previous_render
 
@@ -357,12 +357,26 @@ def _render_one(
 
         words, clip_events = clip_captions(inputs, start, end)
         style = clip_style(ctx, edit)
+        # E19-F02: the watermark rides each segment's one encode, placed for
+        # that segment's framing and under its captions, so the montage
+        # stays the remux it is (E18-F02) — a channel mark belongs on
+        # channel output. The burned title (E19-F01) is NOT here: a ranking
+        # video carries its own title.
+        mark = watermark.compose(
+            inputs.watermark,
+            trajectories[i].get("content_w", 0), trajectories[i].get("content_h", 0),
+            ass_mod.resolve_preset(style["preset"], style["overrides"]), duration,
+            say=lambda m: ctx.emit(-1, m),
+        )
         ass_path = inputs.out_dir / f"{stem}_seg_{k:02d}.ass"
         ass_doc = ass_mod.build_ass(
             words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
             overrides=style["overrides"],
-            extra_styles=styles,
-            extra_events=overlay.overlay_events(job_preset, band, k, duration, labels=label_texts),
+            extra_styles=styles + mark.styles,
+            extra_events=(
+                overlay.overlay_events(job_preset, band, k, duration, labels=label_texts)
+                + mark.events
+            ),
         )
         ass_path.write_text(ass_doc, encoding="utf-8")
 
@@ -376,6 +390,7 @@ def _render_one(
                 hardware_encode=settings.performance.hardware_encode,
                 letterbox_fill=fills[str(i)],
                 edge_fade_s=EDGE_FADE_S,
+                overlay_vf=mark.vf,
             )
         except RuntimeError as err:
             raise StageError(

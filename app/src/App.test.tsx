@@ -25,10 +25,16 @@ vi.mock('@tauri-apps/api/event', async () => {
   return { listen: t.listenMock }
 })
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: async () => {} }))
+// E19-F02: the PNG picker is a plugin call, mocked at the same seam as the
+// rest of the boundary; each test sets what the dialog answers.
+const { dialogOpen } = vi.hoisted(() => ({ dialogOpen: vi.fn(async (): Promise<string | null> => null) }))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: dialogOpen }))
 
 beforeEach(() => {
   resetTauri()
   idleAppCommands()
+  dialogOpen.mockReset()
+  dialogOpen.mockResolvedValue(null)
 })
 
 async function mountStudio() {
@@ -344,5 +350,76 @@ describe('the ranking videos are decided before CUT IT (E18-F01, D-18)', () => {
     })
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
     expect(call?.[1]).toMatchObject({ ranking: false, rankingCount: 5 })
+  })
+})
+
+describe('the watermark is decided before CUT IT (E19-F02)', () => {
+  async function cutIt(source: string) {
+    fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
+      target: { value: source }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    return invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')?.[1]
+  }
+
+  it('a plain cut sends an explicit "none" rather than leaving the mark to a default', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-plain'
+    expect(screen.getByText('none').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/a.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '' })
+  })
+
+  it('a word is carried into the enqueue, trimmed', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-word'
+    fireEvent.click(screen.getByText('word'))
+    fireEvent.change(screen.getByPlaceholderText('@yourchannel'), { target: { value: '  @alias ' } })
+    expect(screen.getByText(/never over the captions/)).toBeTruthy()
+    expect(await cutIt('C:/videos/b.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '@alias' })
+  })
+
+  it('an image goes through the picker and the import, and the STORED path is what the job gets', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-logo'
+    dialogOpen.mockResolvedValue('C:/Pictures/logo.png')
+    const imports: unknown[] = []
+    commands.settings_tool = (args) => {
+      imports.push(args?.args)
+      return { ok: true, path: 'C:/home/watermarks/logo-1a2b3c4d.png', name: 'logo-1a2b3c4d.png', bytes: 512 }
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(imports).toEqual([['watermark-import', 'C:/Pictures/logo.png']])
+    expect(screen.getByText('logo-1a2b3c4d.png').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/c.mp4')).toMatchObject({
+      watermarkImage: 'C:/home/watermarks/logo-1a2b3c4d.png', watermarkText: ''
+    })
+  })
+
+  it('a refused file says why under the control and sends no image', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-refused'
+    dialogOpen.mockResolvedValue('C:/Pictures/logo.gif')
+    commands.settings_tool = () => ({ ok: false, error: 'logo.gif is not a PNG image' })
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(screen.getByText('logo.gif is not a PNG image')).toBeTruthy()
+    expect(screen.getByText('none').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/d.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '' })
+  })
+
+  it('a cancelled picker changes nothing', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-cancel'
+    fireEvent.click(screen.getByText('word'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(callsTo('settings_tool')).toBe(0)
+    expect(screen.getByText('word').className).toContain('opt-on')
   })
 })
