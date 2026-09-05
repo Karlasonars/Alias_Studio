@@ -349,10 +349,14 @@ Writes `trajectory_NN.json` per clip: `frames`, `cuts`, `punches`,
 One ffmpeg graph per clip:
 
 ```
-sendcmd → crop@c → scale/pad (or blur letterbox) → setsar → subtitles → loudnorm
+sendcmd → crop@c → scale/pad (or blur letterbox) → setsar → [watermark overlay] → subtitles → loudnorm
 ```
 
 - `sendcmd` animates the crop rect from the trajectory.
+- The watermark overlay (E19-F02) is present only for an image watermark:
+  the PNG is loaded by the `movie` source filter inside the same graph and
+  overlaid before the caption burn, so captions draw over it. A word
+  watermark, like the burned title (E19-F01), rides the ASS document.
 - `scale_pad_vf(content_w, content_h, fill)` handles the case where the crop's
   aspect ratio is not 9:16 (the gameplay end of the dial). With `fill="black"`
   it pads with black bars; with `fill="blur"` it splits the stream, scales one
@@ -431,6 +435,40 @@ makes no LLM call. Nothing regenerates or edits a label in this version
 (D-17). This is the one copywriting engine called from inside a stage;
 `copywriting/__init__.py` says why.
 
+**Overlays on the clip (E19).** Two things are drawn over the finished frame,
+and both are placed so they never reach the captions (`preset.margin_v` from
+the bottom). The **burned title** (E19-F01, `captions/title.py`) is the
+variant the user marked in the editor — `ClipEdit.burned_title`, never an
+automatic choice; a clip with nothing marked burns nothing — set in the caption
+preset's face, top-centre with `TOP_SAFE_PX` as its margin, wrapping on, for
+the clip's whole output length. It is a style, resolved through `clip_style`
+like `caption_preset`, so the stage reproduces it on a restyle instead of
+adopting the editor's file; it is in `_clip_edits_fingerprint`; and it never
+reaches a ranking segment, which carries its own title. The **watermark**
+(E19-F02, `render/watermark.py`) is job-level — `Settings.watermark.image`
+(a PNG, by the path `settings watermark-import` copied it to under
+`PUBLIKCLIP_HOME/watermarks`, so a moved original breaks nothing) or
+`Settings.watermark.text` (a word), the image winning when both are set — on
+every output file, ranking segments included, in their one encode, so the
+montage stays a remux. Placement comes from `letterbox_geometry`: centred and
+opaque in the bottom bar when the framing leaves one tall enough, else on the
+bottom of the picture at 60 % opacity; its top edge stays 24 px below the
+caption anchor, and when the captions sit too low to leave room the clip
+renders without it and says so. For a 1920×1080 source: at gameplay framing
+(a 656 px bar) a 2:1 logo lands 238×118 at y = 1533 and a word at y = 1565; at
+podcast framing (no bar) at y = 1682 and 1747. The word goes through the same
+ASS document as the captions (libass and the bundled fonts are already
+probed; drawtext and libfreetype are not); the image through the `movie`
+filter with `wm_`-prefixed labels, which collide with neither the blur fill's
+`lb_*` nor the editor graph's `[vc]/[vb]/[ov*]/[vo*]/[vf]`. Both render paths
+call the same `watermark.compose` and `title.overlay` (§5.8). The render
+fingerprint carries the image's **content hash** (sha256), not only its path —
+a logo replaced under the same name re-renders, the same bytes under a new
+mtime do not — and `{}` for no watermark, which is also what every checkpoint
+from before the setting existed reads as. A missing or non-PNG file renders
+every clip without a mark, with one line in the log, and fingerprints as
+`"missing"` so the render is redone once the file is back.
+
 ---
 
 ## 5. The checkpoint contract
@@ -493,7 +531,7 @@ that did not need one.
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | strict `!=` on `camera_settings` (minus `letterbox_fill`, which is render-only and used to re-run the whole DIRECT pass) and `retention_settings`, plus `clip_framing` | no |
-| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits`, plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte. **Output unit first (E18):** a checkpoint carrying a `ranking` key serves only a job with `ranking.enabled`, and vice versa, with a strict compare on `ranking.count`; the `fills` map is recomputed over the montage's segments (`_fill_keys`) rather than its one output entry. Checkpoints from before the key existed lack it and the mode defaults off, so nothing on disk re-rendered when the feature arrived | no |
+| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits` (which includes `burned_title`, E19-F01) and `watermark` (kind, path and the file's sha256 — `"missing"` when unreadable; `{}` for none, which is also what pre-E19 checkpoints read as, E19-F02), plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte. **Output unit first (E18):** a checkpoint carrying a `ranking` key serves only a job with `ranking.enabled`, and vice versa, with a strict compare on `ranking.count`; the `fills` map is recomputed over the montage's segments (`_fill_keys`) rather than its one output entry. Checkpoints from before the key existed lack it and the mode defaults off, so nothing on disk re-rendered when the feature arrived | no |
 
 **`fingerprint_ok` has three callers** — `candidates`, `events` and, since
 T-39, `scoring` (the naive strict fix for the new `gemini_model` key would
@@ -552,7 +590,9 @@ whole tunable surface, grouped by what it controls:
 | `titles` | length limits, styles, count |
 | `descriptions` | length, hashtags, CTA, platform limits |
 | `hooks` | hook types, count, ranking |
-| top level | `lufs_target`, `true_peak_db`, `llm_mode`, `caption_preset`, `laughter_specialist` |
+| `ranking` | the ranking videos (E18): on/off, moments per video |
+| `watermark` | the channel mark on every output (E19-F02): a PNG by its imported path, or a word |
+| top level | `lufs_target`, `true_peak_db`, `llm_mode`, `gemini_model`, `caption_preset`, `laughter_specialist` |
 
 Two rules govern this file, stated in its own docstring:
 
@@ -568,8 +608,8 @@ always loads instead of crashing a resume.
 
 ### The UI schema
 
-`settings_schema.py` describes the settings panel as data: **13 groups, 72
-controls**, plus **15 caption style fields**. The frontend renders it
+`settings_schema.py` describes the settings panel as data: **15 groups, 77
+controls** (71 nested, 6 top-level), plus **15 caption style fields**. The frontend renders it
 generically — adding a setting means adding a schema entry, not writing a
 React component.
 
@@ -612,6 +652,7 @@ State lives in `<job_dir>/clip_edits.json`, keyed by clip index, shaped by
 | `pacing` | partial patch of `PacingSettings` |
 | `lufs_target`, `true_peak_db` | per-clip loudness |
 | `title`, `title_variants`, `description`, `description_meta` | generated copy |
+| `burned_title` | the variant marked to burn into the clip, top safe zone, whole length (E19-F01); `''` burns nothing |
 
 `None` means "inherit the job's value". `pacing` and `caption_overrides` are
 partial patches, so a clip carries only what was actually changed.
@@ -639,7 +680,7 @@ build at all. Keeping them consistent takes three explicit mechanisms:
 
 2. **`render/stage.py` applies the style overrides it can reproduce**
    (`caption_preset`, `caption_overrides`, `lufs_target`, `true_peak_db`,
-   `letterbox_fill`), and for a clip with **structural** edits — changed
+   `letterbox_fill`, `burned_title`), and for a clip with **structural** edits — changed
    bounds, dead-space cuts, overlays — it keeps and reports the file the
    editor already produced rather than overwriting it.
    `_has_structural_edits()` draws that line.
@@ -650,7 +691,11 @@ build at all. Keeping them consistent takes three explicit mechanisms:
    arriving at the trajectory already on disk.
 
 The single-clip path also keeps `render.json` in sync after it writes, marking
-the entry `"edited": true`, so the review screen reflects the new file.
+the entry `"edited": true`, so the review screen reflects the new file. It
+matches the clip's own entry by the absence of the `montage` marker, never by
+position: a ranking video's entry carries its rank-1 clip's index (D-18), and
+the stage's clip-entries-first order is a courtesy to the review panel, not a
+rule any reader depends on.
 
 **If you add a per-clip field, you must touch four places:** the `ClipEdit`
 dataclass, the consuming render path, the relevant stage fingerprint, and the
@@ -750,6 +795,7 @@ app points it at its own app-data directory; the CLI uses the default.
 ├── settings.json           global defaults (seeds NEW jobs only)
 ├── caption_presets.json    user edits to built-in presets + custom presets
 ├── bin/                    managed binaries (yt-dlp)
+├── watermarks/             watermark PNGs as imported (E19-F02), stem-<sha8>.png
 ├── models/                 downloaded weights
 │   ├── hf/                 HuggingFace cache (HF_HOME points here)
 │   └── torch/              torch cache (TORCH_HOME points here)
@@ -1071,6 +1117,7 @@ changes take effect on the next job with no rebuild.
 | `jobs` | list jobs |
 | `settings get\|set\|reset` | read/write the global settings tree |
 | `settings preset-save\|preset-reset <name>` | caption preset editing |
+| `settings watermark-import <png>` | copy a PNG into `watermarks/`, print its stored path — what the deck sends as `--watermark-image` (E19-F02) |
 | `edit context <job> <clip>` | everything the editor needs for one clip |
 | `edit suggest-visuals <job> <clip>` | overlay suggestions (Pexels or Gemini) |
 | `edit titles\|description\|hook <job> <clip>` | copywriting |
@@ -1079,7 +1126,10 @@ changes take effect on the next job with no rebuild.
 | `ig media\|link\|unlink\|reject\|pull\|report` | clip↔Reel linking and metrics |
 
 Run flags: `--llm {gemini,ollama}`, `--captions <preset>`,
-`--camera {cut,pan,locked}`, `--gameplay-amount <0..1>`.
+`--camera {cut,pan,locked}`, `--gameplay-amount <0..1>`,
+`--letterbox-fill {black,blur}`, `--ranking {on,off}`, `--ranking-count <N>`,
+`--watermark-image <png>`, `--watermark-text <word>` — the last two accept
+`""` as an explicit "none". All of them on `run`, `resume` and `jobs create`.
 
 > **`0.0` is a legitimate value and falsy in Python.** Every check on
 > `--gameplay-amount` must be `is not None`, never `if args.x:`. The older

@@ -265,6 +265,7 @@ def render_clip(
     hardware_encode: bool = False,
     letterbox_fill: str = "black",
     edge_fade_s: float = 0.0,
+    overlay_vf: str = "",
 ) -> None:
     """One clip, one ffmpeg run.
 
@@ -273,7 +274,11 @@ def render_clip(
     command line is byte-identical to what it always was; the ranking
     montage (render/ranking.py) sets it because a hard cut mid-waveform
     clicks, and in a montage the click is followed by more audio instead
-    of the end of the file."""
+    of the end of the file.
+
+    `overlay_vf` is a ready filter fragment spliced after the scale/pad and
+    BEFORE the caption burn, so captions draw over whatever it adds — the
+    watermark (render/watermark.py). Empty, the default, adds nothing."""
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
     if not boxes:
@@ -292,6 +297,8 @@ def render_clip(
         ),
         "setsar=1",
     ]
+    if overlay_vf:
+        vf_parts.append(overlay_vf)
     if ass_path is not None:
         sub = f"subtitles=filename={_q(ass_path)}"
         if fonts_dir is not None:

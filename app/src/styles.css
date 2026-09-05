@@ -473,6 +473,19 @@ body {
   transition: all 0.15s;
 }
 .opt-on { border-color: var(--amber); color: var(--amber); background: rgba(var(--amber-rgb), 0.08); }
+/* the deck's one free-text option (E19-F02: the watermark word), styled as
+   a pill so it sits in the row with the .opt buttons */
+.opt-input {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 6px 10px;
+  width: 180px;
+  outline: none;
+}
+.opt-input:focus { border-color: var(--amber); }
 /* one-line consequence of a deck choice (E18: the list over the picture at
    podcast framing) — quiet, under the options, never a wall */
 .opt-hint {
@@ -533,15 +546,24 @@ body {
   font-size: 9px; color: var(--amber); letter-spacing: 0.1em;
   text-transform: uppercase; margin-right: 6px;
 }
+/* one variant: the pick (choose for publishing) fills the row, the burn
+   toggle (E19-F01) sits at its right edge — two buttons, so neither can be
+   nested inside the other */
 .copy-title {
-  display: flex; flex-direction: column; gap: 3px; text-align: left;
-  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
-  padding: 8px 10px; cursor: pointer; transition: border-color 0.15s;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  padding: 0 8px 0 0; transition: border-color 0.15s;
 }
 .copy-title:hover { border-color: var(--amber-dim); }
 .copy-title-on { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+.copy-title-pick {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: left;
+  background: none; border: none; color: var(--text); padding: 8px 10px; cursor: pointer;
+}
 .copy-title-text { font-size: 12px; line-height: 1.4; }
 .copy-title-meta { font-size: 9px; color: var(--faint); }
+.copy-burn { padding: 4px 8px; font-size: 10px; white-space: nowrap; }
+.copy-unburn { margin-left: 6px; padding: 0 6px; font-size: 12px; }
 
 .copy-verdict { font-size: 11px; color: var(--dim); line-height: 1.5; }
 .copy-hook {

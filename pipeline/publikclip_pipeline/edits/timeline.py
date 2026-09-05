@@ -68,6 +68,11 @@ class ClipEdit:
     # warnings so the UI can show why it was trimmed or what was stripped.
     description: str = ""
     description_meta: dict = field(default_factory=dict)
+    # The title burned into the clip (E19-F01): the variant the user marked
+    # in the editor, "" for none. Separate from `title`, which is publishing
+    # copy beside the file and never reaches the pixels — this one does, so
+    # it is in the render fingerprint and `title` stays out of it.
+    burned_title: str = ""
     remove_dead_space: bool = False
     disabled_cuts: list[int] = field(default_factory=list)  # indices into auto cuts
     overlays: list[Overlay] = field(default_factory=list)
@@ -99,6 +104,7 @@ class ClipEdit:
             title_variants=list(data.get("title_variants", [])),
             description=str(data.get("description", "")),
             description_meta=dict(data.get("description_meta") or {}),
+            burned_title=str(data.get("burned_title") or ""),
             remove_dead_space=bool(data.get("remove_dead_space", False)),
             disabled_cuts=list(data.get("disabled_cuts", [])),
             overlays=overlays,

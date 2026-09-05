@@ -70,6 +70,13 @@ def caption_presets_path() -> Path:
     return home_dir() / "caption_presets.json"
 
 
+def watermarks_dir() -> Path:
+    """Where a chosen watermark PNG is copied on selection (E19-F02). A job
+    stores THIS path, never the one the user picked: a logo picked anywhere
+    on disk breaks every old job the moment the user moves it."""
+    return home_dir() / "watermarks"
+
+
 def ensure_home() -> Path:
     root = home_dir()
     for d in (root, jobs_dir(), bin_dir(), models_dir()):
@@ -282,6 +289,27 @@ class RankingSettings:
 
 
 # ---------------------------------------------------------------------------
+# Watermark (E19-F02): the channel mark on EVERY output file — clips and
+# ranking videos alike. Consumed by render/watermark.py, which both render
+# paths and the ranking segments call. Render-only: nothing before the render
+# stage reads it, so changing it re-renders and invalidates nothing earlier.
+
+
+@dataclass
+class WatermarkSettings:
+    # A PNG, by the path render/watermark.py:import_image stored it under
+    # (PUBLIKCLIP_HOME/watermarks). Wins over `text` when both are set. The
+    # file's CONTENT is in the render fingerprint, not just this path: a logo
+    # replaced under the same name must re-render, or the old logo silently
+    # stays in every clip (§4 rule 1).
+    image: str = ""
+    # A word instead of a picture, burned through the same ASS path as the
+    # captions — libass and the bundled fonts are already probed, drawtext
+    # and libfreetype are not.
+    text: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Copywriting: titles and hooks. Consumed by copywriting/titles.py and
 # copywriting/hooks.py, which run on demand rather than as pipeline stages —
 # regenerating a title must never invalidate a render.
@@ -364,6 +392,7 @@ class Settings:
     descriptions: DescriptionSettings = field(default_factory=DescriptionSettings)
     hooks: HookSettings = field(default_factory=HookSettings)
     ranking: RankingSettings = field(default_factory=RankingSettings)
+    watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
@@ -395,6 +424,7 @@ class Settings:
             "descriptions": self.descriptions.__dict__.copy(),
             "hooks": {**self.hooks.__dict__, "types": list(self.hooks.types)},
             "ranking": self.ranking.__dict__.copy(),
+            "watermark": self.watermark.__dict__.copy(),
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
@@ -440,6 +470,7 @@ class Settings:
             descriptions=_build(DescriptionSettings, data.get("descriptions")),
             hooks=hooks,
             ranking=_build(RankingSettings, data.get("ranking")),
+            watermark=_build(WatermarkSettings, data.get("watermark")),
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),

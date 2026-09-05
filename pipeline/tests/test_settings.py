@@ -662,6 +662,53 @@ def test_resume_ranking_flags_reach_the_job_snapshot(monkeypatch):
     assert saved.ranking.count == 3 and saved.ranking.enabled is False  # untouched by the count flag
 
 
+def test_enqueue_flags_set_the_job_watermark(capsys):
+    """E19-F02's chain below the UI: `jobs create --watermark-image` and
+    `--watermark-text` land on the job's snapshot; without the flags the
+    group keeps its defaults, none and none."""
+    from publikclip_pipeline import cli
+
+    assert cli.main([
+        "jobs", "create", "C:/nowhere/a.mp4",
+        "--watermark-image", "C:/marks/logo-1a2b3c4d.png", "--watermark-text", " @alias ",
+    ]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.watermark.image == "C:/marks/logo-1a2b3c4d.png"
+    assert saved.watermark.text == "@alias"
+
+    assert cli.main(["jobs", "create", "C:/nowhere/b.mp4"]) == 0
+    job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
+    saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
+    assert saved.watermark.image == "" and saved.watermark.text == ""
+
+
+def test_resume_watermark_flags_reach_the_job_snapshot(monkeypatch):
+    """The resume guard must list both flags (§5.2's lesson from
+    --letterbox-fill), and "" must be an explicit clear: the deck sends it
+    so a job never inherits a mark it did not show, and a CLI user has no
+    other way to remove one on resume."""
+    from publikclip_pipeline import cli
+
+    settings = config.Settings()
+    settings.watermark.text = "@old"
+    job = queue.create_job("file", "C:/nowhere/e.mp4", json.dumps(settings.to_json()))
+    monkeypatch.setattr(cli, "_execute", lambda job, jsonl: 0)
+
+    assert cli.main(["resume", job.id, "--watermark-image", "C:/marks/logo-1a2b3c4d.png"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.watermark.image == "C:/marks/logo-1a2b3c4d.png"
+    assert saved.watermark.text == "@old"  # untouched by the image flag
+
+    assert cli.main(["resume", job.id, "--watermark-text", ""]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.watermark.text == "" and saved.watermark.image == "C:/marks/logo-1a2b3c4d.png"
+
+    assert cli.main(["resume", job.id, "--watermark-image", ""]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.watermark.image == ""
+
+
 def test_resume_letterbox_fill_flag_reaches_the_job_snapshot(monkeypatch):
     """`resume --letterbox-fill blur` was parsed, applied by
     _apply_setting_flags, and then never reached the job: cmd_resume's

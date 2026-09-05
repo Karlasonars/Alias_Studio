@@ -1,6 +1,6 @@
 # Alias Studio — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.7 · **Datums:** 2026-09-05 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
+**Versija:** 1.8 · **Datums:** 2026-09-05 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -43,6 +43,7 @@
 23. [E16 — Izplatīšana, licences un kopiena](#e16--izplatīšana-licences-un-kopiena)
 24. [E17 — Iepakojuma eksperimenti](#e17--iepakojuma-eksperimenti)
 25. [E18 — Ranga video](#e18--ranga-video)
+26. [E19 — Pārklājumi uz klipa](#e19--pārklājumi-uz-klipa)
 
 **C daļa — Dizains**
 
@@ -2097,6 +2098,37 @@ Bez šī E17 ir tikai variantu ģenerators.
 
 ---
 
+## E19 — Pārklājumi uz klipa
+
+**Mērķis:** uz gatavā klipa uzlikt to, kas padara to par kanāla klipu, nevis anonīmu fragmentu — virsrakstu un zīmolu.
+**Jauna epika v1.8.**
+
+> Abas prasības zīmē virsū jau gatavam kadram, un abas dala vienu ierobežojumu: tās nedrīkst konkurēt ar subtitriem. Subtitri sēž 560 px no apakšas, un tā ir vienīgā drošā zona, ko kadrs līdz šim pazina. Šī epika pievieno vēl divas.
+
+---
+
+**E19-F01 · Virsraksts uz klipa** · `P1` · P1
+
+*Pieņemšanas kritēriji:*
+- Redaktorā izvēlēts virsraksta variants tiek **iededzināts** klipā un ir redzams **visu klipa garumu**.
+- Klips bez izvēlēta virsraksta renderējas bez tā. Automātiska izvēle netiek būvēta: lietotājs redz, kas tiks uzrakstīts, pirms tas notiek.
+- Attiecas **tikai uz parastajiem klipiem**. Ranga video jau nes savu virsrakstu.
+- Teksts dzīvo augšējā drošajā zonā, ne uz subtitriem, un iet caur to pašu ASS ceļu.
+- Darba līmeņa pārkrāsošana virsrakstu **nedrīkst pazaudēt**. Tas ir stila, ne strukturāls rediģējums: renderēšanas posms to atkārto pats, kā `caption_preset`.
+
+---
+
+**E19-F02 · Ūdenszīme** · `P1` · visi
+
+*Pieņemšanas kritēriji:*
+- Panelī pirms CUT IT var izvēlēties PNG attēlu vai vārdu. Tas tiek uzlikts **katram** izvades failam — gan klipiem, gan ranga video.
+- Novietojums: apakšā centrē. Kur kadrējums rada apakšējo joslu, ūdenszīme sēž uz joslas un neaizsedz saturu; kur joslas nav, tā sēž uz attēla apakšas ar samazinātu necaurspīdību.
+- Ūdenszīme nekad neaizsedz subtitrus.
+- **Pirkstu nospiedumā iet arī paša faila saturs, ne tikai ceļš.** Logo nomaiņa ar to pašu nosaukumu citādi klusi paturētu vecos renderus — tieši tā kļūda, ko §4 1. noteikums apraksta.
+- Ja fails pazūd vai nav lasāms, klips renderējas bez ūdenszīmes ar rindu žurnālā (§5.9).
+
+---
+
 # C daļa — Dizains
 
 ## 24. Dizaina principi
@@ -3472,7 +3504,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 
 ## Dokumenta beigas
 
-**Versija 1.7 · 2026-09-05**
+**Versija 1.8 · 2026-09-05**
 
 Šis dokuments ir dzīvs. Katra prasība, kas tiek realizēta, tiek atzīmēta; katra, kas atkrīt, tiek marķēta `ATCELTS` ar iemeslu, saglabājot ID. Lēmumu žurnāls ([37.4](#374-lēmumu-žurnāls)) tiek papildināts, nevis pārrakstīts.
 
@@ -3482,6 +3514,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.8 | 2026-09-05 | **Jauna epika [E19](#e19--pārklājumi-uz-klipa) — Pārklājumi uz klipa.** Divas prasības: [E19-F01](#e19--pārklājumi-uz-klipa) — redaktorā izvēlēts virsraksta variants tiek iededzināts klipā visā tā garumā, tikai parastajiem klipiem, kā stils, ko darba līmeņa pārkrāsošana patur; [E19-F02](#e19--pārklājumi-uz-klipa) — PNG vai vārda ūdenszīme apakšā centrā uz katra izvades faila, arī ranga video, ar paša faila saturu renderēšanas pirkstu nospiedumā. Jaunas lēmumu žurnāla rindas nav — D-18 paliek spēkā. |
 | 1.7 | 2026-09-05 | **D-18 — ranga režīms neaizstāj klipus, un no viena avota top divi ranga video.** D-17 daļa "tikai ranga video, ne abi" atcelta pēc pirmās versijas redzēšanas; pārējās D-17 daļas paliek. [E18-F01](#e18--ranga-video) kritērijs par vienu failu pārrakstīts; jaunas [E18-F05](#e18--ranga-video) (klipi paliek) un [E18-F06](#e18--ranga-video) (momenti 1–5 un 6–10; viens video ar rindu, kāpēc, ja finālistu nepietiek). |
 | 1.6 | 2026-09-03 | **Jauna epika [E18](#e18--ranga-video) — Ranga video** (D-17). Pirmā prasība, kas maina izvades vienību: viens fails no daudziem logiem, ar pastāvīgu numurētu pārklājumu. Četras prasības (F01–F04); F04 ir `P2`. Trīs īpašnieka lēmumi fiksēti D-17: tikai ranga video (ne abi), atklāšana spēlēšanas secībā, etiķešu rediģēšana netiek būvēta šajā versijā. |
 | 1.5 | 2026-08-25 | **Nepilnība E7 koriģēta pēc tiešas pārbaudes** — indekss vienmēr bijis LF (112 failu, 0 CRLF); problēma bija platformu divdomība, ne bojāts repozitorijs. `P0` → `P1`, izdarīts commit `95f493d`. Pievienota piezīme par audita ticamību [6.3](#63-kopsavilkums). Repozitorijā pievienoti `CLAUDE.md`, `AGENT-WORKPLAN.md`, `test_house_rules.py`, `ruff.toml`. |

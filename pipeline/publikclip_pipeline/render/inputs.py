@@ -12,7 +12,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..captions import title as title_mod
 from ..jobs.queue import StageContext, StageError
+from . import watermark as watermark_mod
 
 
 @dataclass
@@ -32,6 +34,9 @@ class RenderInputs:
     captions_ok: bool
     emoji_ok: bool
     out_dir: Path
+    # E19-F02: the job's watermark, resolved once for every output of the
+    # run — the file read and probed once, a missing file said once.
+    watermark: watermark_mod.Mark | None = None
 
 
 def load_inputs(ctx: StageContext, clip_edits: dict) -> RenderInputs:
@@ -73,6 +78,7 @@ def load_inputs(ctx: StageContext, clip_edits: dict) -> RenderInputs:
         captions_ok=captions_ok,
         emoji_ok=emoji_ok,
         out_dir=out_dir,
+        watermark=watermark_mod.resolve(ctx.settings, say=lambda m: ctx.emit(-1, m)),
     )
 
 
@@ -133,4 +139,7 @@ def clip_style(ctx: StageContext, edit: dict) -> dict:
         },
         "lufs": lufs if lufs is not None else ctx.settings.lufs_target,
         "true_peak": peak if peak is not None else ctx.settings.true_peak_db,
+        # E19-F01: the title the user marked to burn — a style, resolved
+        # here so a restyle reproduces it like the preset above.
+        "burned_title": title_mod.burned_title(edit),
     }

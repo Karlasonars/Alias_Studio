@@ -49,7 +49,9 @@ interface Props {
     gameplayAmount: number,
     letterboxFill: string,
     ranking: boolean,
-    rankingCount: number
+    rankingCount: number,
+    watermarkImage: string,
+    watermarkText: string
   ) => void
   onOpenLoop: () => void
   onOpenQueue: () => void
@@ -69,6 +71,18 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   // (E18-F06). Never instead of the clips — D-17 said so and was reversed.
   const [ranking, setRanking] = useState(false)
   const [rankingCount, setRankingCount] = useState(5)
+  // E19-F02: the channel mark, decided before the cut like the rest of the
+  // deck and sent explicitly — '' is "none", so a job never inherits a
+  // mark the deck did not show (the Settings default seeds only jobs made
+  // without the deck, exactly like the fill and the ranking toggle). The
+  // PNG is copied into the app's own folder on selection, and the job
+  // stores THAT path: a logo moved later breaks nothing.
+  const [wmKind, setWmKind] = useState<'none' | 'image' | 'text'>('none')
+  const [wmImage, setWmImage] = useState('')
+  const [wmImageName, setWmImageName] = useState('')
+  const [wmText, setWmText] = useState('')
+  const [wmBusy, setWmBusy] = useState(false)
+  const [wmError, setWmError] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   // T-14: the resume picker for one rail job. info=null while the one-shot
@@ -107,11 +121,48 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
       )
   }
 
+  // The picker, then the copy. A cancelled dialog changes nothing; a
+  // refused file (not a PNG) says why here, under the control, and sends
+  // no image — never the picked path in place of a stored one.
+  const pickWatermarkImage = async () => {
+    setWmError(null)
+    let picked: string | null = null
+    try {
+      picked = await api.pickWatermarkImage()
+    } catch (err) {
+      setWmError(String(err))
+      return
+    }
+    if (!picked) {
+      if (wmImage) setWmKind('image')
+      return
+    }
+    setWmBusy(true)
+    try {
+      const res = await api.watermarkImport(picked)
+      if (res.ok && res.path) {
+        setWmImage(res.path)
+        setWmImageName(res.name ?? res.path)
+        setWmKind('image')
+      } else {
+        setWmError(res.error ?? 'could not import the image')
+      }
+    } catch (err) {
+      setWmError(String(err))
+    } finally {
+      setWmBusy(false)
+    }
+  }
+
   // Enqueue and clear the field: with the input live while a job runs, a
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
     if (!source.trim()) return
-    onRun(source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
+    onRun(
+      source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+      wmKind === 'image' ? wmImage : '',
+      wmKind === 'text' ? wmText.trim() : ''
+    )
     setSource('')
   }
 
@@ -337,6 +388,51 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                 <p className="opt-hint">
                   two ranking videos beside the clips — moments 1 to {rankingCount} and the next{' '}
                   {rankingCount}; one, if the job renders fewer than {rankingCount * 2} clips
+                </p>
+              )}
+              {/* E19-F02: a picture or a word on every output file, clips
+                  and ranking videos alike. The image button carries the
+                  stored file's name once one is imported. */}
+              <div className="opt-group">
+                <span className="opt-label">watermark</span>
+                <button
+                  className={`opt ${wmKind === 'none' ? 'opt-on' : ''}`}
+                  onClick={() => setWmKind('none')}
+                >
+                  none
+                </button>
+                <button
+                  className={`opt ${wmKind === 'image' ? 'opt-on' : ''}`}
+                  onClick={pickWatermarkImage}
+                  disabled={wmBusy}
+                  title="a PNG, bottom centre of every clip and ranking video"
+                >
+                  {wmBusy ? 'copying…' : wmImageName || 'image…'}
+                </button>
+                <button
+                  className={`opt ${wmKind === 'text' ? 'opt-on' : ''}`}
+                  onClick={() => setWmKind('text')}
+                >
+                  word
+                </button>
+              </div>
+              {wmKind === 'text' && (
+                <div className="opt-group">
+                  <span className="opt-label">text</span>
+                  <input
+                    className="opt-input mono"
+                    value={wmText}
+                    onChange={(e) => setWmText(e.target.value)}
+                    placeholder="@yourchannel"
+                    aria-label="watermark word"
+                  />
+                </div>
+              )}
+              {wmError && <p className="opt-hint">{wmError}</p>}
+              {wmKind !== 'none' && (
+                <p className="opt-hint">
+                  bottom centre of every clip and ranking video — inside the bar at gameplay
+                  framing, over the picture at reduced opacity otherwise; never over the captions
                 </p>
               )}
             </div>

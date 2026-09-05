@@ -96,6 +96,15 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     ranking_count = getattr(args, "ranking_count", None)
     if ranking_count is not None:
         settings.ranking.count = max(1, int(ranking_count))
+    # E19-F02. `is not None`, never truthiness: "" is an explicit "no
+    # watermark" — the deck sends it so a job never inherits a mark the
+    # deck did not show, and `resume --watermark-text ""` clears one.
+    watermark_image = getattr(args, "watermark_image", None)
+    if watermark_image is not None:
+        settings.watermark.image = watermark_image.strip()
+    watermark_text = getattr(args, "watermark_text", None)
+    if watermark_text is not None:
+        settings.watermark.text = watermark_text.strip()
     return settings
 
 
@@ -125,6 +134,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "letterbox_fill", None)
         or getattr(args, "ranking", None) is not None
         or getattr(args, "ranking_count", None) is not None
+        or getattr(args, "watermark_image", None) is not None
+        or getattr(args, "watermark_text", None) is not None
     ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -415,6 +426,22 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(json.dumps(payload()))
         return 0
 
+    if args.settings_cmd == "watermark-import":
+        # E19-F02: the deck's PNG picker lands here. The copy into
+        # PUBLIKCLIP_HOME and the PNG check are python's — testable here,
+        # and the shell stays the passthrough it already is.
+        from .render import watermark
+
+        try:
+            stored = watermark.import_image(Path(args.path))
+        except watermark.WatermarkError as err:
+            print(json.dumps({"ok": False, "error": str(err)}))
+            return 1
+        print(json.dumps({
+            "ok": True, "path": str(stored), "name": stored.name, "bytes": stored.stat().st_size,
+        }))
+        return 0
+
     print(json.dumps({"ok": False, "error": f"unknown settings command {args.settings_cmd}"}))
     return 2
 
@@ -702,6 +729,20 @@ def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_watermark_flags(parser: argparse.ArgumentParser) -> None:
+    """E19-F02's two flags, identical on run, resume and `jobs create`. No
+    choices list: the image is a path and the word is free text, and an
+    empty value is the explicit "none"."""
+    parser.add_argument(
+        "--watermark-image", dest="watermark_image", default=None,
+        help="a PNG overlaid bottom-centre on every clip and ranking video; '' for none",
+    )
+    parser.add_argument(
+        "--watermark-text", dest="watermark_text", default=None,
+        help="a word burned bottom-centre instead of a picture, when no image is set; '' for none",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="publikclip")
     parser.add_argument("--jsonl", action="store_true", help="machine-readable progress on stdout")
@@ -721,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
     _add_ranking_flags(p_run)
+    _add_watermark_flags(p_run)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -737,6 +779,7 @@ def main(argv: list[str] | None = None) -> int:
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
     _add_ranking_flags(p_resume)
+    _add_watermark_flags(p_resume)
     # hardware_profile.STAGES is the light-import copy of cli._stages()'s
     # order (a test pins them equal); argparse must not pay the torch tax.
     p_resume.add_argument(
@@ -787,6 +830,7 @@ def main(argv: list[str] | None = None) -> int:
         help="what fills the bars once framing letterboxes: black bars or a blurred copy",
     )
     _add_ranking_flags(p_create)
+    _add_watermark_flags(p_create)
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(
         "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"
@@ -808,6 +852,11 @@ def main(argv: list[str] | None = None) -> int:
     p_preset.add_argument("json", help="partial preset patch as JSON (hex colours)")
     p_preset_reset = set_sub.add_parser("preset-reset")
     p_preset_reset.add_argument("name")
+    p_wm = set_sub.add_parser(
+        "watermark-import",
+        help="copy a PNG into the app's watermark folder and print its stored path (E19-F02)",
+    )
+    p_wm.add_argument("path")
     p_set.set_defaults(fn=cmd_settings)
 
     p_edit = sub.add_parser("edit", help="per-clip editing (context / visuals / render)")

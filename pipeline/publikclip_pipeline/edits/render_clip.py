@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .. import config
 from ..captions import ass as ass_mod
-from ..render import ffmpeg_bin, renderer
+from ..captions import title as title_mod
+from ..render import ffmpeg_bin, renderer, watermark
 from . import store
 from .timeline import ClipEdit, TimeRemap, detect_dead_space, keep_ranges, resolve_pacing
 
@@ -320,9 +321,28 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     ass_path = out_dir / f"clip_{clip_idx:02d}.ass"
     # Job-level caption tweaks first, then this clip's own on top.
     cap_overrides = {**settings.captions.overrides, **(edit.caption_overrides or {})}
+    resolved = ass_mod.resolve_preset(preset, cap_overrides)
+
+    def say(message: str) -> None:
+        emit(-1, message)
+
+    # E19-F01 / E19-F02 through the SAME two functions the render stage
+    # calls (§5.8): the marked title for the clip's whole OUTPUT length —
+    # after the cuts, not the source span — and the watermark placed for
+    # this clip's framing.
+    title_styles, title_events = title_mod.overlay(
+        resolved, title_mod.burned_title(edit), remap.output_duration
+    )
+    mark = watermark.compose(
+        watermark.resolve(settings, say),
+        trajectory.get("content_w", 0), trajectory.get("content_h", 0),
+        resolved, remap.output_duration, say,
+    )
     ass_doc = ass_mod.build_ass(
         cap_words, clip_events_out, preset_name=preset,
         emoji_ok=emoji_ok, overrides=cap_overrides,
+        extra_styles=title_styles + mark.styles,
+        extra_events=title_events + mark.events,
     )
     ass_path.write_text(ass_doc, encoding="utf-8")
 
@@ -357,6 +377,12 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
 
     ov_inputs, ov_chains, vlabel = _overlay_filters(edit.overlays, 1, renderer.OUT_W, renderer.OUT_H)
     graph.extend(ov_chains)
+    if mark.vf:
+        # After the visual overlays and before the caption burn: captions
+        # draw over the mark, never under it. Its wm_* labels collide with
+        # nothing this graph or the blur fill names.
+        graph.append(f"[{vlabel}]{mark.vf}[wm_on]")
+        vlabel = "wm_on"
     if captions_ok:
         graph.append(
             f"[{vlabel}]subtitles=filename={renderer._q(ass_path)}:fontsdir={renderer._q(ass_mod.FONTS_DIR)}[vf]"  # noqa: SLF001
@@ -402,18 +428,30 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         "edited": True,
     }
 
-    # keep render.json in sync so the review UI reflects the new file
-    render_ckpt_path = job_dir / "render.json"
-    if render_ckpt_path.exists():
-        ckpt = json.loads(render_ckpt_path.read_text(encoding="utf-8"))
-        outputs = ckpt["data"].get("outputs", [])
-        for i, o in enumerate(outputs):
-            if o["clip"] == clip_idx:
-                outputs[i] = entry
-                break
-        else:
-            outputs.append(entry)
-        tmp = render_ckpt_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(ckpt), encoding="utf-8")
-        tmp.replace(render_ckpt_path)
+    _sync_render_checkpoint(job_dir, clip_idx, entry)
     return entry
+
+
+def _sync_render_checkpoint(job_dir: Path, clip_idx: int, entry: dict) -> None:
+    """Keep render.json in sync so the review UI reflects the new file.
+
+    The clip's OWN entry is the one without the `montage` marker: a ranking
+    video's entry carries its rank-1 clip's index (D-18), and replacing it
+    with that clip's editor render would make the review panel show a
+    single clip where the ranking video was. Matched by the marker, never
+    by position — the stage writes clip entries first, but a rule the data
+    enforces beats a rule an output order remembers."""
+    render_ckpt_path = job_dir / "render.json"
+    if not render_ckpt_path.exists():
+        return
+    ckpt = json.loads(render_ckpt_path.read_text(encoding="utf-8"))
+    outputs = ckpt["data"].get("outputs", [])
+    for i, o in enumerate(outputs):
+        if o.get("clip") == clip_idx and not o.get("montage"):
+            outputs[i] = entry
+            break
+    else:
+        outputs.append(entry)
+    tmp = render_ckpt_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(ckpt), encoding="utf-8")
+    tmp.replace(render_ckpt_path)

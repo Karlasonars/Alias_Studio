@@ -266,7 +266,9 @@ export default function App() {
       gameplayAmount: number,
       letterboxFill: string,
       ranking: boolean,
-      rankingCount: number
+      rankingCount: number,
+      watermarkImage: string,
+      watermarkText: string
     ) => {
       // While a job is running this only enqueues - the running job's log
       // and stage bars must not be cleared out from under it.
@@ -282,7 +284,10 @@ export default function App() {
       }
       setEnqueueing((n) => n + 1)
       try {
-        await api.enqueueJob(source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
+        await api.enqueueJob(
+          source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+          watermarkImage, watermarkText
+        )
         if (!wasIdle) {
           // A busy-enqueue used to change nothing on screen - the rail
           // refreshes only on run events, so six presses queued six
