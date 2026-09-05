@@ -16,6 +16,15 @@ renders from job settings and the stage says so. No per-clip files survive:
 the segment files are the concat inputs and are deleted once the montage
 verifies (D-17: one format, not both). The caption documents stay, as they
 do for clips.
+
+Moment labels (E18-F04): before the segment loop, every moment gets the
+one to three words that sit next to its number, from copywriting/labels.py
+— one LLM call per moment, burned into the segment's caption document
+with the rest of the list. Labels are an OUTPUT of the render, not a
+setting of it: generated once, kept on the checkpoint (`ranking.labels`),
+reused verbatim by every later render of the same moment, and never part
+of artifacts_ok — a model's word choice must not invalidate a render, and
+the same job re-rendered must burn the same words. See moment_labels.
 """
 
 from __future__ import annotations
@@ -25,10 +34,12 @@ from pathlib import Path
 
 from ..captions import ass as ass_mod
 from ..captions import ranking as overlay
+from ..copywriting import labels as labels_mod
 from ..jobs.queue import StageContext, StageError
+from ..scoring import llm as llm_mod
 from . import renderer
-from .inputs import RenderInputs, clip_captions, clip_style
-from .stage import _fills_for, _has_structural_edits
+from .inputs import RenderInputs, clip_captions, clip_style, clip_transcript
+from .stage import _fills_for, _has_structural_edits, _previous_render
 
 MONTAGE_NAME = "ranking.mp4"
 SEGMENT_NAME = "ranking_seg_{:02d}"
@@ -52,6 +63,109 @@ def ranked_clips(clips: list[dict], trajectories: dict[str, str], count: int) ->
         if trajectories.get(str(i)) and Path(trajectories[str(i)]).exists()
     ]
     return have[: max(0, int(count))]
+
+
+# A stored label is reused only for the SAME moment. Clip indices are
+# positions in score.json, and a scoring re-run can put a different moment
+# at the same position; reusing by index alone would burn the old moment's
+# words onto the new one's pictures, silently. Bounds identify the moment,
+# with the tolerance _has_structural_edits already uses for "same bounds".
+MOMENT_TOLERANCE_S = 0.05
+
+
+def _same_moment(stored: object, clip: dict) -> bool:
+    try:
+        return (
+            isinstance(stored, dict)
+            and bool(stored.get("text"))
+            and abs(float(stored["start"]) - float(clip["start"])) <= MOMENT_TOLERANCE_S
+            and abs(float(stored["end"]) - float(clip["end"])) <= MOMENT_TOLERANCE_S
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def moment_labels(
+    ctx: StageContext, inputs: RenderInputs, ranked: list[int]
+) -> tuple[dict[str, dict | None], dict[str, str]]:
+    """The label per moment, keyed by clip index like `fills`: an entry
+    {text, grounded_in, start, end}, or None for a moment without one.
+    Second value: why each None is a None, same keys, the rank named in
+    the text — "why is number 3 blank" is the question it answers.
+
+    Generated ONCE. A label is an output, not a setting: the last render's
+    checkpoint is read first and every label it holds for the same moment
+    (bounds, not just index — _same_moment) is reused verbatim, so a
+    re-render burns the same words and spends no call. Only moments
+    without a stored label are asked for: new ones after a count change,
+    and ones that failed last time — a None is a failure, not a label, so
+    a re-run of the stage retries it (a cached render never reaches here
+    and keeps the blank). The client is built only when there is something
+    to ask, so a fully-reused run makes no network call at all. Nothing
+    regenerates a label that exists: there is no editing in this version
+    (D-17).
+
+    Failure is a blank entry, never a failed render (§5.9). A client that
+    cannot be built blanks every pending moment, said once; a call that
+    fails blanks that moment, said once; a failure the client marks fatal
+    (a rejected key, no quota) blanks the rest without asking, since every
+    further call would fail the same way.
+    """
+    previous = (_previous_render(ctx.job_dir).get("ranking") or {}).get("labels")
+    previous = previous if isinstance(previous, dict) else {}
+    labels: dict[str, dict | None] = {}
+    errors: dict[str, str] = {}
+    pending: list[int] = []
+    for i in ranked:
+        stored = previous.get(str(i))
+        if _same_moment(stored, inputs.clips[i]):
+            labels[str(i)] = stored
+        else:
+            pending.append(i)
+    if not pending:
+        return labels, errors
+
+    def blank(i: int, reason: str) -> None:
+        labels[str(i)] = None
+        errors[str(i)] = f"moment #{ranked.index(i) + 1}: {reason}"
+
+    ctx.emit(-1, f"Naming {len(pending)} moment{'s' if len(pending) != 1 else ''}…")
+    try:
+        client = llm_mod.make_client(ctx.settings.llm_mode, ctx.settings.gemini_model)
+    except Exception as err:  # noqa: BLE001 — a label is optional; the montage is not
+        for i in pending:
+            blank(i, str(err))
+        ctx.emit(-1, f"Moment labels unavailable — the list shows numbers only. {err}")
+        return labels, errors
+
+    for n, i in enumerate(pending):
+        clip = inputs.clips[i]
+        start, end = float(clip["start"]), float(clip["end"])
+        out = labels_mod.generate(
+            client, clip_transcript(inputs, start, end), clip.get("summary", "")
+        )
+        if out["label"]:
+            labels[str(i)] = {
+                "text": out["label"],
+                "grounded_in": out["grounded_in"],
+                "start": start,
+                "end": end,
+            }
+            continue
+        reason = out["error"] or (
+            f"the model's answer {out['proposed']!r} was rejected ({out['rejected_because']})"
+        )
+        blank(i, reason)
+        if out["fatal"]:
+            for j in pending[n + 1:]:
+                blank(j, reason)
+            ctx.emit(-1, f"Moment labels unavailable — the list shows numbers only. {reason}")
+            break
+        ctx.emit(
+            -1,
+            f"Moment #{ranked.index(i) + 1}: no label — its entry shows the number only. {reason}",
+        )
+    return labels, errors
 
 
 def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -> dict:
@@ -88,6 +202,12 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
     job_preset = ass_mod.resolve_preset(settings.caption_preset, settings.captions.overrides)
     styles = overlay.overlay_styles(job_preset, band)
 
+    # The text next to each number, before the first encode: it is burned
+    # into every segment's document. In rank order, as the overlay draws
+    # its rows; a None row draws the number alone.
+    labels, label_errors = moment_labels(ctx, inputs, ranked)
+    label_texts = [(labels.get(str(i)) or {}).get("text") for i in ranked]
+
     fills = _fills_for([str(i) for i in order], inputs.clip_edits, settings)
     segment_paths: list[Path] = []
     segments: list[dict] = []
@@ -111,7 +231,7 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
             words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
             overrides=style["overrides"],
             extra_styles=styles,
-            extra_events=overlay.overlay_events(job_preset, band, k, duration),
+            extra_events=overlay.overlay_events(job_preset, band, k, duration, labels=label_texts),
         )
         ass_path.write_text(ass_doc, encoding="utf-8")
 
@@ -198,5 +318,10 @@ def render_montage(ctx: StageContext, inputs: RenderInputs, fingerprint: dict) -
             "title": overlay.title_for(n),
             "segments": segments,
             "band": {"top": band.top, "line_h": band.line_h, "boxed": band.boxed},
+            # E18-F04. An output, not a fingerprint: artifacts_ok never reads
+            # these. `labels` is what the next render reuses (moment_labels);
+            # `label_errors` is why a blank entry is blank.
+            "labels": labels,
+            "label_errors": label_errors,
         },
     }
