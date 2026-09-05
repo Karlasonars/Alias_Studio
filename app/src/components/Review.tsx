@@ -52,13 +52,19 @@ function fmtTime(t: number): string {
 export default function Review({ results, onBack, onRestyle }: Props) {
   const outputs = results.render?.outputs ?? []
   const clips = results.score?.clips ?? []
-  // E18: a ranking job has ONE output, the montage. Its entry's `clip` is
-  // the rank-1 index, which is exactly what the audit should show; what it
-  // must not offer is the clip editor, whose re-render makes a standalone
-  // file that has nothing to do with the montage.
+  // E18/D-18: a ranking job's outputs are its clips, as always, followed by
+  // its ranking videos. A montage entry's `clip` is the rank-1 index, which
+  // is exactly what the audit should show; what it must not offer is the
+  // clip editor, whose re-render makes a standalone file that has nothing
+  // to do with the montage. The clips keep the editor (E18-F05).
   const ranking = results.render?.ranking
+  const clipCount = outputs.filter((o) => !o.montage).length
+  const montageCount = outputs.length - clipCount
+  const montageOf = (out: RenderOutput) => ranking?.montages?.find((m) => m.path === out.path)
   const [selected, setSelected] = useState(0)
-  const [exported, setExported] = useState<Record<number, string>>({})
+  // Keyed by path, not clip index: a montage entry shares its rank-1
+  // clip's index, and exporting one must not mark the other as exported.
+  const [exported, setExported] = useState<Record<string, string>>({})
   const currentPreset = results.render?.caption_preset ?? 'classic'
   const currentCameraMode = results.camera?.camera_settings?.speaker_change ?? 'cut'
   const currentGameplayAmount = results.camera?.camera_settings?.gameplay_amount ?? 0
@@ -83,11 +89,12 @@ export default function Review({ results, onBack, onRestyle }: Props) {
   }, [outputs, clips, selected])
 
   async function doExport(out: RenderOutput, clip: Clip) {
+    const title = results.ingest?.title ?? 'clip'
     const dest = await api.exportClip(
       out.path,
-      `${results.ingest?.title ?? 'clip'} ${fmtTime(clip.start)}`
+      out.montage && out.ranks ? `${title} top ${out.ranks[0]}-${out.ranks[1]}` : `${title} ${fmtTime(clip.start)}`
     )
-    setExported((prev) => ({ ...prev, [out.clip]: dest }))
+    setExported((prev) => ({ ...prev, [out.path]: dest }))
   }
 
   if (editing !== null) {
@@ -115,8 +122,8 @@ export default function Review({ results, onBack, onRestyle }: Props) {
         <div className="review-title-block">
           <h1 className="review-title">{results.ingest?.title ?? results.job_id}</h1>
           <p className="review-sub mono">
-            {ranking && outputs[0]
-              ? `ranking video · ${ranking.rendered} moments · ${fmtTime(outputs[0].duration)}`
+            {ranking
+              ? `${clipCount} clips · ${montageCount} ranking video${montageCount === 1 ? '' : 's'}`
               : `${outputs.length} clips`}{' '}
             · scored by {results.score?.model ?? '—'} ·{' '}
             {results.score?.llm_mode === 'ollama' ? 'LOCAL ESTIMATE' : 'standard confidence'} ·{' '}
@@ -127,6 +134,9 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               ? ' · shock scored on fallback arousal (no SER model)'
               : ''}
           </p>
+          {/* E18-F06: one ranking video instead of two is a degradation the
+              user must be able to see, and why — the stage wrote it down. */}
+          {ranking?.note && <p className="review-sub mono">{ranking.note}</p>}
         </div>
       </header>
 
@@ -183,7 +193,7 @@ export default function Review({ results, onBack, onRestyle }: Props) {
           const clip = clips[out.clip]
           return (
             <button
-              key={out.clip}
+              key={out.path}
               className={`film-card ${i === selected ? 'film-on' : ''}`}
               onClick={() => setSelected(i)}
               style={{ animationDelay: `${i * 50}ms` }}
@@ -192,7 +202,11 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               <span className="film-time mono">
                 {out.montage ? fmtTime(out.duration) : clip ? fmtTime(clip.start) : ''}
               </span>
-              <span className="film-platform">{out.montage ? ranking?.title ?? 'ranking' : out.best_platform}</span>
+              <span className="film-platform">
+                {out.montage
+                  ? `${montageOf(out)?.title ?? 'ranking'}${out.ranks ? ` · ${out.ranks[0]}–${out.ranks[1]}` : ''}`
+                  : out.best_platform}
+              </span>
             </button>
           )
         })}
@@ -215,10 +229,10 @@ export default function Review({ results, onBack, onRestyle }: Props) {
                 </button>
               )}
               <button className="btn-primary" onClick={() => doExport(pair.out!, pair.clip!)}>
-                {exported[pair.out.clip] ? 'EXPORTED ✓' : 'EXPORT MP4'}
+                {exported[pair.out.path] ? 'EXPORTED ✓' : 'EXPORT MP4'}
               </button>
-              {exported[pair.out.clip] && (
-                <span className="mono export-path">{exported[pair.out.clip]}</span>
+              {exported[pair.out.path] && (
+                <span className="mono export-path">{exported[pair.out.path]}</span>
               )}
             </div>
           </div>

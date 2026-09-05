@@ -117,8 +117,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # before. Without the flag, resume behaves exactly as it always has.
     if getattr(args, "from_stage", None):
         queue.invalidate_stage(job, args.from_stage)
+    # Every settings flag resume accepts must be listed here: one that is
+    # parsed but not listed is accepted and silently changes nothing (§5.2).
+    # `--letterbox-fill` was exactly that from E6-F09 until this line.
     if (
         args.llm or args.captions or args.camera or args.gameplay_amount is not None
+        or getattr(args, "letterbox_fill", None)
         or getattr(args, "ranking", None) is not None
         or getattr(args, "ranking_count", None) is not None
     ):
@@ -690,11 +694,11 @@ def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
     enqueueing a job cannot drift from running one."""
     parser.add_argument(
         "--ranking", choices=["on", "off"], default=None,
-        help="on: emit ONE ranking video of the top moments instead of individual clips",
+        help="on: also emit the ranking videos (moments 1..N and N+1..2N) beside the clips",
     )
     parser.add_argument(
         "--ranking-count", dest="ranking_count", type=int, default=None,
-        help="how many top moments the ranking video plays (default 5)",
+        help="how many top moments one ranking video plays; the second takes the next N (default 5)",
     )
 
 

@@ -1,6 +1,6 @@
 # Alias Studio — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.5 · **Datums:** 2026-08-25 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
+**Versija:** 1.7 · **Datums:** 2026-09-05 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -2040,7 +2040,7 @@ Bez šī E17 ir tikai variantu ģenerators.
 
 *Pieņemšanas kritēriji:*
 - Panelī pirms CUT IT ir izvēle **ranga video**, blakus pārējām paneļa vadīklām, ar to pašu ķēdi (panelis → `enqueue_job` → `jobs create` → `_apply_setting_flags`) un karogu uz `run`, `resume` un `jobs create`.
-- Kad režīms ir ieslēgts, darbs izdod **vienu failu**, ne atsevišķus klipus. Tas ir apzināts lēmums: lietotājs izvēlas formātu, ne abus.
+- Kad režīms ir ieslēgts, darbs izdod **gan** parastos klipus, **gan** ranga video — sk. [E18-F05](#e18--ranga-video) un D-18. Sākotnējais "viens fails" kritērijs ir atcelts.
 - Momentu skaits ir izvēlams; noklusējums ir **5**.
 - Režīma maiņa noveco renderēšanas kontrolpunktu, jo izvade ir cita. Tā nedrīkst novecot nevienu agrāko posmu — atlase, vērtējums un kamera ir tie paši.
 
@@ -2074,6 +2074,26 @@ Bez šī E17 ir tikai variantu ģenerators.
 - Ja etiķete neuzģenerējas, fragments joprojām spēlē un tā numurs paliek tukšs — formāts degradējas, nevis krīt (§5.9).
 - Ja etiķete neiztur formāta filtru, modelis dabū **vienu** atkārtotu mēģinājumu ar stingrāku norādi. Neizdevies izsaukums (tīkls, API, ķēdes pārtraucējs) netiek atkārtots — tas ir cits kļūmes veids.
 - **Rediģēšana šajā versijā netiek būvēta.** Ja izrādās, ka lietotājs etiķetes pārraksta katru reizi, tā ir nākamā prasība, ne šī.
+
+---
+
+**E18-F05 · Ranga režīms neaizstāj klipus** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Ieslēgts ranga režīms izdod **gan** parastos klipus, **gan** ranga video. Tā nav izvēle starp diviem formātiem (D-18).
+- Kontrolpunkta izvades forma atkal satur pa ierakstam katram klipam plus ranga ierakstus. Trīs lasītāji ārpus posma — `_previous_outputs`, `drop_reproducible_outputs` un Review — atgriežas pie jauktās formas.
+- Klipu redaktors strādā ar parastajiem klipiem kā vienmēr. Ranga video redaktora nav.
+- Režīma ieslēgšana nedrīkst novecot nevienu posmu pirms renderēšanas.
+
+---
+
+**E18-F06 · Divi ranga video no viena avota** · `P1` · P1
+
+*Pieņemšanas kritēriji:*
+- No viena darba top **divi** ranga video: pirmais no momentiem 1–5, otrais no 6–10.
+- Momentu skaits vienā video ir izvēlams; noklusējums 5. Otrais ņem nākamos N.
+- Ja finālistu nepietiek diviem, top viens, un lietotājs redz rindu, kāpēc. Formāts degradējas, nevis krīt (§5.9).
+- Abi nes to pašu virsrakstu un to pašu pārklājuma ģeometriju, lai izskatītos kā viena sērija.
 
 ---
 
@@ -3433,6 +3453,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 | **D-16** | **Produkta mērķis ir maksimizēt klipu vērtību pa divām svirām — atlase un iepakojums; mēra veiktspējas rādītājus, ne naudu; vērtības cilpa pārceļas uz v1.1** | Īpašnieka lēmums (2026-08-22). Produkts ir operatoriem, kuri zina, ko dara; viņu problēma nav "kā izgriezt klipus", bet "cik vērtības no ierakstītās stundas". Sekas: jauna vīzija ([2.1](#21-vīzijas-formulējums)), jauna 4. īpašība ([2.3](#23-ceturtā-īpašība-ko-šis-dokuments-pievieno)), jauna [2.7](#27-vērtības-cilpa), jauna epika [E17](#e17--iepakojuma-eksperimenti), [E11](#e11--vērtības-cilpa-un-kalibrācija) paplašināta un pacelta uz v1.1 `P0`, jauna [E4-F09](#e4--momentu-atlase-un-analīze), nomainīta ziemeļzvaigzne ([33.1](#331-ziemeļzvaigzne)), pārkārtots ceļvedis, jauni riski R16–R19. Nauda noraidīta kā mērs: atkarīga no nišas un līgumiem, prasa manuālu ievadi; noturība nāk no API un ir salīdzināma. |
 | **D-15** | **Gemini atslēgas vai Ollama prasība paliek pirmajā ekrānā; nav "bez AI" režīma; P4 persona atcelta** | Īpašnieka lēmums (2026-08-22). Vārti nav berze, ko labot — tie ir līgums: vērtējums bez LLM nav vērts auditēšanu, un tas ir pretrunā ar produkta 2. īpašību. Degradēts trešais ceļš būtu uzturēšanas parāds bez ieņēmumiem ([R15](#352-tehniskie-riski)) apmaiņā pret lietotājiem, kuri spriež par produktu pēc tā sliktākās versijas. Abi ceļi ir bezmaksas, tāpēc tā nav maksas siena. Sekas: nepilnības A3 un E1 atceltas, [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) pārrakstīta no vārtu noņemšanas uz to izmaksu samazināšanu, P4 izņemts no mērķauditorijas ([4.2](#42-ieejas-slieksnis-ir-dizaina-izvēle)). |
 | **D-17** | **Ranga video ir atsevišķs izvades formāts, ne klipu variants; ieslēgts — darbs izdod vienu failu; saraksts atklājas spēlēšanas secībā; etiķetes netiek rediģētas** | Īpašnieka lēmums (2026-09-03). Rangs jau tiek izrēķināts `scoring` posmā un šodien tiek izmests pēc atlases; šis formāts to parāda skatītājam. Trīs izvēles, katra sašaurina apjomu: **tikai ranga video**, jo divu izvades formātu vienā darbā nozīmētu divus renderēšanas ceļus un divus kontrolpunktus; **spēlēšanas secībā**, jo nezināmais saraksts ir formāta āķis, un aizpildīšana no 1 uz N to nogalina; **bez rediģēšanas**, jo etiķešu redaktors ir atsevišķa saskarne, un pirms tam nav zināms, vai lietotājs tās vispār pārraksta. Sekas: jauna epika [E18](#e18--ranga-video). |
+| **D-18** | **Ranga režīms izdod gan ranga video, gan parastos klipus; no viena avota top divi ranga video (momenti 1–5 un 6–10)** | Īpašnieka lēmums (2026-09-05), pieņemts pēc pirmās versijas redzēšanas. D-17 daļa "tikai ranga video, ne abi" ar šo ir **atcelta**; pārējās D-17 daļas paliek spēkā — atklāšana spēlēšanas secībā un etiķešu rediģēšanas neesamība. Iemesls: klipi un ranga video nav alternatīvas, tie ir divi produkti no vienas avota stundas, un izvēle starp tiem nozīmēja otru pilnu darbu par to pašu materiālu. Sekas: E18-F01 kritērijs par vienu failu pārrakstīts, jaunas E18-F05 un E18-F06, renderēšanas kontrolpunkta izvades forma atgriežas pie jauktās. |
 
 ### 37.5. Atsauces
 
@@ -3451,7 +3472,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 
 ## Dokumenta beigas
 
-**Versija 1.6 · 2026-09-03**
+**Versija 1.7 · 2026-09-05**
 
 Šis dokuments ir dzīvs. Katra prasība, kas tiek realizēta, tiek atzīmēta; katra, kas atkrīt, tiek marķēta `ATCELTS` ar iemeslu, saglabājot ID. Lēmumu žurnāls ([37.4](#374-lēmumu-žurnāls)) tiek papildināts, nevis pārrakstīts.
 
@@ -3461,6 +3482,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.7 | 2026-09-05 | **D-18 — ranga režīms neaizstāj klipus, un no viena avota top divi ranga video.** D-17 daļa "tikai ranga video, ne abi" atcelta pēc pirmās versijas redzēšanas; pārējās D-17 daļas paliek. [E18-F01](#e18--ranga-video) kritērijs par vienu failu pārrakstīts; jaunas [E18-F05](#e18--ranga-video) (klipi paliek) un [E18-F06](#e18--ranga-video) (momenti 1–5 un 6–10; viens video ar rindu, kāpēc, ja finālistu nepietiek). |
 | 1.6 | 2026-09-03 | **Jauna epika [E18](#e18--ranga-video) — Ranga video** (D-17). Pirmā prasība, kas maina izvades vienību: viens fails no daudziem logiem, ar pastāvīgu numurētu pārklājumu. Četras prasības (F01–F04); F04 ir `P2`. Trīs īpašnieka lēmumi fiksēti D-17: tikai ranga video (ne abi), atklāšana spēlēšanas secībā, etiķešu rediģēšana netiek būvēta šajā versijā. |
 | 1.5 | 2026-08-25 | **Nepilnība E7 koriģēta pēc tiešas pārbaudes** — indekss vienmēr bijis LF (112 failu, 0 CRLF); problēma bija platformu divdomība, ne bojāts repozitorijs. `P0` → `P1`, izdarīts commit `95f493d`. Pievienota piezīme par audita ticamību [6.3](#63-kopsavilkums). Repozitorijā pievienoti `CLAUDE.md`, `AGENT-WORKPLAN.md`, `test_house_rules.py`, `ruff.toml`. |
 | 1.4 | 2026-08-22 | **Pārpozicionēšana uz vērtības maksimizēšanu** (D-16). Jauna vīzija, jauna 4. īpašība ("katrs lēmums tiek pārbaudīts pret rezultātu"), jauna [2.7](#27-vērtības-cilpa) vērtības cilpa, jauna [Plaisa E](#32-kur-ir-plaisa), jauna epika [E17](#e17--iepakojuma-eksperimenti) (6 prasības), [E11](#e11--vērtības-cilpa-un-kalibrācija) pārdēvēta un paplašināta (+2 prasības, F02/F03 → `P0`), jauna [E4-F09](#e4--momentu-atlase-un-analīze), [E10-F03](#e10--eksports-un-publicēšana) → `P0`. Nomainīta ziemeļzvaigzne uz noturības svērtu izvadi uz avota stundu; pārkārtots ceļvedis (v1.1 = cilpa, v1.2 = satura kvalitāte); jauni riski R16–R19 ar definētu atmešanas slieksni. |

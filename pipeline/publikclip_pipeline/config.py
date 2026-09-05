@@ -257,21 +257,27 @@ class PerformanceSettings:
 
 
 # ---------------------------------------------------------------------------
-# Ranking video (E18): ONE vertical file from the top-N finalists, played
-# back to back under a numbered list that fills in as the viewer watches.
-# Consumed by render/stage.py + render/ranking.py and nowhere earlier — it is
-# an output-format switch, so it must never reach selection, scoring or the
-# camera pass (E18-F01: turning it on invalidates render and nothing before).
+# Ranking videos (E18): vertical files from the top finalists, played back
+# to back under a numbered list that fills in as the viewer watches — two of
+# them, moments 1..N and N+1..2N (E18-F06), beside the clips the job renders
+# anyway (D-18). Consumed by render/stage.py + render/ranking.py and nowhere
+# earlier — it is an output switch, so it must never reach selection,
+# scoring or the camera pass (E18-F01: turning it on invalidates render and
+# nothing before).
 
 
 @dataclass
 class RankingSettings:
-    # On: the job emits the montage instead of per-clip files — one format
-    # or the other, never both (D-17).
+    # On: the job emits the ranking videos AS WELL AS the per-clip files.
+    # D-17 said instead of; D-18 reversed that clause after the owner saw
+    # the first version — clips and ranking videos are two products of the
+    # same hour, and choosing meant running the job twice.
     enabled: bool = False
-    # How many of the finalists play. Deliberately NOT clips.select_count:
-    # that one sizes the visual pass and re-runs scoring when it changes.
-    # This one only picks the top N of what scoring already ranked.
+    # How many finalists play in ONE video; the second takes the next N.
+    # Deliberately NOT clips.select_count: that one sizes the visual pass
+    # and re-runs scoring when it changes. This one only slices what
+    # scoring already ranked — which is also why two videos need
+    # select_count >= 2N, and the stage says so when they do not have it.
     count: int = 5
 
 
