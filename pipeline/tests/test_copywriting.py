@@ -336,3 +336,111 @@ def test_a_fatal_llm_error_is_relayed_as_fatal():
 
     out = labels.generate(Rejected(), "t", "s")
     assert out["label"] is None and out["fatal"] is True
+
+
+# --- one retry on a rejected answer (E18-F04 amendment)
+
+
+class SequenceClient:
+    """Answers each call with the next canned item, so a retry can be told
+    apart from the first ask; an item that is an exception is raised. What
+    is left unconsumed is as telling as what was asked."""
+
+    def __init__(self, *items):
+        self.items = list(items)
+        self.prompts: list[str] = []
+
+    def generate_json(self, prompt, schema, images=None):
+        self.prompts.append(prompt)
+        item = self.items.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def test_a_rejected_answer_gets_one_retry_that_names_the_reason_and_the_limit():
+    """The test this amendment exists for: one over-long answer is no
+    longer a permanently blank number."""
+    client = SequenceClient(
+        {"label": "he finally admits the truth", "grounded_in": "g"},
+        {"label": "the confession", "grounded_in": "g"},
+    )
+    out = labels.generate(client, "transcript", "summary")
+    assert out["label"] == "the confession"
+    assert len(client.prompts) == 2
+    retry = client.prompts[1]
+    assert "'he finally admits the truth'" in retry and "5 words" in retry
+    assert f"at most {labels.MAX_WORDS} words" in retry
+    assert "Transcript:\ntranscript" in retry  # the same ask again, plus the correction
+    assert out["attempts"] == [
+        {"proposed": "he finally admits the truth", "rejected_because": "longer than 3 words"}
+    ]
+
+
+def test_too_long_retries_on_the_same_path_naming_the_character_limit():
+    client = SequenceClient(
+        {"label": "extraordinarily unbelievable", "grounded_in": "g"},
+        {"label": "bath bomb", "grounded_in": "g"},
+    )
+    out = labels.generate(client, "t", "s")
+    assert out["label"] == "bath bomb" and len(client.prompts) == 2
+    assert "28 characters" in client.prompts[1]
+    assert f"at most {labels.MAX_CHARS} characters" in client.prompts[1]
+
+
+def test_two_rejected_answers_are_none_and_both_are_recorded():
+    client = SequenceClient(
+        {"label": "he finally admits the truth", "grounded_in": "g"},
+        {"label": "extraordinarily unbelievable", "grounded_in": "g"},
+        {"label": "never asked", "grounded_in": "g"},
+    )
+    out = labels.generate(client, "t", "s")
+    assert out["label"] is None
+    assert len(client.prompts) == 2  # exactly one retry, not a loop
+    assert [a["proposed"] for a in out["attempts"]] == [
+        "he finally admits the truth", "extraordinarily unbelievable",
+    ]
+    assert [a["rejected_because"] for a in out["attempts"]] == [
+        "longer than 3 words", f"longer than {labels.MAX_CHARS} characters",
+    ]
+
+
+def test_a_raising_client_is_called_exactly_once():
+    """The guard against the wrong kind of retry. A failed CALL is not a
+    rejected answer: that endpoint is already failing and a second call
+    re-spends on it. Asserted on the count, not the outcome — the outcome
+    (None) would look the same with a retry."""
+    client = SequenceClient(RuntimeError("model down"), {"label": "bath bomb", "grounded_in": "g"})
+    out = labels.generate(client, "t", "s")
+    assert len(client.prompts) == 1
+    assert out["label"] is None and out["attempts"] == [] and "model down" in out["error"]
+
+
+def test_a_retry_that_fails_as_a_call_is_not_retried_again():
+    client = SequenceClient(
+        {"label": "he finally admits the truth", "grounded_in": "g"},
+        RuntimeError("model down"),
+        {"label": "never asked", "grounded_in": "g"},
+    )
+    out = labels.generate(client, "t", "s")
+    assert len(client.prompts) == 2
+    assert out["label"] is None and "model down" in out["error"]
+    assert [a["proposed"] for a in out["attempts"]] == ["he finally admits the truth"]
+
+
+def test_an_accepted_answer_is_not_retried():
+    client = SequenceClient(
+        {"label": "bath bomb", "grounded_in": "g"}, {"label": "never asked", "grounded_in": "g"}
+    )
+    out = labels.generate(client, "t", "s")
+    assert out["label"] == "bath bomb" and len(client.prompts) == 1 and out["attempts"] == []
+
+
+def test_punctuation_and_empty_answers_get_the_same_second_chance():
+    """Same class of failure — a successful call, an unusable answer — so
+    the same one retry, each naming its own reason."""
+    for bad, said in (({"label": "bath bomb."}, "sentence punctuation"), ({"label": ""}, "empty")):
+        client = SequenceClient(bad, {"label": "bath bomb", "grounded_in": "g"})
+        out = labels.generate(client, "t", "s")
+        assert out["label"] == "bath bomb" and len(client.prompts) == 2, bad
+        assert said in client.prompts[1], bad

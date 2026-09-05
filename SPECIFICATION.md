@@ -400,7 +400,10 @@ moment.
 one LLM call per moment, the title engine's honesty rule in the prompt and
 a filter behind it (over three words, sentence punctuation, empty, over the
 column budget: rejected, never trimmed, because the text goes into pixels
-nobody can edit). A label is an output of the render, not a setting of it:
+nobody can edit). An answer the filter rejects earns exactly one retry whose
+prompt names the actual reason and limit; a failed call — network, API, the
+breaker — never does, because that endpoint is already failing and a second
+call would re-spend on it. A label is an output of the render, not a setting of it:
 `ranking.labels` keys each moment's clip index to `{text, grounded_in,
 start, end}`, a later render reuses every stored label for the same moment
 (bounds, not just index) verbatim and builds no client when nothing is

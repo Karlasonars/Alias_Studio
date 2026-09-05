@@ -2072,6 +2072,7 @@ Bez šī E17 ir tikai variantu ģenerators.
 - Katram momentam tiek uzģenerēta īsa etiķete — divi līdz trīs vārdi, ne teikums (piemēram *"bath bomb"*, *"went flying"*).
 - Etiķetes raksta tā pati LLM mašīnērija, kas jau raksta virsrakstus un āķus (`copywriting/`), ne jauns ceļš.
 - Ja etiķete neuzģenerējas, fragments joprojām spēlē un tā numurs paliek tukšs — formāts degradējas, nevis krīt (§5.9).
+- Ja etiķete neiztur formāta filtru, modelis dabū **vienu** atkārtotu mēģinājumu ar stingrāku norādi. Neizdevies izsaukums (tīkls, API, ķēdes pārtraucējs) netiek atkārtots — tas ir cits kļūmes veids.
 - **Rediģēšana šajā versijā netiek būvēta.** Ja izrādās, ka lietotājs etiķetes pārraksta katru reizi, tā ir nākamā prasība, ne šī.
 
 ---
