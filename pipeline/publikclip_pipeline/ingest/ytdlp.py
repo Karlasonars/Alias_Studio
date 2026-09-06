@@ -92,6 +92,49 @@ def _clean_error(stderr: str) -> str:
     return ""
 
 
+STALLED_MESSAGE = (
+    "yt-dlp stalled (no output for a while) and was stopped. Check your connection and retry."
+)
+# How much of a failure without an ERROR: line the user gets to see: enough
+# to name the exception or the refused request, not the 64 KB we keep.
+STDERR_TAIL_LINES = 5
+
+
+def stderr_tail(stderr: str, limit: int = STDERR_TAIL_LINES) -> list[str]:
+    """The last `limit` non-empty lines of stderr, stripped."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return lines[-limit:] if limit > 0 else []
+
+
+def failure_message(code: int, stderr: str, *, stalled: bool) -> str:
+    """What the user is told when yt-dlp fails, in this order:
+
+    1. yt-dlp's own ERROR: line, cleaned — it knows why better than we do.
+    2. The stall, when OUR watchdog killed the process. `stalled` is the
+       watchdog's word, not an exit-code guess: this used to test for -9
+       and -15, the POSIX signal numbers, and on Windows `Popen.kill()`
+       exits with 1, so the one message that helps sat unreachable on the
+       platform the app ships to. Knowing beats inferring.
+    3. The tail of whatever yt-dlp did say. Before this, a failure without
+       an ERROR: line was reported as a bare exit code and everything the
+       process printed — the traceback, the refused request — was thrown
+       away. A few lines, redacted here too (errors.describe redacts
+       again, and is the path the user sees it through — §5.11).
+    4. The bare exit code, when there was nothing at all.
+    """
+    cleaned = _clean_error(stderr)
+    if cleaned:
+        return cleaned
+    if stalled:
+        return STALLED_MESSAGE
+    tail = stderr_tail(stderr)
+    if tail:
+        from .. import errors
+
+        return errors.redact(f"yt-dlp exited with code {code}. Its last output: " + " | ".join(tail))
+    return f"yt-dlp exited with code {code}"
+
+
 def is_auth_error(message: str) -> bool:
     """Site refused the anonymous request — surface a clear next step."""
     return bool(
@@ -136,12 +179,19 @@ def _run(
     for t in threads:
         t.start()
 
+    # Set by the watchdog when IT killed the process — the only reliable
+    # way to know. The exit code of a killed process is a platform detail
+    # (-9 on POSIX, 1 on Windows) and reading intent out of it is what
+    # left the stall message unreachable on Windows.
+    killed_by_watchdog = threading.Event()
+
     def _watchdog() -> None:
         while not done.is_set():
             activity.clear()
             if done.wait(inactivity_timeout):
                 return
             if not activity.is_set():
+                killed_by_watchdog.set()
                 proc.kill()
                 return
 
@@ -153,10 +203,7 @@ def _run(
         t.join(timeout=5)
     if code != 0:
         stderr = "".join(stderr_parts)[-65536:]
-        msg = _clean_error(stderr) or f"yt-dlp exited with code {code}"
-        if code in (-9, -15) and not _clean_error(stderr):
-            msg = "yt-dlp stalled (no output for a while) and was stopped. Check your connection and retry."
-        raise YtDlpError(msg)
+        raise YtDlpError(failure_message(code, stderr, stalled=killed_by_watchdog.is_set()))
     return "".join(stdout_parts)
 
 
@@ -210,7 +257,9 @@ def fetch_meta(url: str, progress: ProgressFn) -> UrlMeta:
     bin_path = ensure_ytdlp(progress)
 
     def _go() -> str:
-        return _run(bin_path, ["-J", "--no-playlist", "--no-warnings", url])
+        # No --no-warnings: see download() — the JSON is on stdout, a
+        # warning on stderr cannot touch it, and on failure it is the story.
+        return _run(bin_path, ["-J", "--no-playlist", url])
 
     out = _with_self_update_retry(bin_path, progress, _go)
     data = json.loads(out)
@@ -257,11 +306,18 @@ def download(url: str, out_path: Path, progress: ProgressFn) -> None:
     # nothing capable exists yet.
     ffmpeg_bin.ensure_capable(progress=progress)
     ffmpeg = ffmpeg_bin.ffmpeg()
+    # No --no-warnings, on either call: the flag drops every WARNING: line
+    # from stderr, and the stale-extractor symptoms the self-update retry
+    # exists for ("nsig extraction failed", "falling back on generic
+    # information extractor") arrive as warnings — the failure tail in
+    # failure_message would be guaranteed to miss the one class it is for.
+    # It protected nothing: the progress callback reads stdout alone
+    # (_run pumps stderr with no callback), so warnings never reached the
+    # display and never could.
     args = [
         "-f", DOWNLOAD_FORMAT,
         "--merge-output-format", "mp4",
         "--no-playlist",
-        "--no-warnings",
         "--newline",
         "--socket-timeout", "30",
     ]
