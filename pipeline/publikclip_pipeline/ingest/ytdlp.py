@@ -257,7 +257,9 @@ def fetch_meta(url: str, progress: ProgressFn) -> UrlMeta:
     bin_path = ensure_ytdlp(progress)
 
     def _go() -> str:
-        return _run(bin_path, ["-J", "--no-playlist", "--no-warnings", url])
+        # No --no-warnings: see download() — the JSON is on stdout, a
+        # warning on stderr cannot touch it, and on failure it is the story.
+        return _run(bin_path, ["-J", "--no-playlist", url])
 
     out = _with_self_update_retry(bin_path, progress, _go)
     data = json.loads(out)
@@ -304,11 +306,18 @@ def download(url: str, out_path: Path, progress: ProgressFn) -> None:
     # nothing capable exists yet.
     ffmpeg_bin.ensure_capable(progress=progress)
     ffmpeg = ffmpeg_bin.ffmpeg()
+    # No --no-warnings, on either call: the flag drops every WARNING: line
+    # from stderr, and the stale-extractor symptoms the self-update retry
+    # exists for ("nsig extraction failed", "falling back on generic
+    # information extractor") arrive as warnings — the failure tail in
+    # failure_message would be guaranteed to miss the one class it is for.
+    # It protected nothing: the progress callback reads stdout alone
+    # (_run pumps stderr with no callback), so warnings never reached the
+    # display and never could.
     args = [
         "-f", DOWNLOAD_FORMAT,
         "--merge-output-format", "mp4",
         "--no-playlist",
-        "--no-warnings",
         "--newline",
         "--socket-timeout", "30",
     ]

@@ -140,3 +140,49 @@ def test_the_surfaced_tail_is_redacted(monkeypatch):
         assert "AIzaSyD-FAKE" not in text
     assert "403 Forbidden" in info.cause          # the reason survives
     assert "key=[redacted]" in info.cause         # the shape, not the value
+
+
+NSIG_WARNING = "WARNING: [youtube] abc123: nsig extraction failed: Some formats may be missing"
+
+
+def _real_call(monkeypatch, proc: FakeProc) -> list[str]:
+    """Drive a public entry point down to Popen: the binary and ffmpeg
+    setup stubbed, the self-update retry already spent, and the argv
+    handed to Popen returned so the test can see the flags."""
+    seen: list[list[str]] = []
+
+    def popen(argv, **kw):
+        seen.append(list(argv))
+        return proc
+
+    monkeypatch.setattr(ytdlp.subprocess, "Popen", popen)
+    monkeypatch.setattr(ytdlp, "ensure_ytdlp", lambda progress: ytdlp.binary_path())
+    monkeypatch.setattr(ytdlp.ffmpeg_bin, "ensure_capable", lambda **kw: True)
+    monkeypatch.setattr(ytdlp.ffmpeg_bin, "ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(ytdlp, "_self_updated_this_run", True)
+    return seen
+
+
+@pytest.mark.parametrize("entry", ["download", "fetch_meta"])
+def test_a_warning_only_stderr_on_a_nonzero_exit_reaches_the_tail(monkeypatch, tmp_path, entry):
+    """The whole point of the tail: the stale-extractor symptoms the
+    self-update retry exists for arrive as WARNING: lines, and
+    --no-warnings dropped every one of them before this. The flag
+    protected nothing — the progress callback reads stdout alone — so it
+    is gone from both calls, and a warning-only failure now says why."""
+    proc = FakeProc(1, NSIG_WARNING + "\n")
+    seen = _real_call(monkeypatch, proc)
+    with pytest.raises(ytdlp.YtDlpError) as exc:
+        if entry == "download":
+            ytdlp.download("https://example.com/v", tmp_path / "media.mp4", lambda f, m: None)
+        else:
+            ytdlp.fetch_meta("https://example.com/v", lambda f, m: None)
+    assert len(seen) == 1 and "--no-warnings" not in seen[0]
+    assert "nsig extraction failed: Some formats may be missing" in str(exc.value)
+    assert errors.describe(exc.value).code == "download-failed"
+    # the rest of the invocation is what it was
+    if entry == "download":
+        assert seen[0][1:3] == ["-f", ytdlp.DOWNLOAD_FORMAT]
+        assert "--newline" in seen[0] and seen[0][-3:-1] == ["-o", str(tmp_path / "media.mp4")]
+    else:
+        assert seen[0][1:] == ["-J", "--no-playlist", "https://example.com/v"]
