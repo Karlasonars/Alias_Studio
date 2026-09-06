@@ -508,14 +508,21 @@ document. The story text is content, not a setting: `jobs create
 --story-file` validates it against `narrate/limits.py` before the job row
 exists and copies it into the job dir.
 
-**The story card (E20-F05, channel-card amendment).** A rounded card in the
-app's own design, laid out like a social post card but carrying the user's
-own channel: a header row (an avatar circle, `Settings.story.channel_name`
-beside it), the title in the caption preset's face sized by length, and a
-meta row carrying the narration's duration as `narrate` measured it — a real
-number placed where a post card puts engagement, so nothing on the card is
-invented. No other platform's logo or wordmark, no invented username, no
-vote, comment, share or view counts: a product constraint, not a style. The
+**The story card (E20-F05, channel-card amendment).** An opaque white rounded
+card with a soft blurred shadow, near-black ink, in the app's own design,
+laid out like a social post card but carrying the user's own channel: a
+header row (a 160 px avatar circle, `Settings.story.channel_name` in bold
+beside it), the title in the caption preset's face in sentence case whatever
+the preset's `uppercase` says, sized by length, and a bottom row where a post
+card puts its engagement: a bare heart glyph, a bare share glyph (ASS
+drawings, not font glyphs — the bundled faces are not guaranteed a heart),
+and the narration's duration as `narrate` measured it, right-aligned. No
+horizontal rule. Every event carries its role in the ASS Name field (panel,
+heart, duration…) so a test finds a part by what it is. No other platform's
+logo or wordmark, no invented username, no verified badge, no award icons, no
+vote, comment, share or view counts: a glyph is decoration, a number beside
+it is a claim, and neither the number nor the badge is ever drawn — not as a
+setting, not as a lookalike glyph. A product constraint, not a style. The
 avatar is `Settings.story.avatar` (E20-F06), a PNG of its own: picked in the
 Settings panel's image control or on the deck, copied by `settings
 avatar-import` — `watermark.import_image` parameterised by folder, into
