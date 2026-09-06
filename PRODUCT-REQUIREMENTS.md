@@ -1,6 +1,6 @@
 # Alias Studio — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.9 · **Datums:** 2026-09-06 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
+**Versija:** 1.10 · **Datums:** 2026-09-06 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -2099,6 +2099,18 @@ Bez šī E17 ir tikai variantu ģenerators.
 
 ---
 
+**E18-F07 · Momentu spēlēšanas secība** · `P2` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Panelī pirms CUT IT var izvēlēties, vai momenti spēlē **atpakaļskaitīšanā** (N → 1, noklusējums) vai **nejaušā secībā**. Tā pati ķēde un tie paši karogi kā [E18-F01](#e18--ranga-video): `--ranking-order` uz `run`, `resume` un `jobs create`.
+- Nejaušā secība ir atkārtojama: sēkla tiek saglabāta kontrolpunktā, un pārrenderēšana ar tiem pašiem iestatījumiem dod to pašu secību. Sēkla ir renderēšanas **izvade**, ne iestatījums — tāpat kā etiķetes ([E18-F04](#e18--ranga-video)) — un tā **nav** renderēšanas pirkstu nospiedumā: nejaušs skaitlis nedrīkst novecot renderējumu.
+- Abi ranga video dabū katrs savu secību no vienas saglabātās sēklas. Divas sēklas netiek glabātas, lai pāris būtu atkārtojams kopā.
+- Secības maiņa pārrenderē, jo fails patiešām atšķiras; sēklas maiņas nav, jo pārjaukšanas pogas šajā versijā nav. Pāreja nejauša → atpakaļskaitīšana → nejauša atkal dod **to pašu** sajaukumu — stabili, ne pārsteidzoši. Ja izrādās, ka īpašnieks pārjauc nepārtraukti, tā ir nākamā prasība, ne šī.
+- Kontrolpunkts, kas rakstīts pirms šī iestatījuma, paliek derīgs atpakaļskaitīšanas darbam: trūkstoša atslēga nozīmē noklusējumu (§4, 3. noteikums), tāpēc neviens ranga darbs uz diska nepārrenderējas, kamēr lietotājs pats neizvēlas nejaušo secību.
+- Saraksta atklāšana seko faktiskajai spēlēšanas secībai ([E18-F03](#e18--ranga-video)) — arī nejaušajai.
+
+---
+
 ## E19 — Pārklājumi uz klipa
 
 **Mērķis:** uz gatavā klipa uzlikt to, kas padara to par kanāla klipu, nevis anonīmu fragmentu — virsrakstu un zīmolu.
@@ -3586,6 +3598,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.10 | 2026-09-06 | **[E18-F07](#e18--ranga-video) — ranga video momentu spēlēšanas secība.** Atpakaļskaitīšana (noklusējums, un tas, ko spēlē katrs kontrolpunkts uz diska) vai nejauša secība, izvēlēta panelī pirms CUT IT blakus pārējām ranga vadīklām. Nejaušā secība ir atkārtojama: sēkla tiek izlozēta vienreiz, glabāta kontrolpunktā kā izvade (ne pirkstu nospiedumā), un abi ranga video dabū katrs savu secību no tās vienas sēklas. Pārjaukšanas pogas nav. Jaunas lēmumu žurnāla rindas nav — tas precizē E18, nevis ko atceļ; D-17 "atklāšana spēlēšanas secībā" paliek un tagad seko arī nejaušajai. |
 | 1.9 | 2026-09-06 | **Jauna epika [E20](#e20--stāstu-režīms) — Stāstu režīms** (D-19, D-20). Otra posmu ķēde `ingest → narrate → asr → render`, izvēlēta panelī virs CUT IT kā `Clips \| Stories`; režīms ir `Settings` lauks momentuzņēmumā, ieraksts bez tā ir klipu darbs. Piecas prasības: teksta ievade bez ielādes no vietnēm un ar kopiju darba mapē, ar aplēsto ilgumu un 500/1500 vārdu robežām kā sākuma vērtībām ([E20-F01](#e20--stāstu-režīms)); Kokoro stāstītājs no lokāliem svariem ar heša, balss un ātruma pirkstu nospiedumu ([E20-F02](#e20--stāstu-režīms)); lietotāja fons ciklā vai apgriezts, bez skaņas, centrēti apgriezts caur `cover_vf` ([E20-F03](#e20--stāstu-režīms)); subtitri no `asr` pār ierunājumu ar `story` presetu pa vienam vārdam ([E20-F04](#e20--stāstu-režīms)); kartīte lietotnes pašas dizainā bez svešas hromas un izdomātiem skaitļiem ([E20-F05](#e20--stāstu-režīms)). [2.5](#25-ko-mēs-apzināti-nedarām) precizēta: sintētisks stāstītājs atļauts, balss klonēšana — ne. |
 | 1.8 | 2026-09-05 | **Jauna epika [E19](#e19--pārklājumi-uz-klipa) — Pārklājumi uz klipa.** Divas prasības: [E19-F01](#e19--pārklājumi-uz-klipa) — redaktorā izvēlēts virsraksta variants tiek iededzināts klipā visā tā garumā, tikai parastajiem klipiem, kā stils, ko darba līmeņa pārkrāsošana patur; [E19-F02](#e19--pārklājumi-uz-klipa) — PNG vai vārda ūdenszīme apakšā centrā uz katra izvades faila, arī ranga video, ar paša faila saturu renderēšanas pirkstu nospiedumā. Jaunas lēmumu žurnāla rindas nav — D-18 paliek spēkā. |
 | 1.7 | 2026-09-05 | **D-18 — ranga režīms neaizstāj klipus, un no viena avota top divi ranga video.** D-17 daļa "tikai ranga video, ne abi" atcelta pēc pirmās versijas redzēšanas; pārējās D-17 daļas paliek. [E18-F01](#e18--ranga-video) kritērijs par vienu failu pārrakstīts; jaunas [E18-F05](#e18--ranga-video) (klipi paliek) un [E18-F06](#e18--ranga-video) (momenti 1–5 un 6–10; viens video ar rindu, kāpēc, ja finālistu nepietiek). |

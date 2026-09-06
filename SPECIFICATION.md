@@ -404,9 +404,24 @@ renders from job settings and the stage says so. The checkpoint is the
 clip-mode checkpoint with the montage entries appended to `outputs` — clip
 entries first, each montage entry carrying `montage: true`, `ranks`, and its
 rank-1 clip's index so the review panel's audit shows the winning moment — plus
-a `ranking` key (`count`, `band`, `montages` — one record per video with
-`path`, `ranks`, `rendered`, `order`, `title`, `segments` — `note`, `labels`,
-`label_errors`). `artifacts_ok` tells three shapes apart: no `ranking` key is
+a `ranking` key (`count`, `order`, `seed`, `band`, `montages` — one record per
+video with `path`, `ranks`, `rendered`, `order`, `title`, `segments` — `note`,
+`labels`, `label_errors`).
+
+**Play order (E18-F07).** `Settings.ranking.order` is `countdown` (rank N
+first, rank 1 last — the default, and what every checkpoint from before the
+setting plays) or `random`. `captions/ranking.py:play_order(count, order,
+seed, video)` is pure: a random order is a lookup of the seed, drawn from a
+private generator, never from module or global random state. The seed is an
+**output**, handled exactly like the labels: `render/ranking.py:play_seed`
+reads the last checkpoint's `ranking.seed` first and draws one (`new_seed`,
+32 bits from the OS) only when none is stored and this render plays random;
+every render stores it, countdown renders included, so random → countdown →
+random reuses it and gives the same shuffle again. Both videos derive their
+own order from that one seed by video index, so the pair is reproducible
+together. The overlay's reveal takes the order as a parameter
+(`overlay_events(..., order=)`) rather than computing the countdown itself.
+There is no reshuffle in this version. `artifacts_ok` tells three shapes apart: no `ranking` key is
 a clip checkpoint and serves a clip job; a `ranking` without `montages` is the
 one-montage checkpoint E18-F02..F04 wrote, which has no clip files and now
 serves nothing, so those few re-render once; `ranking.montages` serves a
@@ -553,7 +568,7 @@ that did not need one.
 | `candidates` | `fingerprint_ok` on `clips`, `curve` and the scene-detector settings | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | strict `!=` on `camera_settings` (minus `letterbox_fill`, which is render-only and used to re-run the whole DIRECT pass) and `retention_settings`, plus `clip_framing` | no |
-| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits` (which includes `burned_title`, E19-F01) and `watermark` (kind, path and the file's sha256 — `"missing"` when unreadable; `{}` for none, which is also what pre-E19 checkpoints read as, E19-F02), plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte. **Output unit first (E18):** a checkpoint carrying a `ranking` key serves only a job with `ranking.enabled`, and vice versa, with a strict compare on `ranking.count`; the `fills` map is recomputed over the montage's segments (`_fill_keys`) rather than its one output entry. Checkpoints from before the key existed lack it and the mode defaults off, so nothing on disk re-rendered when the feature arrived | no |
+| `render` | strict comparisons on `caption_preset`, `caption_style`, `audio`, `encoder`, `clip_edits` (which includes `burned_title`, E19-F01) and `watermark` (kind, path and the file's sha256 — `"missing"` when unreadable; `{}` for none, which is also what pre-E19 checkpoints read as, E19-F02), plus a versioned camera compare: checkpoints carrying a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` and the **resolved** per-clip fill (explicit per-clip value, else the job default), so a default change re-renders only jobs it actually reaches; older checkpoints keep the full strict `camera_settings` compare, byte for byte. **Output unit first (E18):** a checkpoint carrying a `ranking` key serves only a job with `ranking.enabled`, and vice versa, with a strict compare on `ranking.count` and on `ranking.order`, where a checkpoint without the key reads as `countdown` (E18-F07 — the one rule-3 key in this compare; `ranking.seed` is an output and is never compared); the `fills` map is recomputed over the montage's segments (`_fill_keys`) rather than its one output entry. Checkpoints from before the key existed lack it and the mode defaults off, so nothing on disk re-rendered when the feature arrived | no |
 
 **`fingerprint_ok` has three callers** — `candidates`, `events` and, since
 T-39, `scoring` (the naive strict fix for the new `gemini_model` key would
@@ -612,7 +627,7 @@ whole tunable surface, grouped by what it controls:
 | `titles` | length limits, styles, count |
 | `descriptions` | length, hashtags, CTA, platform limits |
 | `hooks` | hook types, count, ranking |
-| `ranking` | the ranking videos (E18): on/off, moments per video |
+| `ranking` | the ranking videos (E18): on/off, moments per video, play order (countdown or random, E18-F07) |
 | `watermark` | the channel mark on every output (E19-F02): a PNG by its imported path, or a word |
 | `story` | the story chain's defaults (E20): narrator voice, speed, and the last-used background |
 | top level | `lufs_target`, `true_peak_db`, `llm_mode`, `gemini_model`, `caption_preset`, `laughter_specialist`, `mode` (the job's chain, `clips` or `stories`; per job, chosen on the deck, exempt from the panel via `settings_schema.PER_JOB_FIELDS`) |
@@ -1151,6 +1166,7 @@ changes take effect on the next job with no rebuild.
 Run flags: `--llm {gemini,ollama}`, `--captions <preset>`,
 `--camera {cut,pan,locked}`, `--gameplay-amount <0..1>`,
 `--letterbox-fill {black,blur}`, `--ranking {on,off}`, `--ranking-count <N>`,
+`--ranking-order {countdown,random}`,
 `--watermark-image <png>`, `--watermark-text <word>` — the last two accept
 `""` as an explicit "none". All of them on `run`, `resume` and `jobs create`.
 
