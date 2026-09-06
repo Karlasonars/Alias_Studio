@@ -150,6 +150,10 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     channel_name = getattr(args, "channel_name", None)
     if channel_name is not None:
         settings.story.channel_name = channel_name.strip()
+    # E20-F06. Same rule: "" is an explicit "no avatar for this job".
+    avatar = getattr(args, "avatar", None)
+    if avatar is not None:
+        settings.story.avatar = avatar.strip()
     return settings
 
 
@@ -238,6 +242,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "voice", None)
         or getattr(args, "speed", None) is not None
         or getattr(args, "channel_name", None) is not None
+        or getattr(args, "avatar", None) is not None
     ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -591,14 +596,17 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(json.dumps(payload()))
         return 0
 
-    if args.settings_cmd == "watermark-import":
-        # E19-F02: the deck's PNG picker lands here. The copy into
-        # PUBLIKCLIP_HOME and the PNG check are python's — testable here,
-        # and the shell stays the passthrough it already is.
+    if args.settings_cmd in ("watermark-import", "avatar-import"):
+        # E19-F02, E20-F06: the PNG pickers land here — the deck's and the
+        # Settings panel's. The copy into PUBLIKCLIP_HOME and the PNG check
+        # are python's — testable here, and the shell stays the passthrough
+        # it already is. One helper, two folders: the avatar is its own
+        # file and must never share a name with a watermark.
         from .render import watermark
 
+        dest = config.avatars_dir() if args.settings_cmd == "avatar-import" else None
         try:
-            stored = watermark.import_image(Path(args.path))
+            stored = watermark.import_image(Path(args.path), dest)
         except watermark.WatermarkError as err:
             print(json.dumps({"ok": False, "error": str(err)}))
             return 1
@@ -932,8 +940,12 @@ def _add_story_flags(parser: argparse.ArgumentParser, with_text: bool) -> None:
     )
     parser.add_argument(
         "--channel-name", dest="channel_name", default=None,
-        help="stories mode: your channel's name in the story card's header; '' for no header "
-             "(the avatar beside it is the watermark image)",
+        help="stories mode: your channel's name in the story card's header; '' for no header",
+    )
+    parser.add_argument(
+        "--avatar", dest="avatar", default=None,
+        help="stories mode: the avatar PNG in the card's header, by the path `settings "
+             "avatar-import` stored it under; '' for none (the card shows the initial)",
     )
 
 
@@ -1072,6 +1084,11 @@ def main(argv: list[str] | None = None) -> int:
         help="copy a PNG into the app's watermark folder and print its stored path (E19-F02)",
     )
     p_wm.add_argument("path")
+    p_av = set_sub.add_parser(
+        "avatar-import",
+        help="copy a PNG into the app's avatar folder and print its stored path (E20-F06)",
+    )
+    p_av.add_argument("path")
     set_sub.add_parser(
         "story-limits",
         help="the story word limits, the words-per-minute estimate and the voices (E20)",

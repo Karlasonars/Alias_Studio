@@ -22,8 +22,18 @@ import type {
   StoryRun,
   SyncSummary,
   TitlesResult,
-  WatermarkImportResult
+  ImageImportResult
 } from './types'
+
+// One PNG dialog for every picture the app imports (the watermark, the
+// avatar): the plugin and its `dialog:allow-open` capability were already
+// in the shell.
+const pickPng = (): Promise<string | null> =>
+  openDialog({
+    multiple: false,
+    directory: false,
+    filters: [{ name: 'PNG image', extensions: ['png'] }]
+  }) as Promise<string | null>
 
 export const api = {
   // E20: `story` is null for a clips job. For a story job it carries the
@@ -49,7 +59,8 @@ export const api = {
       storyText: story?.text ?? null,
       voice: story?.voice ?? null,
       speed: story?.speed ?? null,
-      channelName: story?.channelName ?? null
+      channelName: story?.channelName ?? null,
+      avatar: story?.avatar ?? null
     }),
   // E20-F01: the deck's numbers come from the module that applies them
   // (narrate/limits.py) — never a copy in this tree.
@@ -75,16 +86,16 @@ export const api = {
   // Tauri boundary crossing all the same, so it lives here with the rest
   // (the plugin and its `dialog:allow-open` capability were already in
   // the shell; this is their first caller).
-  pickWatermarkImage: (): Promise<string | null> =>
-    openDialog({
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'PNG image', extensions: ['png'] }]
-    }) as Promise<string | null>,
-  // The copy into PUBLIKCLIP_HOME/watermarks is python's (settings
-  // watermark-import): the job stores the returned path, not the picked one.
-  watermarkImport: (path: string) =>
-    invoke<WatermarkImportResult>('settings_tool', { args: ['watermark-import', path] }),
+  pickWatermarkImage: (): Promise<string | null> => pickPng(),
+  // E20-F06: the avatar's picker is the same dialog; what differs is the
+  // folder python copies into, chosen by the import verb.
+  pickAvatarImage: (): Promise<string | null> => pickPng(),
+  // The copy into PUBLIKCLIP_HOME/<kind>s is python's (settings
+  // <kind>-import): the job stores the returned path, not the picked one.
+  importImage: (kind: 'watermark' | 'avatar', path: string) =>
+    invoke<ImageImportResult>('settings_tool', { args: [`${kind}-import`, path] }),
+  watermarkImport: (path: string) => api.importImage('watermark', path),
+  avatarImport: (path: string) => api.importImage('avatar', path),
   startQueue: () => invoke<void>('start_queue'),
   setQueuePaused: (paused: boolean) => invoke<void>('set_queue_paused', { paused }),
   queueState: () => invoke<QueueStateResult>('queue_state'),

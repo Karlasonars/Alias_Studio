@@ -798,6 +798,7 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
         lambda s: setattr(s.watermark, "text", "@me"),
         lambda s: s.captions.overrides.update({"size": 40}),
         lambda s: setattr(s.story, "channel_name", "Alias Studio"),  # E20-F05: the card's header
+        lambda s: setattr(s.story, "avatar", "C:/nowhere/me.png"),    # E20-F06: its own file
     ):
         other = config.Settings.from_json(settings.to_json())
         change(other)
@@ -813,8 +814,9 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
     # the card was redrawn as a channel card: every story rendered with the
     # old drawing re-renders once, and no job renders a card the code no
     # longer has
-    assert story_card.CARD_VERSION >= 2
+    assert story_card.CARD_VERSION >= 3  # E20-F06 bumped it again: the avatar is its own file now
     assert stage.artifacts_ok(ctx, {**data, "card_version": 1}) is False
+    assert stage.artifacts_ok(ctx, {**data, "card_version": 2}) is False
     out.unlink()
     assert stage.artifacts_ok(ctx, data) is False
 
@@ -848,43 +850,200 @@ def test_the_story_render_makes_one_verified_vertical_file(tmp_path):
     assert "StoryInitial" not in doc.split("[Events]")[1] and "0:04" in doc
 
 
-def test_the_avatar_is_the_watermark_file_and_is_hashed_once(tmp_path):
-    """E20-F05: the card's avatar is the watermark PNG — the same path the
-    E19-F02 import stored, resolved by the same function, hashed once in
-    the fingerprint as the watermark. No second setting, no second hash,
-    so the card and the mark cannot disagree about which file it is; and
-    a missing file degrades both together."""
-    logo = _avatar_png(tmp_path / "logo.png")
-    job, settings = _story_job(channel_name="Alias")
-    settings.watermark.image = str(logo)
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _capture_render(monkeypatch) -> dict:
+    """The story render with ffmpeg stubbed: what render_story was asked
+    for, and a file that verifies — for tests about WHICH picture goes
+    where, not about pixels."""
+    seen: dict = {}
+
+    def fake_render(background, narration, out_path, duration, ass_path, fonts_dir, **kw):
+        seen.update(kw)
+        Path(out_path).write_bytes(b"mp4")
+
+    monkeypatch.setattr(renderer, "render_story", fake_render)
+    monkeypatch.setattr(
+        renderer, "verify_output", lambda p, d: {"ok": True, "duration": d, "width": 1080, "height": 1920},
+    )
+    monkeypatch.setattr(ffmpeg_bin, "supports_captions", lambda: True)
+    monkeypatch.setattr(ass_mod, "emoji_probe", lambda: False)
+    return seen
+
+
+def test_the_avatar_and_the_watermark_resolve_independently(tmp_path, monkeypatch):
+    """E20-F06: two pictures, two settings, two hashes. Set both to
+    different files: the card gets the avatar, the mark gets the
+    watermark, and the fingerprint carries each under its own key with
+    its own sha256 — neither can pick up the other's. And each degrades
+    on its own: an avatar gone from disk takes the card to the initial
+    with its own message while the mark still renders."""
+    red = _avatar_png(tmp_path / "avatar.png")
+    green = _avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30))
+    job, settings = _story_job(channel_name="Alias", avatar=str(red))
+    settings.watermark.image = str(green)
     ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
     fp = story_render._fingerprint(ctx)
-    assert fp["watermark"] == {
-        "kind": "image", "path": str(logo), "sha256": hashlib.sha256(logo.read_bytes()).hexdigest(),
-    }
-    assert not any("avatar" in key for key in fp)
-    mark = watermark.resolve(settings)
-    assert mark.kind == "image" and mark.path == str(logo)
-    vf = story_render.avatar_vf(mark.path, 2.4)
-    assert vf.startswith("null[av_base];movie=filename=" + renderer._q(str(logo)))
+    assert fp["avatar"] == {"path": str(red), "sha256": _sha(red)}
+    assert fp["watermark"] == {"kind": "image", "path": str(green), "sha256": _sha(green)}
+    assert fp["avatar"]["sha256"] != fp["watermark"]["sha256"]
+    assert story_render.resolve_avatar(settings) == str(red)
+    assert watermark.resolve(settings).path == str(green)
+
+    seen = _capture_render(monkeypatch)
+    ctx = queue._ctx_for(ctx, "render", _story_prior(job, tmp_path))
+    data = story_render.StoryRenderStage().run(ctx)
+    assert data["card"]["avatar"] == str(red) and data["avatar"]["path"] == str(red)
+    assert data["watermark"]["path"] == str(green)
+    assert renderer._q(str(red)) in seen["after_vf"] and renderer._q(str(green)) not in seen["after_vf"]
+    assert renderer._q(str(green)) in seen["overlay_vf"] and renderer._q(str(red)) not in seen["overlay_vf"]
+    vf = seen["after_vf"]
     x, y, d = story_card.avatar_box()
+    assert vf.startswith("null[av_base];movie=filename=" + renderer._q(str(red)))
     assert f",crop={d}:{d}," in vf and f"overlay=x={x}:y={y}" in vf
     assert "hypot(" in vf and "format=gbrap,geq=" in vf                        # the circular mask
-    assert vf.endswith(f"enable='between(t,0,{2.4 - story_card.FADE_OUT_MS / 1000:.3f})'")
-    # gone from disk: the mark says so and renders without, the fingerprint
-    # says "missing", and the card takes the initial — one resolution
-    settings.watermark.image = str(tmp_path / "gone.png")
+    assert vf.endswith(f"enable='between(t,0,{1.0 - story_card.FADE_OUT_MS / 1000:.3f})'")
+
+    # the avatar gone: the card says so in its own words and takes the
+    # initial; the mark is untouched and still renders
+    settings.story.avatar = str(tmp_path / "gone.png")
     said: list[str] = []
-    assert watermark.resolve(settings, say=said.append) is None and len(said) == 1
-    assert story_render._fingerprint(ctx)["watermark"]["sha256"] == "missing"
+    assert story_render.resolve_avatar(settings, say=said.append) == ""
+    assert said == ["Avatar image gone.png is missing — the card shows the channel's initial instead."]
+    assert story_render._fingerprint(ctx)["avatar"]["sha256"] == "missing"
+    seen.clear()
+    data = story_render.StoryRenderStage().run(ctx)
+    assert data["card"]["avatar"] == "" and seen["after_vf"] == ""
+    assert renderer._q(str(green)) in seen["overlay_vf"]
+    assert "StoryInitial" in Path(data["outputs"][0]["ass"]).read_text(encoding="utf-8")
 
 
-def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_watermark(tmp_path):
+def test_the_watermark_is_no_longer_the_avatar(tmp_path, monkeypatch):
+    """The deliberate removal: a watermark image with no avatar draws the
+    initial, never the mark. E20-F05 reused the watermark as a stopgap;
+    "why is my watermark my profile picture" is a state nobody should
+    have to reason about. Two states — avatar, then initial."""
+    green = _avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30))
+    job, settings = _story_job(channel_name="Alias")
+    settings.watermark.image = str(green)
+    assert settings.story.avatar == ""
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    assert story_render._fingerprint(ctx)["avatar"] == {}
+    seen = _capture_render(monkeypatch)
+    data = story_render.StoryRenderStage().run(
+        queue._ctx_for(ctx, "render", _story_prior(job, tmp_path))
+    )
+    assert data["card"]["avatar"] == "" and seen["after_vf"] == ""
+    assert renderer._q(str(green)) in seen["overlay_vf"]          # the mark still renders
+    doc = Path(data["outputs"][0]["ass"]).read_text(encoding="utf-8")
+    assert "StoryInitial" in doc and doc.split("[Events]")[1].count("A\n") >= 1
+
+
+def test_replacing_the_avatar_bytes_under_the_same_path_re_renders(tmp_path):
+    """§4 rule 1, the trap the watermark already handles: the fingerprint
+    carries the file's CONTENT, so a new picture under the same name
+    re-renders — and the same bytes rewritten (a copy, a sync) do not."""
+    png = _avatar_png(tmp_path / "avatar.png")
+    job, settings = _story_job(channel_name="Alias", avatar=str(png))
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    stage = story_render.StoryRenderStage()
+    out = job.dir / "clips" / "story.mp4"
+    out.parent.mkdir()
+    out.write_bytes(b"x")
+    data = {"story": True, "outputs": [{"clip": 0, "story": True, "path": str(out), "duration": 4.1}],
+            **story_render._fingerprint(ctx)}
+    assert stage.artifacts_ok(ctx, data) is True
+    png.write_bytes(png.read_bytes())                    # same bytes, new mtime: still valid
+    assert stage.artifacts_ok(ctx, data) is True
+    _avatar_png(png, rgb=(30, 30, 220))                  # a different picture, the same path
+    assert stage.artifacts_ok(ctx, data) is False
+    # and the watermark's file changing is the watermark's business alone
+    _avatar_png(png)
+    assert stage.artifacts_ok(ctx, data) is True
+    settings.watermark.image = str(_avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30)))
+    assert stage.artifacts_ok(ctx, data) is False
+    assert stage.artifacts_ok(ctx, {**data, "watermark": watermark.fingerprint(settings)}) is True
+
+
+def test_avatar_import_copies_into_its_own_folder_through_the_watermarks_helper(tmp_path, capsys):
+    """`settings avatar-import`: the watermark's import, parameterised by
+    the folder — PUBLIKCLIP_HOME/avatars, never /watermarks, so the two
+    pictures cannot share a name — with the same PNG check and refusal."""
+    from publikclip_pipeline import cli
+
+    src = _avatar_png(tmp_path / "me.png")
+    assert cli.main(["settings", "avatar-import", str(src)]) == 0
+    out = _last_json(capsys)
+    stored = Path(out["path"])
+    assert out["ok"] is True and stored.parent == config.avatars_dir()
+    assert stored.name == f"me-{_sha(src)[:8]}.png" and stored.read_bytes() == src.read_bytes()
+    assert not (config.watermarks_dir() / stored.name).exists()
+    # the same helper the watermark uses, its default folder untouched
+    assert watermark.import_image(src) == config.watermarks_dir() / stored.name
+    assert watermark.import_image(src, config.avatars_dir()) == stored
+    (tmp_path / "not.png").write_bytes(b"GIF89a")
+    assert cli.main(["settings", "avatar-import", str(tmp_path / "not.png")]) == 1
+    assert "not a PNG" in _last_json(capsys)["error"]
+
+
+def test_channel_identity_set_once_reaches_new_jobs_and_a_deck_override_leaves_it_alone(tmp_path, capsys):
+    """E20-F06: the name and the avatar live in Settings. A new story job
+    carries them without being retyped; a deck override (`--channel-name`,
+    `--avatar`) applies to that job's snapshot and leaves the setting
+    untouched — the same shape as the watermark."""
+    from publikclip_pipeline import cli
+
+    avatar = _avatar_png(tmp_path / "me.png")
+    defaults = config.Settings()
+    defaults.story.channel_name = "Alias Studio"
+    defaults.story.avatar = str(avatar)
+    config.save_defaults(defaults)
+    txt = tmp_path / "story.txt"
+    txt.write_text(STORY, encoding="utf-8")
+
+    assert cli.main(["jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt)]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(_last_json(capsys)["job_id"]).settings_json))
+    assert saved.story.channel_name == "Alias Studio" and saved.story.avatar == str(avatar)
+
+    other = _avatar_png(tmp_path / "other.png", rgb=(30, 30, 220))
+    assert cli.main([
+        "jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt),
+        "--channel-name", "One Story", "--avatar", str(other),
+    ]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(_last_json(capsys)["job_id"]).settings_json))
+    assert saved.story.channel_name == "One Story" and saved.story.avatar == str(other)
+    assert cli.main([
+        "jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt), "--avatar", "",
+    ]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(_last_json(capsys)["job_id"]).settings_json))
+    assert saved.story.avatar == "" and saved.story.channel_name == "Alias Studio"  # none for this job only
+    # the setting is what it was
+    kept = config.load_defaults()
+    assert kept.story.channel_name == "Alias Studio" and kept.story.avatar == str(avatar)
+
+
+def test_resume_avatar_flag_reaches_the_job_snapshot(monkeypatch, tmp_path):
+    from publikclip_pipeline import cli
+
+    job, _ = _story_job(avatar="C:/old.png")
+    monkeypatch.setattr(cli, "_execute", lambda job, jsonl: 0)
+    assert cli.main(["resume", job.id, "--avatar", "C:/new.png"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.story.avatar == "C:/new.png"
+    assert cli.main(["resume", job.id, "--avatar", ""]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.story.avatar == ""
+
+
+def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_picture(tmp_path):
     """Real pixels (§3's synthetic way), three renders of one story: with
-    the channel card, with no card at all, and with a red watermark PNG as
-    the avatar. The card darkens its panel; the avatar's centre is red and
-    the corner of its square is not (centre-cropped, masked to a disc);
-    after the title the avatar is gone with the card.
+    the channel card, with no card at all, and with a red avatar PNG beside
+    a green watermark PNG. The card darkens its panel; the avatar's centre
+    is red — the avatar's file, not the watermark's — and the corner of
+    its square is not (centre-cropped, masked to a disc); after the title
+    the avatar is gone with the card.
 
     Sampled at 0.3 s, not at frame 0: the card fades in over 160 ms, so
     frame 0 of a card render is identical to frame 0 without one BY
@@ -914,14 +1073,19 @@ def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_watermark(tmp_pa
     region = (slice(y0, y0 + 30), slice(700, 900))
     assert card_frame[region].mean() < bare_frame[region].mean() - 40
 
-    logo = _avatar_png(tmp_path / "logo.png")
-    settings.watermark.image = str(logo)
+    red = _avatar_png(tmp_path / "avatar.png")
+    green = _avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30))
+    settings.story.avatar = str(red)
+    settings.watermark.image = str(green)
     with_avatar = render(prior)
-    assert with_avatar["card"]["avatar"] == str(logo) == with_avatar["watermark"]["path"]
+    assert with_avatar["card"]["avatar"] == str(red) == with_avatar["avatar"]["path"]
+    assert with_avatar["watermark"]["path"] == str(green)
     frame = _frame(path, 0.3)
     ax, ay, d = story_card.avatar_box()
     cx, cy = ax + d // 2, ay + d // 2
-    assert _is_red(frame[cy - 8:cy + 8, cx - 8:cx + 8])            # the disc is the PNG
+    centre = frame[cy - 8:cy + 8, cx - 8:cx + 8]
+    assert _is_red(centre)                                          # the disc is the avatar's PNG
+    assert centre.reshape(-1, 3).mean(axis=0)[1] < 100              # ...and not the watermark's
     assert not _is_red(frame[ay + 2:ay + 8, ax + 2:ax + 8])        # its corner is masked away
     assert not _is_red(_frame(path, 2.0)[cy - 8:cy + 8, cx - 8:cx + 8])   # gone with the card
     check = renderer.verify_output(path, 3.5 + story_render.TAIL_SEC)

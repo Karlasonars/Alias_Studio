@@ -181,6 +181,40 @@ export default function Settings({ onBack, initialGroup }: Props) {
     [scheduleSave]
   )
 
+  // E20-F06: an `image` field is a stored path. The dialog picks a PNG,
+  // python copies it into the app's own folder for that kind (settings
+  // <kind>-import) and the STORED path becomes the value — the deck's
+  // watermark picker, same shape — so a picture moved later breaks
+  // nothing. A refused file says why in the panel's error line.
+  const [importing, setImporting] = useState<string | null>(null)
+  const pickImage = useCallback(
+    async (path: string, kind: 'avatar' | 'watermark') => {
+      let picked: string | null = null
+      try {
+        picked = await api.pickAvatarImage()
+      } catch (err) {
+        setError(String(err))
+        return
+      }
+      if (!picked) return
+      setImporting(path)
+      try {
+        const res = await api.importImage(kind, picked)
+        if (res.ok && res.path) {
+          setField(path, res.path)
+          setError(null)
+        } else {
+          setError(res.error ?? 'could not import the image')
+        }
+      } catch (err) {
+        setError(String(err))
+      } finally {
+        setImporting(null)
+      }
+    },
+    [setField]
+  )
+
   const savePreset = useCallback(
     async (name: string, patch: CaptionPreset) => {
       setPresets((prev) => ({ ...prev, [name]: patch })) // optimistic, keeps the slider smooth
@@ -344,6 +378,25 @@ export default function Settings({ onBack, initialGroup }: Props) {
               placeholder="none"
               className="set-text-input"
             />
+          )}
+          {field.type === 'image' && (
+            <div className="set-image" aria-label={field.label}>
+              <span className="set-image-name mono">
+                {value ? String(value).split(/[\\/]/).pop() : 'none'}
+              </span>
+              <button
+                className="btn-ghost"
+                onClick={() => pickImage(field.key, field.import ?? 'avatar')}
+                disabled={importing === field.key}
+              >
+                {importing === field.key ? 'copying…' : 'choose…'}
+              </button>
+              {value ? (
+                <button className="btn-ghost" onClick={() => setField(field.key, '')}>
+                  clear
+                </button>
+              ) : null}
+            </div>
           )}
           {isChanged && (
             <button

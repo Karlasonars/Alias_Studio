@@ -113,6 +113,8 @@ export interface HookResult {
 
 /** E19-F02: `settings watermark-import` — the picked PNG copied into the
  *  app's own folder; `path` is what the job stores, never the picked one. */
+/** `settings watermark-import` / `settings avatar-import` (E19-F02,
+ * E20-F06): the same import, two folders. */
 export interface WatermarkImportResult {
   ok: boolean
   error?: string
@@ -120,13 +122,14 @@ export interface WatermarkImportResult {
   name?: string
   bytes?: number
 }
+export type ImageImportResult = WatermarkImportResult
 
 /* ---------- settings ---------- */
 
 export interface SettingsField {
   key: string
   label: string
-  type: 'number' | 'bool' | 'select' | 'color' | 'text' | 'multiselect'
+  type: 'number' | 'bool' | 'select' | 'color' | 'text' | 'multiselect' | 'image'
   help: string
   min?: number
   max?: number
@@ -134,6 +137,10 @@ export interface SettingsField {
   unit?: string
   options?: { value: string; label: string }[]
   options_from?: 'presets' | 'fonts'
+  /** E20-F06: an `image` field's import verb — which folder python copies
+   * the picked PNG into (`settings <import>-import`). The stored path is
+   * the value. */
+  import?: 'avatar' | 'watermark'
 }
 
 export interface SettingsMatrix {
@@ -315,9 +322,12 @@ export interface StoryRun {
   text: string
   voice: string
   speed: number
-  /** E20-F05: the channel name in the card's header; '' for no header.
-   * The avatar beside it is the watermark image — never sent separately. */
+  /** E20-F05/F06: the channel identity in the card's header, prefilled from
+   * Settings and overridable for this one job. '' is an explicit none:
+   * no name means no header, no avatar means the name's initial. `avatar`
+   * is the path `settings avatar-import` stored — never a picked path. */
   channelName: string
+  avatar: string
 }
 
 /** `settings story-limits`: the word limits and the estimate's rate, from

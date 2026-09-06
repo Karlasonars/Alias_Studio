@@ -516,15 +516,24 @@ meta row carrying the narration's duration as `narrate` measured it — a real
 number placed where a post card puts engagement, so nothing on the card is
 invented. No other platform's logo or wordmark, no invented username, no
 vote, comment, share or view counts: a product constraint, not a style. The
-avatar is the watermark PNG (E19-F02), resolved by the same
-`watermark.resolve` as the mark and hashed once in the render fingerprint as
-the watermark; `render/story.py:avatar_vf` overlays it through `movie` →
-cover-scale → centre-crop → a circular `geq` alpha mask, AFTER the caption
-burn (the ASS panel would cover it otherwise) and only while the card is up,
-ending where the card's fade-out begins. No PNG, or a missing one, and the
-ASS draws the channel's initial on the preset's accent colour; no name and
-no PNG, and there is no header. `channel_name` and `card_version` (now 2)
-are in the story render's fingerprint; the avatar has no key of its own.
+avatar is `Settings.story.avatar` (E20-F06), a PNG of its own: picked in the
+Settings panel's image control or on the deck, copied by `settings
+avatar-import` — `watermark.import_image` parameterised by folder, into
+`PUBLIKCLIP_HOME/avatars` — and checked through the same
+`watermark.resolve_image` as the mark, with its own message.
+`render/story.py:avatar_vf` overlays it through `movie` → cover-scale →
+centre-crop → a circular `geq` alpha mask, AFTER the caption burn (the ASS
+panel would cover it otherwise) and only while the card is up, ending where
+the card's fade-out begins. No avatar, or a missing one, and the ASS draws
+the channel's initial on the preset's accent colour — never the watermark,
+which E20-F05 reused for a few days and E20-F06 deliberately stopped; no
+name and no avatar, and there is no header. Name and avatar are the channel
+identity: set once in Settings, prefilled on the deck, overridable there for
+one job (`--channel-name`, `--avatar`; `""` is an explicit none) without
+writing back. `channel_name`, `avatar` (`{path, sha256}` through
+`watermark.image_fingerprint`, its own entry beside the watermark's so
+neither file can be mistaken for the other) and `card_version` (now 3) are
+in the story render's fingerprint.
 
 ## 5. The checkpoint contract
 

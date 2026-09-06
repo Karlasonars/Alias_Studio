@@ -79,6 +79,14 @@ def watermarks_dir() -> Path:
     return home_dir() / "watermarks"
 
 
+def avatars_dir() -> Path:
+    """Where the channel avatar PNG is copied on selection (E20-F06), for
+    the same reason and through the same import (render/watermark.py:
+    import_image) — a folder of its own so the two kinds of picture never
+    share a name."""
+    return home_dir() / "avatars"
+
+
 def ensure_home() -> Path:
     root = home_dir()
     for d in (root, jobs_dir(), bin_dir(), models_dir()):
@@ -344,12 +352,17 @@ class StorySettings:
     # making ten stories will not pick the same file ten times. A setting,
     # unlike the text, because it is a preference that outlives one job.
     background: str = ""
-    # E20-F05: the name in the card's header — the user's OWN channel, never
-    # an invented handle. Read by render/story.py, in its fingerprint. The
-    # avatar beside it is deliberately NOT a setting: it is the watermark
-    # PNG (WatermarkSettings.image), so the card and the mark cannot
-    # disagree about which file it is.
+    # E20-F05/F06: the channel identity on the card's header — the user's
+    # OWN channel, never an invented handle. Set once here, in Settings;
+    # the deck prefills from it and may override for one job without
+    # writing back. Both read by render/story.py, both in its fingerprint.
     channel_name: str = ""
+    # E20-F06: the avatar PNG, by the path render/watermark.py:import_image
+    # stored it under (PUBLIKCLIP_HOME/avatars). Its OWN file — E20-F05
+    # briefly reused the watermark and that was the wrong call: a watermark
+    # is a mark in a corner, an avatar is a round logo. Its content hash is
+    # in the render fingerprint (§4 rule 1), separately from the mark's.
+    avatar: str = ""
 
 
 @dataclass

@@ -12,15 +12,17 @@ invented one. It appears at 0 and leaves when the narrator finishes the
 title — `title_end_sec` from the narrate checkpoint, never a fixed number
 of seconds — and the one-word captions start on the first body word.
 
-The avatar circle is the user's watermark PNG (E19-F02): the same file
-the watermark import stored, resolved through render/watermark.py so the
-card and the mark can never disagree about which file it is, and hashed
-into the render fingerprint once, as the watermark. The picture itself is
-overlaid by ffmpeg (render/story.py:avatar_vf — an ASS document cannot
-carry an image) centre-cropped to a square behind a circular mask. No PNG
-configured, or one that is missing, degrades to the channel's initial on
-the preset's accent colour (§5.9): never a crash, never an empty circle.
-No channel name and no picture, and the header row is simply absent.
+The avatar circle is the user's own avatar PNG (`story.avatar`, E20-F06):
+a picture of its own, imported through the watermark's import helper into
+its own folder and hashed into the render fingerprint on its own — NOT the
+watermark, which E20-F05 reused for a few days and which is a mark in a
+corner, not a round logo. The picture itself is overlaid by ffmpeg
+(render/story.py:avatar_vf — an ASS document cannot carry an image)
+centre-cropped to a square behind a circular mask. No avatar, or one that
+is missing, degrades to the channel's initial on the preset's accent
+colour (§5.9): never a crash, never an empty circle, and never the
+watermark. No channel name and no picture, and the header row is simply
+absent.
 
 What it is NOT, and this is a product constraint rather than a style
 preference: it carries no other platform's logo or wordmark, no invented
@@ -54,7 +56,7 @@ from dataclasses import dataclass
 
 from . import ass as ass_mod
 
-CARD_VERSION = 2      # bumped when the drawing changes, so cached renders re-run
+CARD_VERSION = 3      # bumped when the drawing changes, so cached renders re-run
 
 PANEL_X = 90
 PANEL_W = ass_mod.PLAY_RES_X - 2 * PANEL_X

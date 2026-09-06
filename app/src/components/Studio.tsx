@@ -52,6 +52,10 @@ function fmtDuration(sec: number): string {
   const s = Math.round(sec % 60)
   return m > 0 ? `${m} min ${String(s).padStart(2, '0')} s` : `${s} s`
 }
+/** The last path segment, for a button that names an imported file. */
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path
+}
 // E18-F01: the top-N choices. Eight is where the list still fits the bar
 // gameplay framing leaves at the top (captions/ranking.py:band_for).
 const RANKING_COUNTS = [3, 4, 5, 6, 7, 8]
@@ -107,10 +111,17 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   const [voice, setVoice] = useState('')
   const [speed, setSpeed] = useState(1.0)
   const [storyCaptions, setStoryCaptions] = useState('story')
-  // E20-F05: the channel name in the story card's header. The avatar
-  // beside it is the watermark image chosen below — the same file, never
-  // a second picker — so this is the only card field the deck carries.
+  // E20-F05/F06: the channel identity in the story card's header — the
+  // name and the avatar. Both live in Settings (set once for a channel),
+  // both come prefilled from there, and both can be changed here for one
+  // story without touching the setting: the same shape as the watermark.
+  // The avatar is its own PNG, copied into the app's own folder on
+  // selection; the job stores THAT path.
   const [channelName, setChannelName] = useState('')
+  const [avatar, setAvatar] = useState('')
+  const [avatarName, setAvatarName] = useState('')
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [avatarError, setAvatarError] = useState<string | null>(null)
   // python's numbers (narrate/limits.py) — the deck never carries a copy
   const [limits, setLimits] = useState<StoryLimits | null>(null)
   const [storyNotice, setStoryNotice] = useState<string | null>(null)
@@ -175,12 +186,16 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
       .settingsGet()
       .then((p) => {
         const story = (p.defaults?.story ?? {}) as {
-          voice?: string; speed?: number; background?: string; channel_name?: string
+          voice?: string; speed?: number; background?: string; channel_name?: string; avatar?: string
         }
         if (story.voice) setVoice(story.voice)
         if (typeof story.speed === 'number') setSpeed(story.speed)
         if (story.background) setBackground((b) => b || story.background!)
         if (story.channel_name) setChannelName((c) => c || story.channel_name!)
+        if (story.avatar) {
+          setAvatar((a) => a || story.avatar!)
+          setAvatarName((n) => n || fileName(story.avatar!))
+        }
       })
       .catch(() => {})
   }, [mode, limits])
@@ -291,6 +306,36 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     }
   }
 
+  // E20-F06: the avatar's picker, the watermark's shape exactly — a
+  // cancelled dialog changes nothing, a refused file says why under the
+  // control and sends no image. The copy goes to the app's avatar folder
+  // (settings avatar-import), never the watermark's.
+  const pickAvatarImage = async () => {
+    setAvatarError(null)
+    let picked: string | null = null
+    try {
+      picked = await api.pickAvatarImage()
+    } catch (err) {
+      setAvatarError(String(err))
+      return
+    }
+    if (!picked) return
+    setAvatarBusy(true)
+    try {
+      const res = await api.avatarImport(picked)
+      if (res.ok && res.path) {
+        setAvatar(res.path)
+        setAvatarName(res.name ?? fileName(res.path))
+      } else {
+        setAvatarError(res.error ?? 'could not import the image')
+      }
+    } catch (err) {
+      setAvatarError(String(err))
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
   // Enqueue and clear the field: with the input live while a job runs, a
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
@@ -300,7 +345,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
         background.trim(), llm, storyCaptions, 0, 'black', false, rankingCount, rankingOrder,
         wmKind === 'image' ? wmImage : '',
         wmKind === 'text' ? wmText.trim() : '',
-        { text: storyText, voice, speed, channelName: channelName.trim() }
+        { text: storyText, voice, speed, channelName: channelName.trim(), avatar }
       )
       // the background stays (the next story usually reuses it); the text
       // goes, exactly as the URL field clears after a cut
@@ -694,11 +739,11 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   )}
                 </p>
               )}
-              {/* E20-F05: the story card's header — the user's own channel
-                  name, beside the watermark because the watermark image IS
-                  the card's avatar. Nothing else on the card is chosen
-                  here: the title is the story's and the length is the
-                  narration's. */}
+              {/* E20-F05/F06: the story card's header — the user's own
+                  channel name and avatar, prefilled from Settings where
+                  they are set once, changeable here for one story only.
+                  Nothing else on the card is chosen here: the title is the
+                  story's and the length is the narration's. */}
               {mode === 'stories' && (
                 <div className="opt-group">
                   <span className="opt-label">channel</span>
@@ -712,10 +757,37 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                 </div>
               )}
               {mode === 'stories' && (
+                <div className="opt-group">
+                  <span className="opt-label">avatar</span>
+                  <button
+                    className={`opt ${avatar ? 'opt-on' : ''}`}
+                    onClick={pickAvatarImage}
+                    disabled={avatarBusy}
+                    title="a PNG, cropped to a circle in the story card's header"
+                  >
+                    {avatarBusy ? 'copying…' : avatarName || 'image…'}
+                  </button>
+                  {avatar && (
+                    <button
+                      className="opt"
+                      onClick={() => {
+                        setAvatar('')
+                        setAvatarName('')
+                      }}
+                      title="no avatar for this story; the Settings default is untouched"
+                    >
+                      none for this story
+                    </button>
+                  )}
+                </div>
+              )}
+              {mode === 'stories' && avatarError && <p className="opt-hint">{avatarError}</p>}
+              {mode === 'stories' && (
                 <p className="opt-hint">
-                  the story card: this name in its header, your watermark image as the avatar
-                  {wmKind !== 'image' && ' (none chosen — the card shows the initial instead)'}
-                  , the title, and the story's real length; no other branding, no invented counts
+                  the story card: this name and avatar in its header
+                  {!avatar && ' (no avatar — the card shows the initial instead)'}
+                  , the title, and the story's real length; no other branding, no invented counts.
+                  Set the name and avatar once in Settings; changing them here changes this story only
                 </p>
               )}
               {/* E19-F02: a picture or a word on every output file, clips
