@@ -28,10 +28,22 @@ class IngestStage(Stage):
     name = "ingest"
     schema_version = 1
 
+    def __init__(self, needs_audio: bool = True):
+        # E20 (F03): the story chain's background may carry no sound — its
+        # audio is muted in the render and the narration is what asr hears —
+        # so that chain builds this stage with needs_audio=False: no
+        # audio-track refusal, no analysis wav, and `audio_path` is None in
+        # the checkpoint. The clips chain keeps the default, byte for byte.
+        self.needs_audio = needs_audio
+
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         media = Path(data.get("media_path", ""))
         audio = ctx.job_dir / "audio16k.wav"
-        if not (media.exists() and audio.exists()):
+        if not media.exists():
+            return False
+        # The wav is required exactly when run() would have written it —
+        # a story checkpoint is not stale for lacking a file it never made.
+        if self.needs_audio and not audio.exists():
             return False
         if data.get("source_hash"):
             try:
@@ -66,7 +78,7 @@ class IngestStage(Stage):
             info = normalize.probe(media_path)
         except normalize.FfmpegError as err:
             raise StageError(str(err)) from err
-        if not info.has_audio:
+        if self.needs_audio and not info.has_audio:
             raise StageError(
                 "This video has no audio track. Alias Studio needs speech to find moments.",
                 code="no-audio-track",
@@ -79,10 +91,12 @@ class IngestStage(Stage):
             media_path = cfr_path
             info = normalize.probe(media_path)
 
-        prog(0.98, "Extracting analysis audio…")
-        audio_path = ctx.job_dir / "audio16k.wav"
-        if not audio_path.exists():
-            normalize.extract_analysis_audio(media_path, audio_path)
+        audio_path: Path | None = None
+        if self.needs_audio:
+            prog(0.98, "Extracting analysis audio…")
+            audio_path = ctx.job_dir / "audio16k.wav"
+            if not audio_path.exists():
+                normalize.extract_analysis_audio(media_path, audio_path)
 
         from ..jobs import queue as jobs_queue
 
@@ -94,7 +108,7 @@ class IngestStage(Stage):
 
         return {
             "media_path": str(media_path),
-            "audio_path": str(audio_path),
+            "audio_path": str(audio_path) if audio_path is not None else None,
             "title": title,
             "probe": info.to_json(),
             "heatmap": heatmap,

@@ -98,3 +98,92 @@ LR_ASD_BACKEND = register(
         approx_mb=1,
     )
 )
+
+
+# Kokoro-82M (E20-F02), Apache-2.0 — the story narrator. Three files per
+# voice: the model, its config, and one voice pack. The .pth and every
+# voice are LFS-stored, so each sha256 below IS the publisher's identity
+# for the file (HF's lfs.oid, read from the repo tree API on 2026-09-06).
+# config.json is a plain git blob: its sha256 was taken from two
+# identical fetches whose ETag (14a726ed…) is the blob's git SHA-1, which
+# kokoro_tts's verification recomputes from the bytes before pinning.
+_KOKORO_URL = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/"
+
+KOKORO_MODEL = register(
+    ModelSpec(
+        name="kokoro",
+        filename="kokoro-v1_0.pth",
+        url=_KOKORO_URL + "kokoro-v1_0.pth",
+        sha256="496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+        approx_mb=327,
+    )
+)
+
+KOKORO_CONFIG = register(
+    ModelSpec(
+        name="kokoro",
+        filename="config.json",
+        url=_KOKORO_URL + "config.json",
+        sha256="5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f",
+        approx_mb=1,
+    )
+)
+
+
+# One pinned voice pack per voice the deck offers (narrate/kokoro_tts.VOICES).
+KOKORO_VOICES: dict[str, ModelSpec] = {
+    "af_heart": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/af_heart.pt",
+            url=_KOKORO_URL + "voices/af_heart.pt",
+            sha256="0ab5709b8ffab19bfd849cd11d98f75b60af7733253ad0d67b12382a102cb4ff",
+            approx_mb=1,
+        )
+    ),
+    "af_bella": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/af_bella.pt",
+            url=_KOKORO_URL + "voices/af_bella.pt",
+            sha256="8cb64e02fcc8de0327a8e13817e49c76c945ecf0052ceac97d3081480e8e48d6",
+            approx_mb=1,
+        )
+    ),
+    "am_adam": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/am_adam.pt",
+            url=_KOKORO_URL + "voices/am_adam.pt",
+            sha256="ced7e284aba12472891be1da3ab34db84cc05cc02b5889535796dbf2d8b0cb34",
+            approx_mb=1,
+        )
+    ),
+    "am_michael": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/am_michael.pt",
+            url=_KOKORO_URL + "voices/am_michael.pt",
+            sha256="9a443b79a4b22489a5b0ab7c651a0bcd1a30bef675c28333f06971abbd47bd37",
+            approx_mb=1,
+        )
+    ),
+    "bf_emma": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/bf_emma.pt",
+            url=_KOKORO_URL + "voices/bf_emma.pt",
+            sha256="d0a423deabf4a52b4f49318c51742c54e21bb89bbbe9a12141e7758ddb5da701",
+            approx_mb=1,
+        )
+    ),
+    "bm_george": register(
+        ModelSpec(
+            name="kokoro",
+            filename="voices/bm_george.pt",
+            url=_KOKORO_URL + "voices/bm_george.pt",
+            sha256="f1bc812213dc59774769e5c80004b13eeb79bd78130b11b2d7f934542dab811b",
+            approx_mb=1,
+        )
+    ),
+}

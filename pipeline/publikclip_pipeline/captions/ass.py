@@ -136,6 +136,20 @@ PRESETS: dict[str, Preset] = {
             bold=False, uppercase=False, margin_v=560, pop=True,
             event_tag_color="&H00FF9500",
         ),
+        # E20-F04: one word at a time, centred on the frame, for the story
+        # format. A preset, not a mechanism — max_words=1 is the whole of
+        # it; the chunker, the redraw and the burn are the ones every other
+        # preset uses. margin_v puts the word at the vertical centre: with
+        # nobody's face in the picture the middle is where the eye rests.
+        Preset(
+            name="story",
+            font="Archivo Black", font_file="ArchivoBlack-Regular.ttf", size=96,
+            primary="&H00FFFFFF", active="&H00FFFFFF", emphasis="&H0000D7FF",
+            outline_color="&H00000000", outline=6, shadow=2,
+            bold=False, uppercase=True, margin_v=900, pop=True,
+            event_tag_color="&H00C0C0C0",
+            max_words=1, pause_break=CHUNK_PAUSE_BREAK,
+        ),
     ]
 }
 

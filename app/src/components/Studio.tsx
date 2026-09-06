@@ -2,17 +2,25 @@ import { useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { api } from '../api'
 import { hardwareLabel, sixtyMinEstimate } from '../hw'
-import type { ErrorInfo, HardwareProfile, JobSummary, LogLine, ResumeInfo } from '../types'
+import type {
+  ErrorInfo, HardwareProfile, JobSummary, LogLine, ResumeInfo, StoryLimits, StoryRun
+} from '../types'
 import ErrorPanel from './ErrorPanel'
 import KeyModal from './KeyModal'
 import ResumePicker from './ResumePicker'
 
-const STAGE_ORDER = [
-  'ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'
-]
+/** The stage rows per chain (E20, D-19). Mirrors chains.py — python is the
+ *  truth and pins cli._stages() to it; this copy only decides the order and
+ *  the label of the rows the deck draws. A `progress` event for a stage not
+ *  listed here still lands in `stages`, it just has no row. */
+export const CHAIN_ORDER: Record<string, string[]> = {
+  clips: ['ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'],
+  stories: ['ingest', 'narrate', 'asr', 'render']
+}
 
 export const STAGE_LABELS: Record<string, string> = {
   ingest: 'INGEST',
+  narrate: 'NARRATE',
   asr: 'TRANSCRIBE',
   diarize: 'SPEAKERS',
   events: 'LISTEN',
@@ -23,6 +31,27 @@ export const STAGE_LABELS: Record<string, string> = {
 }
 
 const CAPTION_PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
+// E20-F04: one word at a time is a preset, not a mechanism — it leads the
+// list on the stories deck and is the story default.
+const STORY_CAPTION_PRESETS = ['story', ...CAPTION_PRESETS]
+// Kokoro's speed multiplier, as four pills: 1.0 is the voice's own pace,
+// 1.1–1.2 the brisk delivery the format usually has.
+const STORY_SPEEDS = [0.9, 1.0, 1.1, 1.2]
+
+export function countWords(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0
+}
+
+/** The deck's estimate, with python's numbers (api.storyLimits). */
+export function narrationSeconds(words: number, wordsPerMinute: number, speed: number): number {
+  return (words / wordsPerMinute) * 60 / Math.max(0.1, speed)
+}
+
+function fmtDuration(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec % 60)
+  return m > 0 ? `${m} min ${String(s).padStart(2, '0')} s` : `${s} s`
+}
 // E18-F01: the top-N choices. Eight is where the list still fits the bar
 // gameplay framing leaves at the top (captions/ranking.py:band_for).
 const RANKING_COUNTS = [3, 4, 5, 6, 7, 8]
@@ -41,6 +70,9 @@ interface Props {
   enqueueing: boolean
   queued: number
   hardware: HardwareProfile | null
+  /** E20: which chain the running (or last started) job runs — from the job
+   *  event, so the deck draws that chain's rows. 'clips' until a job starts. */
+  chain: string
   onCancel: () => void
   onRun: (
     source: string,
@@ -49,7 +81,10 @@ interface Props {
     gameplayAmount: number,
     letterboxFill: string,
     ranking: boolean,
-    rankingCount: number
+    rankingCount: number,
+    watermarkImage: string,
+    watermarkText: string,
+    story: StoryRun | null
   ) => void
   onOpenLoop: () => void
   onOpenQueue: () => void
@@ -58,16 +93,44 @@ interface Props {
   onResume: (id: string, fromStage?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, errorJobId, cancelled, diskNotice, log, enqueueing, queued, hardware, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, errorJobId, cancelled, diskNotice, log, enqueueing, queued, hardware, chain, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
+  // E20 (D-19): the chain, chosen above CUT IT. Stories is its own panel:
+  // a background of the user's, a text, a voice and a speed. The clips
+  // controls that change nothing for a story (brain, framing, ranking)
+  // are not shown there — a control with nothing behind it lies (§5.2).
+  const [mode, setMode] = useState<'clips' | 'stories'>('clips')
+  const [storyText, setStoryText] = useState('')
+  const [storyFileName, setStoryFileName] = useState('')
+  const [background, setBackground] = useState('')
+  const [voice, setVoice] = useState('')
+  const [speed, setSpeed] = useState(1.0)
+  const [storyCaptions, setStoryCaptions] = useState('story')
+  // python's numbers (narrate/limits.py) — the deck never carries a copy
+  const [limits, setLimits] = useState<StoryLimits | null>(null)
+  const [storyNotice, setStoryNotice] = useState<string | null>(null)
+  const [storyBusy, setStoryBusy] = useState(false)
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
   const [gameplayAmount, setGameplayAmount] = useState(0)
   const [letterboxFill, setLetterboxFill] = useState('black')
-  // E18-F01: the output format. Off = individual clips, as always; on = one
-  // ranking video of the top `rankingCount` moments and no clips (D-17).
+  // E18-F01, D-18: the ranking videos. Off = the clips alone, as always;
+  // on = the clips AND up to two ranking videos, moments 1..N and N+1..2N
+  // (E18-F06). Never instead of the clips — D-17 said so and was reversed.
   const [ranking, setRanking] = useState(false)
   const [rankingCount, setRankingCount] = useState(5)
+  // E19-F02: the channel mark, decided before the cut like the rest of the
+  // deck and sent explicitly — '' is "none", so a job never inherits a
+  // mark the deck did not show (the Settings default seeds only jobs made
+  // without the deck, exactly like the fill and the ranking toggle). The
+  // PNG is copied into the app's own folder on selection, and the job
+  // stores THAT path: a logo moved later breaks nothing.
+  const [wmKind, setWmKind] = useState<'none' | 'image' | 'text'>('none')
+  const [wmImage, setWmImage] = useState('')
+  const [wmImageName, setWmImageName] = useState('')
+  const [wmText, setWmText] = useState('')
+  const [wmBusy, setWmBusy] = useState(false)
+  const [wmError, setWmError] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   // T-14: the resume picker for one rail job. info=null while the one-shot
@@ -85,6 +148,83 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     const el = consoleRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [log])
+
+  // The stories panel's numbers and defaults, fetched once, the first time
+  // it opens: the limits from the module that applies them, and the saved
+  // voice, speed and last-used background (E20 Q2) from the settings the
+  // panel edits. Clips users never pay these two one-shots.
+  useEffect(() => {
+    if (mode !== 'stories' || limits !== null) return
+    api
+      .storyLimits()
+      .then((l) => {
+        setLimits(l)
+        setVoice((v) => v || l.default_voice)
+      })
+      .catch((err) => setStoryNotice(`could not read the story limits: ${String(err)}`))
+    api
+      .settingsGet()
+      .then((p) => {
+        const story = (p.defaults?.story ?? {}) as { voice?: string; speed?: number; background?: string }
+        if (story.voice) setVoice(story.voice)
+        if (typeof story.speed === 'number') setSpeed(story.speed)
+        if (story.background) setBackground((b) => b || story.background!)
+      })
+      .catch(() => {})
+  }, [mode, limits])
+
+  const words = countWords(storyText)
+  const estimate = limits ? narrationSeconds(words, limits.words_per_minute, speed) : null
+  const storyRefusal =
+    limits && words > limits.max_words
+      ? `The story is ${words} words; the limit is ${limits.max_words}. Cut it down by ${words - limits.max_words} words, or split it into two stories.`
+      : null
+  const storyWarning =
+    limits && !storyRefusal && words > limits.warn_words
+      ? `${words} words is a long story — about ${fmtDuration(estimate ?? 0)} of narration. Stories under ${limits.warn_words} words tend to hold better.`
+      : null
+  const storyReady = mode === 'stories' && background.trim() !== '' && words > 0 && !storyRefusal
+
+  const pickBackground = async () => {
+    setStoryNotice(null)
+    let picked: string | null = null
+    try {
+      picked = await api.pickBackgroundVideo()
+    } catch (err) {
+      setStoryNotice(String(err))
+      return
+    }
+    if (!picked) return
+    setBackground(picked)
+    // remembered as a real setting (E20 Q2); a refusal is a notice, not a block
+    api.rememberBackground(picked).catch((err) => setStoryNotice(String(err)))
+  }
+
+  const loadStoryFile = async () => {
+    setStoryNotice(null)
+    let picked: string | null = null
+    try {
+      picked = await api.pickStoryFile()
+    } catch (err) {
+      setStoryNotice(String(err))
+      return
+    }
+    if (!picked) return
+    setStoryBusy(true)
+    try {
+      const res = await api.storyRead(picked)
+      if (res.ok && typeof res.text === 'string') {
+        setStoryText(res.text)
+        setStoryFileName(res.name ?? '')
+      } else {
+        setStoryNotice(res.error ?? 'could not read the file')
+      }
+    } catch (err) {
+      setStoryNotice(String(err))
+    } finally {
+      setStoryBusy(false)
+    }
+  }
 
   // The button disables itself on click; the run ending (cancelled event,
   // result, or crash) is what re-arms it.
@@ -106,11 +246,63 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
       )
   }
 
+  // The picker, then the copy. A cancelled dialog changes nothing; a
+  // refused file (not a PNG) says why here, under the control, and sends
+  // no image — never the picked path in place of a stored one.
+  const pickWatermarkImage = async () => {
+    setWmError(null)
+    let picked: string | null = null
+    try {
+      picked = await api.pickWatermarkImage()
+    } catch (err) {
+      setWmError(String(err))
+      return
+    }
+    if (!picked) {
+      if (wmImage) setWmKind('image')
+      return
+    }
+    setWmBusy(true)
+    try {
+      const res = await api.watermarkImport(picked)
+      if (res.ok && res.path) {
+        setWmImage(res.path)
+        setWmImageName(res.name ?? res.path)
+        setWmKind('image')
+      } else {
+        setWmError(res.error ?? 'could not import the image')
+      }
+    } catch (err) {
+      setWmError(String(err))
+    } finally {
+      setWmBusy(false)
+    }
+  }
+
   // Enqueue and clear the field: with the input live while a job runs, a
   // stuck value plus a second Enter would silently queue a duplicate.
   const submit = () => {
+    if (mode === 'stories') {
+      if (!storyReady) return
+      onRun(
+        background.trim(), llm, storyCaptions, 0, 'black', false, rankingCount,
+        wmKind === 'image' ? wmImage : '',
+        wmKind === 'text' ? wmText.trim() : '',
+        { text: storyText, voice, speed }
+      )
+      // the background stays (the next story usually reuses it); the text
+      // goes, exactly as the URL field clears after a cut
+      setStoryText('')
+      setStoryFileName('')
+      return
+    }
     if (!source.trim()) return
-    onRun(source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
+    onRun(
+      source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+      wmKind === 'image' ? wmImage : '',
+      wmKind === 'text' ? wmText.trim() : '',
+      null
+    )
     setSource('')
   }
 
@@ -197,8 +389,32 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
       <main className="stage-area">
         <div className="stage-main">
           <section className="input-block">
+            {/* E20 (D-19): two chains, one deck. The choice sits above
+                CUT IT because everything under it depends on it. */}
+            <div className="mode-switch" role="tablist" aria-label="mode">
+              <button
+                role="tab"
+                aria-selected={mode === 'clips'}
+                className={`opt mode-tab ${mode === 'clips' ? 'opt-on' : ''}`}
+                onClick={() => setMode('clips')}
+              >
+                Clips
+              </button>
+              <button
+                role="tab"
+                aria-selected={mode === 'stories'}
+                className={`opt mode-tab ${mode === 'stories' ? 'opt-on' : ''}`}
+                onClick={() => setMode('stories')}
+              >
+                Stories
+              </button>
+            </div>
             <h1 className="input-heading">
-              FEED IT<span className="amber"> AN HOUR.</span>
+              {mode === 'stories' ? (
+                <>TELL IT<span className="amber"> A STORY.</span></>
+              ) : (
+                <>FEED IT<span className="amber"> AN HOUR.</span></>
+              )}
             </h1>
             {/* Attribution, not decoration: this build is a modified
                 publikclip, and publikclip is AGPL-3.0 — saying where it
@@ -216,17 +432,66 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
               </button>
               , an open-source (AGPL-3.0) project on GitHub.
             </p>
-            <div className="input-row">
-              <input
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submit()}
-                placeholder="YouTube URL or a path to a video file"
-              />
-              <button className="btn-primary" onClick={submit} disabled={!source.trim()}>
-                {running ? 'QUEUE IT' : 'CUT IT'}
-              </button>
-            </div>
+            {mode === 'clips' && (
+              <div className="input-row">
+                <input
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && submit()}
+                  placeholder="YouTube URL or a path to a video file"
+                />
+                <button className="btn-primary" onClick={submit} disabled={!source.trim()}>
+                  {running ? 'QUEUE IT' : 'CUT IT'}
+                </button>
+              </div>
+            )}
+            {mode === 'stories' && (
+              <div className="story-panel">
+                {/* F03: the background is the user's own file; the tool never
+                    generates one. Remembered on pick (Q2). */}
+                <div className="input-row">
+                  <input
+                    value={background}
+                    onChange={(e) => setBackground(e.target.value)}
+                    placeholder="path to a background video (looped or trimmed to the narration, its sound muted)"
+                    aria-label="background video"
+                  />
+                  <button className="btn-secondary" onClick={pickBackground}>
+                    browse…
+                  </button>
+                </div>
+                {/* F01: pasted text or a .txt — copied into the job, never
+                    fetched from anywhere. First line = the title (the card). */}
+                <textarea
+                  className="story-text mono"
+                  value={storyText}
+                  onChange={(e) => setStoryText(e.target.value)}
+                  placeholder={'The title on the first line\n\nThen the story. Paste it, or load a .txt.'}
+                  aria-label="story text"
+                  rows={9}
+                />
+                <div className="story-meta mono">
+                  <span>
+                    {words} {words === 1 ? 'word' : 'words'}
+                    {limits && words > 0 && estimate !== null
+                      ? ` · about ${fmtDuration(estimate)} of narration`
+                      : ''}
+                    {storyFileName ? ` · from ${storyFileName}` : ''}
+                  </span>
+                  <button className="btn-ghost" onClick={loadStoryFile} disabled={storyBusy}>
+                    {storyBusy ? 'reading…' : 'load .txt…'}
+                  </button>
+                </div>
+                {storyRefusal && <p className="opt-hint story-refusal">{storyRefusal}</p>}
+                {storyWarning && <p className="opt-hint">{storyWarning}</p>}
+                {storyNotice && <p className="opt-hint">{storyNotice}</p>}
+                <div className="input-row">
+                  <button className="btn-primary" onClick={submit} disabled={!storyReady}>
+                    {running ? 'QUEUE IT' : 'CUT IT'}
+                  </button>
+                </div>
+              </div>
+            )}
             {/* The press must answer on THIS screen: the queue once grew to
                 six invisible jobs because the only evidence lived in views
                 the user was not on. */}
@@ -244,6 +509,51 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
               </p>
             )}
             <div className="run-options">
+              {mode === 'stories' && (
+                <>
+                  {/* F02: a generic synthetic voice from local weights; the
+                      list is python's (settings story-limits). */}
+                  <div className="opt-group">
+                    <span className="opt-label">voice</span>
+                    {(limits?.voices ?? []).map((v) => (
+                      <button
+                        key={v.id}
+                        className={`opt ${voice === v.id ? 'opt-on' : ''}`}
+                        onClick={() => setVoice(v.id)}
+                        title={v.label}
+                      >
+                        {v.label.split(' ·')[0]}
+                      </button>
+                    ))}
+                    {limits === null && <span className="opt-hint">loading voices…</span>}
+                  </div>
+                  <div className="opt-group">
+                    <span className="opt-label">speed</span>
+                    {STORY_SPEEDS.map((s) => (
+                      <button
+                        key={s}
+                        className={`opt ${Math.abs(speed - s) < 0.001 ? 'opt-on' : ''}`}
+                        onClick={() => setSpeed(s)}
+                      >
+                        {s.toFixed(1)}×
+                      </button>
+                    ))}
+                  </div>
+                  <div className="opt-group">
+                    <span className="opt-label">captions</span>
+                    {STORY_CAPTION_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        className={`opt ${storyCaptions === preset ? 'opt-on' : ''}`}
+                        onClick={() => setStoryCaptions(preset)}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {mode === 'clips' && (
               <div className="opt-group">
                 <span className="opt-label">brain</span>
                 {['gemini', 'ollama'].map((mode) => (
@@ -256,6 +566,8 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   </button>
                 ))}
               </div>
+              )}
+              {mode === 'clips' && (
               <div className="opt-group">
                 <span className="opt-label">captions</span>
                 {CAPTION_PRESETS.map((preset) => (
@@ -268,6 +580,8 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   </button>
                 ))}
               </div>
+              )}
+              {mode === 'clips' && (
               <div className="opt-group">
                 <span className="opt-label">framing</span>
                 <button
@@ -283,12 +597,13 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   gameplay
                 </button>
               </div>
+              )}
               {/* E6-F09: the job-level letterbox fill, decided BEFORE the cut
                   instead of re-rendered into N clips afterwards. Only shown
                   at gameplay framing — a podcast crop is exactly 9:16, bars
                   never exist, and a control that does nothing is a lie
                   (§5.2). Per-clip editor choices still win over this. */}
-              {gameplayAmount > 0 && (
+              {mode === 'clips' && gameplayAmount > 0 && (
                 <div className="opt-group">
                   <span className="opt-label">edges</span>
                   {(['black', 'blur'] as const).map((fill) => (
@@ -302,20 +617,23 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   ))}
                 </div>
               )}
-              {/* E18-F01: the output unit, decided before the cut like the
-                  rest of the deck. The count only exists while ranking is
+              {/* E18-F01, D-18: the ranking videos, decided before the cut
+                  like the rest of the deck — beside the clips, never
+                  instead of them. The count only exists while ranking is
                   on — shown always, it would be a control that changes
                   nothing (§5.2). */}
+              {mode === 'clips' && (
               <div className="opt-group">
-                <span className="opt-label">format</span>
+                <span className="opt-label">ranking videos</span>
                 <button className={`opt ${!ranking ? 'opt-on' : ''}`} onClick={() => setRanking(false)}>
-                  clips
+                  off
                 </button>
                 <button className={`opt ${ranking ? 'opt-on' : ''}`} onClick={() => setRanking(true)}>
-                  ranking
+                  on
                 </button>
               </div>
-              {ranking && (
+              )}
+              {mode === 'clips' && ranking && (
                 <div className="opt-group">
                   <span className="opt-label">moments</span>
                   {RANKING_COUNTS.map((n) => (
@@ -329,12 +647,65 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   ))}
                 </div>
               )}
+              {/* E18-F06: what "on" makes, said where it is chosen — the
+                  second video exists only when the job has 2N finalists. */}
+              {mode === 'clips' && ranking && (
+                <p className="opt-hint">
+                  two ranking videos beside the clips — moments 1 to {rankingCount} and the next{' '}
+                  {rankingCount}; one, if the job renders fewer than {rankingCount * 2} clips
+                </p>
+              )}
+              {/* E19-F02: a picture or a word on every output file, clips
+                  and ranking videos alike. The image button carries the
+                  stored file's name once one is imported. */}
+              <div className="opt-group">
+                <span className="opt-label">watermark</span>
+                <button
+                  className={`opt ${wmKind === 'none' ? 'opt-on' : ''}`}
+                  onClick={() => setWmKind('none')}
+                >
+                  none
+                </button>
+                <button
+                  className={`opt ${wmKind === 'image' ? 'opt-on' : ''}`}
+                  onClick={pickWatermarkImage}
+                  disabled={wmBusy}
+                  title="a PNG, bottom centre of every clip and ranking video"
+                >
+                  {wmBusy ? 'copying…' : wmImageName || 'image…'}
+                </button>
+                <button
+                  className={`opt ${wmKind === 'text' ? 'opt-on' : ''}`}
+                  onClick={() => setWmKind('text')}
+                >
+                  word
+                </button>
+              </div>
+              {wmKind === 'text' && (
+                <div className="opt-group">
+                  <span className="opt-label">text</span>
+                  <input
+                    className="opt-input mono"
+                    value={wmText}
+                    onChange={(e) => setWmText(e.target.value)}
+                    placeholder="@yourchannel"
+                    aria-label="watermark word"
+                  />
+                </div>
+              )}
+              {wmError && <p className="opt-hint">{wmError}</p>}
+              {wmKind !== 'none' && (
+                <p className="opt-hint">
+                  bottom centre of every clip and ranking video — inside the bar at gameplay
+                  framing, over the picture at reduced opacity otherwise; never over the captions
+                </p>
+              )}
             </div>
             {/* At podcast framing the crop fills the canvas and there is no
                 bar for the list to sit in, so it is drawn over the top of
                 the picture (owner's decision, E18-F03). Say so here, where
                 the framing is chosen, not after the render. */}
-            {ranking && gameplayAmount === 0 && (
+            {mode === 'clips' && ranking && gameplayAmount === 0 && (
               <p className="opt-hint">
                 at podcast framing the list sits over the top of the picture — gameplay framing gives it its own band
               </p>
@@ -343,7 +714,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
 
           {(running || Object.keys(stages).length > 0) && (
             <section className="deck">
-              {STAGE_ORDER.filter((s) => stages[s] || running).map((name, i) => {
+              {(CHAIN_ORDER[chain] ?? CHAIN_ORDER.clips).filter((s) => stages[s] || running).map((name, i) => {
                 const st = stages[name]
                 const state = !st ? 'idle' : st.fraction >= 1 ? 'done' : 'live'
                 return (

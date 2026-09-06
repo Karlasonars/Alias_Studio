@@ -40,8 +40,15 @@ mirror it into the code.
 
 ```
 pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
-  cli.py            (718)  argparse surface; the sidecar's entry point
-  config.py         (452)  the whole settings tree
+  cli.py            (718)  argparse surface; the sidecar's entry point.
+                           `_stages(mode)` builds a chain from chains.py
+  chains.py                the stage table per mode (E20, D-19): `clips` and
+                           `stories`. Light-import; every enumerator — the
+                           resume picker, --from-stage, the diagnostic bundle,
+                           the profile — reads it, and a test pins each chain
+                           to `_stages()`
+  config.py         (452)  the whole settings tree. `mode` is the job's chain,
+                           a real field: a snapshot without it is a clips job
   settings_schema.py (492) UI schema — 13 groups; 67 nested + 6 top-level = 73
                            fields, plus CAPTION_FIELDS (15) outside GROUPS.
                            Real surface: 88, all of it help-guarded
@@ -53,7 +60,12 @@ pipeline/publikclip_pipeline/     the product — ~11,000 lines of Python
                            path around it
   jobs/queue.py     (355)  Job/Stage machinery, SQLite, checkpoints
   ingest/ asr/ diarize/ events/ candidates/ scoring/ camera/ render/
-                           the eight stages, in that order
+                           the clips chain's eight stages, in that order
+  narrate/                 the story chain's own stage (E20): story.txt →
+                           narration.wav through Kokoro from registry weights.
+                           The story chain is ingest → narrate → asr → render;
+                           its render is render/story.py under the clips
+                           render's name (D-20)
   captions/ass.py   (429)  ASS subtitle generation. 5 built-in presets
   copywriting/             titles, descriptions, hooks
   edits/                   per-clip editing + single-clip render
@@ -184,9 +196,9 @@ still correct?*
    "Missing means unchanged" is the wrong summary: it is only unchanged *if the
    current value is still the default*.
 
-   **`fingerprint_ok` has three callers** — `candidates`, `events` (T-21) and
-   `scoring` (T-39). `camera` and `render` use strict comparison instead, which
-   means rule 3 does **not** hold for those two.
+   **`fingerprint_ok` has four callers** — `candidates`, `events` (T-21),
+   `scoring` (T-39) and `narrate` (E20). `camera` and both renders use strict
+   comparison instead, which means rule 3 does **not** hold for those.
 
 What each stage actually does — all eight, because the two-row version of this table
 is how a shipped setting ended up dead:
@@ -197,10 +209,18 @@ is how a shipped setting ended up dead:
 | `asr` | no override — **correct: reads zero settings** | n/a |
 | `diarize` | no override — **correct: reads zero settings** | n/a |
 | `events` | `curves.json` exists + `fingerprint_ok` on `laughter_specialist` | yes |
-| `candidates` | `fingerprint_ok(...)` — the only caller | yes |
+| `candidates` | `fingerprint_ok(...)` on window lengths, channel weights, scene detector | yes |
 | `scoring` | `fingerprint_ok` on `settings_used` (model + weights + word gate) | yes (T-39) |
 | `camera` | two strict `!=` on `__dict__` (`camera` minus `letterbox_fill`, which is render-only; `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
 | `render` | strict comparisons, camera versioned: checkpoints with a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` plus the **resolved** per-clip fill; older checkpoints keep the full strict compare | no |
+| `narrate` (stories only) | `narration.wav` exists + `fingerprint_ok` on the story text's sha256, the voice and the speed | yes |
+| `render` (stories, `render/story.py`) | `story: True` marker first — a clip checkpoint never serves a story job — then strict compares on caption preset, resolved caption style, loudness, encoder, watermark and the card's drawing version; outputs exist | no |
+
+**Two chains over one runner (E20, D-19).** `run_stages()` takes its list as a
+parameter; `chains.py` names the lists and `cli._stages(mode)` builds them.
+The story chain is `ingest` (with `needs_audio=False`) → `narrate` → `asr`
+(with `source="narrate"`) → `render`. A job's chain is fixed at creation and
+lives in its settings snapshot as `mode`; `resume` never takes the flag.
 
 Two live consequences, both worth knowing before you touch any of this:
 
@@ -636,6 +656,12 @@ scaffolding "for later":
 - recording
 - cloud rendering, mandatory accounts, or any required upload
 - AI avatars, voice cloning, text-to-video
+
+  > **Allowed:** a synthetic narrator voice from a local model with generic voices.
+  > **Still forbidden:** cloning a specific real person's voice, AI avatars,
+  > text-to-video generation. The background comes from the user's file; the tool
+  > does not generate it.
+
 - a mobile app
 - paid tiers, licence keys, entitlement checks — the product is free, entirely
 - a degraded "no AI" scoring mode — `llm_mode` is `gemini | ollama`, deliberately

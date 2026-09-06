@@ -1,6 +1,6 @@
 # Alias Studio — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.5 · **Datums:** 2026-08-25 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
+**Versija:** 1.9 · **Datums:** 2026-09-06 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -43,6 +43,8 @@
 23. [E16 — Izplatīšana, licences un kopiena](#e16--izplatīšana-licences-un-kopiena)
 24. [E17 — Iepakojuma eksperimenti](#e17--iepakojuma-eksperimenti)
 25. [E18 — Ranga video](#e18--ranga-video)
+26. [E19 — Pārklājumi uz klipa](#e19--pārklājumi-uz-klipa)
+27. [E20 — Stāstu režīms](#e20--stāstu-režīms)
 
 **C daļa — Dizains**
 
@@ -186,7 +188,7 @@ Trīs vārdi šeit ir izvēlēti apzināti:
 | Ierakstīšanas funkciju | Riverside to dara labi. Mēs pieņemam faila vai saites ievadi. |
 | Mākoņa renderēšanu v1.0 | Pārkāpj 1. īpašību un ievieš serveru izmaksas, kuras nav ar ko segt. |
 | Obligātu kontu | Pārkāpj 1. īpašību. Konts drīkst eksistēt tikai publicēšanas integrācijām. |
-| AI avatārus, balss klonēšanu, teksta-uz-video | Cits produkts. |
+| AI avatārus, balss klonēšanu, teksta-uz-video | Cits produkts. **Precizēts v1.9 ([E20](#e20--stāstu-režīms)):** sintētisks stāstītājs no lokāla modeļa ar vispārīgām balsīm ir atļauts; konkrētas reālas personas balss klonēšana, avatāri un teksta-uz-video paliek aizliegti. Fons nāk no lietotāja faila; rīks to neģenerē. |
 | Mobilo lietotni | Konveijers prasa GPU un desmitiem GB. |
 | Reāllaika sadarbību | Aģentūrām pietiek ar eksportējamiem profiliem un projektu mapēm ([E12](#e12--iestatījumi-un-profili)). |
 | Maksas līmeņus, "pro" funkcijas, licenču atslēgas | Skatīt [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts). |
@@ -2040,7 +2042,7 @@ Bez šī E17 ir tikai variantu ģenerators.
 
 *Pieņemšanas kritēriji:*
 - Panelī pirms CUT IT ir izvēle **ranga video**, blakus pārējām paneļa vadīklām, ar to pašu ķēdi (panelis → `enqueue_job` → `jobs create` → `_apply_setting_flags`) un karogu uz `run`, `resume` un `jobs create`.
-- Kad režīms ir ieslēgts, darbs izdod **vienu failu**, ne atsevišķus klipus. Tas ir apzināts lēmums: lietotājs izvēlas formātu, ne abus.
+- Kad režīms ir ieslēgts, darbs izdod **gan** parastos klipus, **gan** ranga video — sk. [E18-F05](#e18--ranga-video) un D-18. Sākotnējais "viens fails" kritērijs ir atcelts.
 - Momentu skaits ir izvēlams; noklusējums ir **5**.
 - Režīma maiņa noveco renderēšanas kontrolpunktu, jo izvade ir cita. Tā nedrīkst novecot nevienu agrāko posmu — atlase, vērtējums un kamera ir tie paši.
 
@@ -2072,7 +2074,128 @@ Bez šī E17 ir tikai variantu ģenerators.
 - Katram momentam tiek uzģenerēta īsa etiķete — divi līdz trīs vārdi, ne teikums (piemēram *"bath bomb"*, *"went flying"*).
 - Etiķetes raksta tā pati LLM mašīnērija, kas jau raksta virsrakstus un āķus (`copywriting/`), ne jauns ceļš.
 - Ja etiķete neuzģenerējas, fragments joprojām spēlē un tā numurs paliek tukšs — formāts degradējas, nevis krīt (§5.9).
+- Ja etiķete neiztur formāta filtru, modelis dabū **vienu** atkārtotu mēģinājumu ar stingrāku norādi. Neizdevies izsaukums (tīkls, API, ķēdes pārtraucējs) netiek atkārtots — tas ir cits kļūmes veids.
 - **Rediģēšana šajā versijā netiek būvēta.** Ja izrādās, ka lietotājs etiķetes pārraksta katru reizi, tā ir nākamā prasība, ne šī.
+
+---
+
+**E18-F05 · Ranga režīms neaizstāj klipus** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Ieslēgts ranga režīms izdod **gan** parastos klipus, **gan** ranga video. Tā nav izvēle starp diviem formātiem (D-18).
+- Kontrolpunkta izvades forma atkal satur pa ierakstam katram klipam plus ranga ierakstus. Trīs lasītāji ārpus posma — `_previous_outputs`, `drop_reproducible_outputs` un Review — atgriežas pie jauktās formas.
+- Klipu redaktors strādā ar parastajiem klipiem kā vienmēr. Ranga video redaktora nav.
+- Režīma ieslēgšana nedrīkst novecot nevienu posmu pirms renderēšanas.
+
+---
+
+**E18-F06 · Divi ranga video no viena avota** · `P1` · P1
+
+*Pieņemšanas kritēriji:*
+- No viena darba top **divi** ranga video: pirmais no momentiem 1–5, otrais no 6–10.
+- Momentu skaits vienā video ir izvēlams; noklusējums 5. Otrais ņem nākamos N.
+- Ja finālistu nepietiek diviem, top viens, un lietotājs redz rindu, kāpēc. Formāts degradējas, nevis krīt (§5.9).
+- Abi nes to pašu virsrakstu un to pašu pārklājuma ģeometriju, lai izskatītos kā viena sērija.
+
+---
+
+## E19 — Pārklājumi uz klipa
+
+**Mērķis:** uz gatavā klipa uzlikt to, kas padara to par kanāla klipu, nevis anonīmu fragmentu — virsrakstu un zīmolu.
+**Jauna epika v1.8.**
+
+> Abas prasības zīmē virsū jau gatavam kadram, un abas dala vienu ierobežojumu: tās nedrīkst konkurēt ar subtitriem. Subtitri sēž 560 px no apakšas, un tā ir vienīgā drošā zona, ko kadrs līdz šim pazina. Šī epika pievieno vēl divas.
+
+---
+
+**E19-F01 · Virsraksts uz klipa** · `P1` · P1
+
+*Pieņemšanas kritēriji:*
+- Redaktorā izvēlēts virsraksta variants tiek **iededzināts** klipā un ir redzams **visu klipa garumu**.
+- Klips bez izvēlēta virsraksta renderējas bez tā. Automātiska izvēle netiek būvēta: lietotājs redz, kas tiks uzrakstīts, pirms tas notiek.
+- Attiecas **tikai uz parastajiem klipiem**. Ranga video jau nes savu virsrakstu.
+- Teksts dzīvo augšējā drošajā zonā, ne uz subtitriem, un iet caur to pašu ASS ceļu.
+- Darba līmeņa pārkrāsošana virsrakstu **nedrīkst pazaudēt**. Tas ir stila, ne strukturāls rediģējums: renderēšanas posms to atkārto pats, kā `caption_preset`.
+
+---
+
+**E19-F02 · Ūdenszīme** · `P1` · visi
+
+*Pieņemšanas kritēriji:*
+- Panelī pirms CUT IT var izvēlēties PNG attēlu vai vārdu. Tas tiek uzlikts **katram** izvades failam — gan klipiem, gan ranga video.
+- Novietojums: apakšā centrē. Kur kadrējums rada apakšējo joslu, ūdenszīme sēž uz joslas un neaizsedz saturu; kur joslas nav, tā sēž uz attēla apakšas ar samazinātu necaurspīdību.
+- Ūdenszīme nekad neaizsedz subtitrus.
+- **Pirkstu nospiedumā iet arī paša faila saturs, ne tikai ceļš.** Logo nomaiņa ar to pašu nosaukumu citādi klusi paturētu vecos renderus — tieši tā kļūda, ko §4 1. noteikums apraksta.
+- Ja fails pazūd vai nav lasāms, klips renderējas bez ūdenszīmes ar rindu žurnālā (§5.9).
+
+---
+
+## E20 — Stāstu režīms
+
+**Mērķis:** no teksta un paša lietotāja fona video izgatavot **vienu** vertikālu stāsta video — ierunātu ar sintētisku stāstītāju, ar kartīti virsrakstam un subtitriem pa vienam vārdam.
+**Kāpēc svarīgi:** tā ir **otra formāta ķēde**, ne klipu ķēdes variants. Klipu ķēde meklē momentus stundas garā ierakstā; stāstam nav ko meklēt — tā ievade ir teksts. Vienīgais, kas atkārtojas, ir `Stage` mašinērija: kontrolpunkti, `artifacts_ok`, kaskāde, atsākšana, atcelšana, progress. Divi saraksti pār vienu mašīnu izmanto §4 līgumu; viens saraksts ar izlaistiem posmiem prasītu izlaišanas mehānismu, kura nav (D-19).
+**Jauna epika v1.9.**
+
+> **Ko rīks NEdara, un tas nav stila jautājums.** Tas nekad neielādē tekstu no Reddit vai jebkuras citas vietnes — teksts ir ielīmēts vai `.txt` fails, ko lietotājs izvēlējies. Tas nezīmē citas platformas ierāmējumu, logo vai izdomātus balsojumu un komentāru skaitļus: rīks, kas ģenerē citas platformas hromu ar safabricētiem iesaistes skaitļiem, ir viltotu ierakstu ģenerators. Un tas neklonē nevienas reālas personas balsi — stāstītājs ir vispārīga sintētiska balss no lokāla modeļa ([2.5](#25-ko-mēs-apzināti-nedarām), CLAUDE.md §8).
+
+Ķēde: `ingest` → `narrate` (jauns) → `asr` → `render`. Pieci no klipu ķēdes astoņiem posmiem nedarbojas. `asr` ir tas pats posms ar vienu parametru — kuru iepriekšējo posmu tas dzird; `render` ir **cits** posms ar to pašu nosaukumu (D-20). Darba režīms dzīvo iestatījumu momentuzņēmumā kā lauks `mode`; ieraksts bez šīs atslēgas ir klipu darbs, tāpēc katrs darbs uz diska turpina darboties kā līdz šim.
+
+---
+
+**E20-F01 · Stāsta ievade** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Panelī virs CUT IT ir izvēle `Clips | Stories`. Stāstu panelī teksts ir ielīmēts vai ielādēts no `.txt` faila; **pirmā rinda ir virsraksts**, viss pēc tās — stāsts.
+- Rīks **nekad** neielādē tekstu no Reddit vai citas vietnes. Nav ne saites lauka, ne ielādes ceļa.
+- Teksts tiek **nokopēts darba mapē** kā `story.txt` ar `jobs create` — tas ir saturs, ne iestatījums, un vesels stāsts nepieder globālajos noklusējumos. Momentuzņēmumā tā nav.
+- Pirms darba sākuma **vienmēr** redzams aplēstais ierunāšanas ilgums — no vārdu skaita un izvēlētā ātruma, ar skaitļiem, ko dod `settings story-limits`, ne ar kopiju panelī. Virs **500** vārdiem — brīdinājums; virs **1500** — atteikums ar nosauktu robežu, gan panelī, gan `jobs create`, kas atsakās, **pirms** darba rinda eksistē. Abi skaitļi ir **sākuma vērtības**, izvēlētas, lai tās pārskatītu pēc lietošanas, ne izmērītas; kodā tas ir pateikts, lai neviens 1500 nelasa kā pētījumu.
+- Pēdējais izmantotais fona video ceļš tiek **atcerēts kā īsts iestatījums** (`story.background`): kas taisa desmit stāstus, neizvēlas to pašu parkūra failu desmit reizes. Tas ir iestatījums — atšķirībā no teksta, kas ir saturs.
+- Iestatījumu panelis rāda visu kā līdz šim: tas glabā **globālos** noklusējumus, ne per-darba stāvokli, un mācīt to par ķēdēm ir apjoms, ko šī versija neņem. Mainās tikai studijas panelis. Tas ir apzināti, ne aizmirsts.
+- Rinda ir viena, kopīga abām ķēdēm. Rindas dzinējs ir režīma agnostiķis (feasibility pass to apstiprināja); otra rinda netiek būvēta.
+
+---
+
+**E20-F02 · Ierunāšanas posms** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- `narrate` ir jauns posms starp `ingest` un `asr`. Stāstītājs ir **Kokoro-82M** (Apache-2.0, komerciāla lietošana tieši atļauta) no lokāliem svariem, kas nāk caur modeļu reģistru ar sha256 katram failam — modelim, konfigurācijai un pa vienam balss failam katrai piedāvātajai balsij. Balss un ātrums ir izvēlami panelī un ar `--voice`/`--speed` uz `run`, `resume` un `jobs create`.
+- Pirkstu nospiedums (§4 1. noteikums): darba mapes teksta faila hešs, balss, ātrums. Teksta maiņa atkārto `narrate` un caur kaskādi (§4 2. noteikums) `asr` un `render`; neko pirms tam. Balss maiņa dara to pašu; nekas nemainīts — viss tiek izmantots atkārtoti.
+- Virsraksts un pamatteksts tiek ierunāti **atsevišķi** un savienoti ar īsu klusumu, lai posms zina, kur virsraksts beidzas. Šī robeža ir kartītes ilgums (F05) — no audio, ne no fiksēta sekunžu skaita.
+- Trūkstoši svari, neizdevusies lejupielāde vai neielādējama pakotne degradējas ar skaidru, katalogā aprakstītu kļūdu (`narrator-unavailable`) — nekad ar traceback (§5.9). Svari tiek ielādēti pirmā stāsta laikā ar progresu darba joslā; pirmās palaišanas lejupielāde klipiem neaug.
+- Balss skanējums šajā versijā **nav pārbaudīts** — integrācija ir (svari ielādējas, sintēze dod audio), bet vai balss skan pareizi, jāsaka īpašnieka ausīm.
+
+---
+
+**E20-F03 · Fons** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Fons ir **lietotāja fails** (vai saite, caur to pašu `ingest`). Rīks fonu neģenerē.
+- Ja fons ir īsāks par ierunājumu, tas tiek **atkārtots ciklā**; ja garāks — **apgriezts**. Viens mehānisms abiem: `-stream_loop -1` un `-t` uz izvades.
+- Fona skaņa ir **izslēgta** — tā nekad netiek kartēta izvadē. Vienīgais audio ir ierunājums.
+- Ne-9:16 fons tiek pārklāts un **centrēti apgriezts caur to pašu ģeometriju**, ko `scale_pad_vf` izmanto izplūdinātajam malu aizpildījumam (`renderer.cover_vf`, izcelts no tās). Abi nekad nevar nesaskanēt.
+- `camera` **nekad nedarbojas**. `ingest` pieņem fonu **bez audio celiņa** (parametrs `needs_audio=False`) — klusa b-roll ir parastais stāsta fons —, un tā `artifacts_ok` prasa analīzes wav tieši tad, kad `run()` to būtu rakstījis.
+- Kodētājs, izvades karogi, metadatu tīrīšana un `verify_output` ir `renderer.py` — tie paši, kas klipam. Otra kodētāja ceļa nav (T-42).
+
+---
+
+**E20-F04 · Subtitri** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Vārdu laiki nāk no `asr`, kas transkribē **uzģenerēto ierunājumu** — **ne** no sintezatora paša izlīdzinājuma. Subtitrs nokrīt tur, kur auss dzird vārdu.
+- Tas pats `captions/ass.py` ceļš, tie paši preseti, tā pati iededzināšana. **Viens vārds vienlaikus ir presets** (`story`, `max_words=1`), ne jauns mehānisms.
+- Vārdi, kas iekrīt virsraksta audio, netiek subtitrēti — tos rāda kartīte.
+- Pārkrāsošana Review rāda tikai subtitrus: kamera un kadrējums stāstam neeksistē, un karogs, kas neko nemaina, netiek sūtīts (§5.2).
+
+---
+
+**E20-F05 · Stāsta kartīte** · `P1` · P1, P2
+
+*Pieņemšanas kritēriji:*
+- Lietotnes **pašas** dizains: caurspīdīgs tumšs panelis kadra vidējā trešdaļā, akcenta līnija preseta aktīvajā krāsā, virsraksts preseta fontā, izmērs pēc garuma.
+- **Bez svešas zīmolvedības, bez logo, bez izdomātiem balsojumu vai komentāru skaitļiem.** Tas ir produkta ierobežojums, ne stila izvēle: rīks, kas ģenerē citas platformas hromu ar safabricētiem iesaistes skaitļiem, ir viltotu ierakstu ģenerators. Ja formātam šķiet, ka tas to prasa — nē.
+- Kartīte redzama, kamēr stāstītājs lasa virsrakstu; robeža nāk no `narrate` kontrolpunkta, ne no fiksēta sekunžu skaita. Subtitri sākas ar pirmo pamatteksta vārdu.
+- Iet caur to pašu ASS dokumentu kā subtitri — kā ranga saraksts (E18-F03) un iededzinātais virsraksts (E19-F01): bez otras subtitru pārejas, bez `drawtext`.
+- Kartītes zīmējuma versija ir renderēšanas pirkstu nospiedumā, lai zīmējuma maiņa pārrenderē kešotos stāstus.
 
 ---
 
@@ -3431,8 +3554,10 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 | D-14 | `.gitattributes` ir "nekavējoties", nevis v0.9 | Higiēnas, ne izlaišanas jautājums, un maksā piecas minūtes. *Koriģēts v1.5: pamatojums bija pārspīlēts — indekss jau bija LF, tāpēc runa ir par platformu divdomību, ne par 26 000 viltus rindām katrā commit. Lēmums paliek; iemesls ir vājāks.* |
 | **D-16** | **Produkta mērķis ir maksimizēt klipu vērtību pa divām svirām — atlase un iepakojums; mēra veiktspējas rādītājus, ne naudu; vērtības cilpa pārceļas uz v1.1** | Īpašnieka lēmums (2026-08-22). Produkts ir operatoriem, kuri zina, ko dara; viņu problēma nav "kā izgriezt klipus", bet "cik vērtības no ierakstītās stundas". Sekas: jauna vīzija ([2.1](#21-vīzijas-formulējums)), jauna 4. īpašība ([2.3](#23-ceturtā-īpašība-ko-šis-dokuments-pievieno)), jauna [2.7](#27-vērtības-cilpa), jauna epika [E17](#e17--iepakojuma-eksperimenti), [E11](#e11--vērtības-cilpa-un-kalibrācija) paplašināta un pacelta uz v1.1 `P0`, jauna [E4-F09](#e4--momentu-atlase-un-analīze), nomainīta ziemeļzvaigzne ([33.1](#331-ziemeļzvaigzne)), pārkārtots ceļvedis, jauni riski R16–R19. Nauda noraidīta kā mērs: atkarīga no nišas un līgumiem, prasa manuālu ievadi; noturība nāk no API un ir salīdzināma. |
 | **D-15** | **Gemini atslēgas vai Ollama prasība paliek pirmajā ekrānā; nav "bez AI" režīma; P4 persona atcelta** | Īpašnieka lēmums (2026-08-22). Vārti nav berze, ko labot — tie ir līgums: vērtējums bez LLM nav vērts auditēšanu, un tas ir pretrunā ar produkta 2. īpašību. Degradēts trešais ceļš būtu uzturēšanas parāds bez ieņēmumiem ([R15](#352-tehniskie-riski)) apmaiņā pret lietotājiem, kuri spriež par produktu pēc tā sliktākās versijas. Abi ceļi ir bezmaksas, tāpēc tā nav maksas siena. Sekas: nepilnības A3 un E1 atceltas, [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) pārrakstīta no vārtu noņemšanas uz to izmaksu samazināšanu, P4 izņemts no mērķauditorijas ([4.2](#42-ieejas-slieksnis-ir-dizaina-izvēle)). |
-
 | **D-17** | **Ranga video ir atsevišķs izvades formāts, ne klipu variants; ieslēgts — darbs izdod vienu failu; saraksts atklājas spēlēšanas secībā; etiķetes netiek rediģētas** | Īpašnieka lēmums (2026-09-03). Rangs jau tiek izrēķināts `scoring` posmā un šodien tiek izmests pēc atlases; šis formāts to parāda skatītājam. Trīs izvēles, katra sašaurina apjomu: **tikai ranga video**, jo divu izvades formātu vienā darbā nozīmētu divus renderēšanas ceļus un divus kontrolpunktus; **spēlēšanas secībā**, jo nezināmais saraksts ir formāta āķis, un aizpildīšana no 1 uz N to nogalina; **bez rediģēšanas**, jo etiķešu redaktors ir atsevišķa saskarne, un pirms tam nav zināms, vai lietotājs tās vispār pārraksta. Sekas: jauna epika [E18](#e18--ranga-video). |
+| **D-19** | **Stāstu formāts ir atsevišķa ķēde (`ingest → narrate → asr → render`), izvēlēta panelī virs CUT IT kā `Clips \| Stories`, ne esošā ķēde ar pieciem izlaistiem posmiem** | Īpašnieka lēmums (2026-09-06). Atkārtoti izmantojamā daļa ir `Stage` mašinērija — kontrolpunkti, `artifacts_ok`, `upstream_stale` kaskāde, atsākšana, atcelšana, progress —, ne posmu saraksts. `run_stages()` sarakstu jau ņem kā parametru; divi saraksti pār vienu mašīnu izmanto §4 līgumu, bet viens saraksts ar izlaidumiem prasītu izlaišanas mehānismu, kura nav, un katrs posms pēc `ingest` tik un tā met `prior-stage-missing`, ja tā ievade trūkst. Režīms dzīvo `settings_json` kā īsts `Settings` lauks (`mode`), ne DB kolonnā — kolonna būtu projekta pirmā shēmas migrācija; ieraksts bez atslēgas ir klipu darbs (§4 3. noteikums). Sekas: `chains.py` tabula, `cli._stages(mode)`, septiņas vietas, kas uzskaitīja astoņus nosaukumus, lasa darba ķēdi; `validate_schema` iegūst per-darba lauku klasifikāciju; jauna epika [E20](#e20--stāstu-režīms). |
+| **D-20** | **Stāstu ķēdes pēdējais posms saucas `render`, tāpat kā klipu ķēdē** | Īpašnieka lēmums (2026-09-06). Bibliotēkas sliede, `job_results`, Review un kalibrācijas skenēšana visi balstās uz `render.json`, un ar vienu stāsta ierakstu `outputs` sarakstā tie uzvedas pareizi. Pieņemtā cena: divi aizsargi lasītājiem, kas pieņēma klipu atslēgotus ierakstus — `invalidate_stage` render gadījums (stāsta ieraksts vienmēr ir reproducējams un tiek dzēsts tieši, kā montāža) un atcelšanas tīrīšana (balstās tikai uz `path` un `duration`, ko stāsta ieraksts nes). Abi ir testēti uz klipu un stāstu ierakstiem. |
+| **D-18** | **Ranga režīms izdod gan ranga video, gan parastos klipus; no viena avota top divi ranga video (momenti 1–5 un 6–10)** | Īpašnieka lēmums (2026-09-05), pieņemts pēc pirmās versijas redzēšanas. D-17 daļa "tikai ranga video, ne abi" ar šo ir **atcelta**; pārējās D-17 daļas paliek spēkā — atklāšana spēlēšanas secībā un etiķešu rediģēšanas neesamība. Iemesls: klipi un ranga video nav alternatīvas, tie ir divi produkti no vienas avota stundas, un izvēle starp tiem nozīmēja otru pilnu darbu par to pašu materiālu. Sekas: E18-F01 kritērijs par vienu failu pārrakstīts, jaunas E18-F05 un E18-F06, renderēšanas kontrolpunkta izvades forma atgriežas pie jauktās. |
 
 ### 37.5. Atsauces
 
@@ -3451,7 +3576,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 
 ## Dokumenta beigas
 
-**Versija 1.6 · 2026-09-03**
+**Versija 1.9 · 2026-09-06**
 
 Šis dokuments ir dzīvs. Katra prasība, kas tiek realizēta, tiek atzīmēta; katra, kas atkrīt, tiek marķēta `ATCELTS` ar iemeslu, saglabājot ID. Lēmumu žurnāls ([37.4](#374-lēmumu-žurnāls)) tiek papildināts, nevis pārrakstīts.
 
@@ -3461,6 +3586,9 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.9 | 2026-09-06 | **Jauna epika [E20](#e20--stāstu-režīms) — Stāstu režīms** (D-19, D-20). Otra posmu ķēde `ingest → narrate → asr → render`, izvēlēta panelī virs CUT IT kā `Clips \| Stories`; režīms ir `Settings` lauks momentuzņēmumā, ieraksts bez tā ir klipu darbs. Piecas prasības: teksta ievade bez ielādes no vietnēm un ar kopiju darba mapē, ar aplēsto ilgumu un 500/1500 vārdu robežām kā sākuma vērtībām ([E20-F01](#e20--stāstu-režīms)); Kokoro stāstītājs no lokāliem svariem ar heša, balss un ātruma pirkstu nospiedumu ([E20-F02](#e20--stāstu-režīms)); lietotāja fons ciklā vai apgriezts, bez skaņas, centrēti apgriezts caur `cover_vf` ([E20-F03](#e20--stāstu-režīms)); subtitri no `asr` pār ierunājumu ar `story` presetu pa vienam vārdam ([E20-F04](#e20--stāstu-režīms)); kartīte lietotnes pašas dizainā bez svešas hromas un izdomātiem skaitļiem ([E20-F05](#e20--stāstu-režīms)). [2.5](#25-ko-mēs-apzināti-nedarām) precizēta: sintētisks stāstītājs atļauts, balss klonēšana — ne. |
+| 1.8 | 2026-09-05 | **Jauna epika [E19](#e19--pārklājumi-uz-klipa) — Pārklājumi uz klipa.** Divas prasības: [E19-F01](#e19--pārklājumi-uz-klipa) — redaktorā izvēlēts virsraksta variants tiek iededzināts klipā visā tā garumā, tikai parastajiem klipiem, kā stils, ko darba līmeņa pārkrāsošana patur; [E19-F02](#e19--pārklājumi-uz-klipa) — PNG vai vārda ūdenszīme apakšā centrā uz katra izvades faila, arī ranga video, ar paša faila saturu renderēšanas pirkstu nospiedumā. Jaunas lēmumu žurnāla rindas nav — D-18 paliek spēkā. |
+| 1.7 | 2026-09-05 | **D-18 — ranga režīms neaizstāj klipus, un no viena avota top divi ranga video.** D-17 daļa "tikai ranga video, ne abi" atcelta pēc pirmās versijas redzēšanas; pārējās D-17 daļas paliek. [E18-F01](#e18--ranga-video) kritērijs par vienu failu pārrakstīts; jaunas [E18-F05](#e18--ranga-video) (klipi paliek) un [E18-F06](#e18--ranga-video) (momenti 1–5 un 6–10; viens video ar rindu, kāpēc, ja finālistu nepietiek). |
 | 1.6 | 2026-09-03 | **Jauna epika [E18](#e18--ranga-video) — Ranga video** (D-17). Pirmā prasība, kas maina izvades vienību: viens fails no daudziem logiem, ar pastāvīgu numurētu pārklājumu. Četras prasības (F01–F04); F04 ir `P2`. Trīs īpašnieka lēmumi fiksēti D-17: tikai ranga video (ne abi), atklāšana spēlēšanas secībā, etiķešu rediģēšana netiek būvēta šajā versijā. |
 | 1.5 | 2026-08-25 | **Nepilnība E7 koriģēta pēc tiešas pārbaudes** — indekss vienmēr bijis LF (112 failu, 0 CRLF); problēma bija platformu divdomība, ne bojāts repozitorijs. `P0` → `P1`, izdarīts commit `95f493d`. Pievienota piezīme par audita ticamību [6.3](#63-kopsavilkums). Repozitorijā pievienoti `CLAUDE.md`, `AGENT-WORKPLAN.md`, `test_house_rules.py`, `ruff.toml`. |
 | 1.4 | 2026-08-22 | **Pārpozicionēšana uz vērtības maksimizēšanu** (D-16). Jauna vīzija, jauna 4. īpašība ("katrs lēmums tiek pārbaudīts pret rezultātu"), jauna [2.7](#27-vērtības-cilpa) vērtības cilpa, jauna [Plaisa E](#32-kur-ir-plaisa), jauna epika [E17](#e17--iepakojuma-eksperimenti) (6 prasības), [E11](#e11--vērtības-cilpa-un-kalibrācija) pārdēvēta un paplašināta (+2 prasības, F02/F03 → `P0`), jauna [E4-F09](#e4--momentu-atlase-un-analīze), [E10-F03](#e10--eksports-un-publicēšana) → `P0`. Nomainīta ziemeļzvaigzne uz noturības svērtu izvadi uz avota stundu; pārkārtots ceļvedis (v1.1 = cilpa, v1.2 = satura kvalitāte); jauni riski R16–R19 ar definētu atmešanas slieksni. |

@@ -4,7 +4,7 @@
  * chip nobody could read as "your shock scores ran on a fallback signal".
  * Pinned here: the header says it in words, the chip gets a human label,
  * and a job whose arousal came from SER shows neither. */
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Clip, JobResults, RenderOutput } from '../types'
 import { resetTauri } from '../test/tauri'
@@ -101,5 +101,63 @@ describe('Review — the T-38 fallback disclosure', () => {
     )
     expect(screen.queryByText(/fallback arousal/)).toBeNull()
     expect(screen.queryByText(/DSP fallback/)).toBeNull()
+  })
+})
+
+/* E20 (D-20): a story job's render.json holds one story entry under the
+ * clips render's name. The review must show it as a story — its title, no
+ * score, no clip editor, a captions-only restyle — not as a clip with a
+ * NaN score and an audit for a clip that does not exist. */
+function storyResults(): JobResults {
+  return {
+    job_id: 'job-story',
+    dir: 'C:/jobs/job-story',
+    ingest: { title: 'parkour', heatmap: null, probe: { duration_sec: 12, width: 1920, height: 1080 } },
+    narrate: {
+      title: 'The chair',
+      duration_sec: 41.2,
+      title_end_sec: 1.4,
+      word_count: 120,
+      settings_used: { voice: 'bm_george', speed: 1.1 }
+    },
+    score: null,
+    render: {
+      outputs: [
+        {
+          clip: 0,
+          story: true,
+          title: 'The chair',
+          path: 'C:/jobs/job-story/clips/story.mp4',
+          score: 0,
+          best_platform: '',
+          duration: 41.8,
+          words: 118,
+          event_tags: 0
+        }
+      ],
+      emoji_ok: true,
+      caption_preset: 'story'
+    },
+    events: null,
+    candidates: null,
+    camera: null
+  }
+}
+
+describe('Review — a story job (E20)', () => {
+  it('shows the story by its title, without a score, an editor or a camera restyle', () => {
+    const onRestyle = vi.fn()
+    render(<Review results={storyResults()} onBack={() => {}} onRestyle={onRestyle} />)
+    expect(screen.getByText('The chair', { selector: 'h1' })).toBeTruthy()
+    expect(screen.getByText(/narrated by bm_george at 1.1×/)).toBeTruthy()
+    expect(screen.getByText('STORY')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('NaN')
+    expect(screen.queryByText(/EDIT CLIP/)).toBeNull()
+    expect(screen.queryByText('camera')).toBeNull()
+    expect(screen.getByText('EXPORT MP4')).toBeTruthy()
+    // a restyle carries the captions alone
+    fireEvent.click(screen.getByText('beast'))
+    fireEvent.click(screen.getByText('RESTYLE + RE-RENDER'))
+    expect(onRestyle).toHaveBeenCalledWith('beast')
   })
 })

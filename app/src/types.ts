@@ -111,6 +111,16 @@ export interface HookResult {
   note?: string
 }
 
+/** E19-F02: `settings watermark-import` — the picked PNG copied into the
+ *  app's own folder; `path` is what the job stores, never the picked one. */
+export interface WatermarkImportResult {
+  ok: boolean
+  error?: string
+  path?: string
+  name?: string
+  bytes?: number
+}
+
 /* ---------- settings ---------- */
 
 export interface SettingsField {
@@ -210,20 +220,36 @@ export interface RenderOutput {
   duration: number
   words: number
   event_tags: number
-  /** E18: this entry is the whole ranking video, not one clip's file. Its
-   * `clip` is the rank-1 index so the audit panel shows the winning moment. */
+  /** E20: this entry is the whole story — one file, no score, no clip.
+   * `clip` is 0 and means nothing; `title` is the story's title. */
+  story?: boolean
+  title?: string
+  /** E18: this entry is a whole ranking video, not one clip's file. Its
+   * `clip` is the rank-1 index so the audit panel shows the winning moment;
+   * `ranks` is the global rank range it plays (1–5, then 6–10). */
   montage?: boolean
+  ranks?: [number, number]
 }
 
-/** E18: what a ranking render recorded about itself. Present on render.json
- * only when the job rendered in ranking mode. */
-export interface RankingSummary {
-  count: number
+/** E18: one ranking video, as the render recorded it. */
+export interface RankingMontage {
+  path: string
+  ranks: [number, number]
   rendered: number
   order: number[]
   title: string
   segments: { clip: number; rank: number; offset: number; duration: number }[]
+}
+
+/** E18: what a ranking render recorded about itself. Present on render.json
+ * only when the job rendered in ranking mode. Since D-18 the clips are in
+ * `outputs` as always, first; the montage entries follow them. */
+export interface RankingSummary {
+  count: number
   band: { top: number; line_h: number; boxed: boolean }
+  montages: RankingMontage[]
+  /** Why there is one video and not two, when that is the case. */
+  note?: string | null
 }
 
 export interface JobResults {
@@ -233,6 +259,14 @@ export interface JobResults {
     title: string
     heatmap: unknown[] | null
     probe: { duration_sec: number; width: number; height: number }
+  } | null
+  /** E20: the narrate checkpoint; null (or absent) for a clips job. */
+  narrate?: {
+    title: string
+    duration_sec: number
+    title_end_sec: number
+    word_count: number
+    settings_used: { voice: string; speed: number }
   } | null
   score: { clips: Clip[]; llm_mode: string; model: string; scored_count: number } | null
   render: {
@@ -266,6 +300,38 @@ export interface JobResults {
       gameplay_amount: number
     }
   } | null
+}
+
+/* ---------- E20 stories ---------- */
+
+/** What the deck sends for a story job (api.enqueueJob's last argument). */
+export interface StoryRun {
+  text: string
+  voice: string
+  speed: number
+}
+
+/** `settings story-limits`: the word limits and the estimate's rate, from
+ *  narrate/limits.py — the deck shows the estimate and applies the same
+ *  gates, with these numbers, never its own. */
+export interface StoryLimits {
+  ok: boolean
+  max_words: number
+  warn_words: number
+  words_per_minute: number
+  voices: { id: string; label: string }[]
+  default_voice: string
+}
+
+/** `settings story-read`: a picked .txt, read by python. */
+export interface StoryRead {
+  ok: boolean
+  error?: string
+  text?: string
+  name?: string
+  words?: number
+  refusal?: string | null
+  warning?: string | null
 }
 
 export interface JobSummary {
@@ -542,6 +608,10 @@ export interface EditState {
   title_variants: { text: string; style: string; why: string; chars: number }[]
   description: string
   description_meta: Record<string, unknown>
+  /** E19-F01: the variant marked to burn into the clip, for its whole
+   *  length; '' burns nothing. Separate from `title` (publishing copy),
+   *  which never reaches the pixels. */
+  burned_title: string
   remove_dead_space: boolean; disabled_cuts: number[]
   overlays: OverlayItem[]
   // Per-clip overrides of the re-render-cost settings. Partial patches:

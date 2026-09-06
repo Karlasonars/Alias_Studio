@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
+from . import chains
+
 
 def home_dir() -> Path:
     return Path(os.environ.get("PUBLIKCLIP_HOME", str(Path.home() / ".publikclip")))
@@ -68,6 +70,13 @@ def settings_path() -> Path:
 
 def caption_presets_path() -> Path:
     return home_dir() / "caption_presets.json"
+
+
+def watermarks_dir() -> Path:
+    """Where a chosen watermark PNG is copied on selection (E19-F02). A job
+    stores THIS path, never the one the user picked: a logo picked anywhere
+    on disk breaks every old job the moment the user moves it."""
+    return home_dir() / "watermarks"
 
 
 def ensure_home() -> Path:
@@ -257,22 +266,49 @@ class PerformanceSettings:
 
 
 # ---------------------------------------------------------------------------
-# Ranking video (E18): ONE vertical file from the top-N finalists, played
-# back to back under a numbered list that fills in as the viewer watches.
-# Consumed by render/stage.py + render/ranking.py and nowhere earlier — it is
-# an output-format switch, so it must never reach selection, scoring or the
-# camera pass (E18-F01: turning it on invalidates render and nothing before).
+# Ranking videos (E18): vertical files from the top finalists, played back
+# to back under a numbered list that fills in as the viewer watches — two of
+# them, moments 1..N and N+1..2N (E18-F06), beside the clips the job renders
+# anyway (D-18). Consumed by render/stage.py + render/ranking.py and nowhere
+# earlier — it is an output switch, so it must never reach selection,
+# scoring or the camera pass (E18-F01: turning it on invalidates render and
+# nothing before).
 
 
 @dataclass
 class RankingSettings:
-    # On: the job emits the montage instead of per-clip files — one format
-    # or the other, never both (D-17).
+    # On: the job emits the ranking videos AS WELL AS the per-clip files.
+    # D-17 said instead of; D-18 reversed that clause after the owner saw
+    # the first version — clips and ranking videos are two products of the
+    # same hour, and choosing meant running the job twice.
     enabled: bool = False
-    # How many of the finalists play. Deliberately NOT clips.select_count:
-    # that one sizes the visual pass and re-runs scoring when it changes.
-    # This one only picks the top N of what scoring already ranked.
+    # How many finalists play in ONE video; the second takes the next N.
+    # Deliberately NOT clips.select_count: that one sizes the visual pass
+    # and re-runs scoring when it changes. This one only slices what
+    # scoring already ranked — which is also why two videos need
+    # select_count >= 2N, and the stage says so when they do not have it.
     count: int = 5
+
+
+# ---------------------------------------------------------------------------
+# Watermark (E19-F02): the channel mark on EVERY output file — clips and
+# ranking videos alike. Consumed by render/watermark.py, which both render
+# paths and the ranking segments call. Render-only: nothing before the render
+# stage reads it, so changing it re-renders and invalidates nothing earlier.
+
+
+@dataclass
+class WatermarkSettings:
+    # A PNG, by the path render/watermark.py:import_image stored it under
+    # (PUBLIKCLIP_HOME/watermarks). Wins over `text` when both are set. The
+    # file's CONTENT is in the render fingerprint, not just this path: a logo
+    # replaced under the same name must re-render, or the old logo silently
+    # stays in every clip (§4 rule 1).
+    image: str = ""
+    # A word instead of a picture, burned through the same ASS path as the
+    # captions — libass and the bundled fonts are already probed, drawtext
+    # and libfreetype are not.
+    text: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +322,21 @@ DEFAULT_HOOK_TYPES = [
     "question", "statement", "surprising_fact", "conflict",
     "open_loop", "teaser", "in_medias_res", "emotional",
 ]
+
+
+@dataclass
+class StorySettings:
+    """The story chain's knobs (E20). Per-job values are chosen on the deck
+    and sent explicitly; these are what a story job starts from. The story
+    TEXT is deliberately not here — it is content, copied into the job dir
+    (narrate/story.py), never a default."""
+
+    voice: str = "af_heart"    # a kokoro_tts.VOICES id — generic synthetic speakers only (§8)
+    speed: float = 1.0         # Kokoro's rate multiplier; 1.0 is the voice's natural pace
+    # The last background video the deck used, remembered (E20 Q2): someone
+    # making ten stories will not pick the same file ten times. A setting,
+    # unlike the text, because it is a preference that outlives one job.
+    background: str = ""
 
 
 @dataclass
@@ -358,6 +409,8 @@ class Settings:
     descriptions: DescriptionSettings = field(default_factory=DescriptionSettings)
     hooks: HookSettings = field(default_factory=HookSettings)
     ranking: RankingSettings = field(default_factory=RankingSettings)
+    watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
+    story: StorySettings = field(default_factory=StorySettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
@@ -371,6 +424,13 @@ class Settings:
     # laughter classes cover the bus at 320 ms resolution for a fraction of
     # the compute; flip on for the two-detector agreement boost.
     laughter_specialist: bool = False
+    # Which chain runs this job (E20 / D-19): 'clips' or 'stories', a key
+    # of chains.CHAINS. Per-job, chosen on the deck, and a field HERE
+    # rather than a DB column because the snapshot is the one place a
+    # job's own state already lives — a column would be this project's
+    # first schema migration. A snapshot written before the field existed
+    # lacks it and reads as 'clips', so every job on disk keeps its chain.
+    mode: str = chains.DEFAULT_MODE
 
     def to_json(self) -> dict:
         return {
@@ -389,12 +449,15 @@ class Settings:
             "descriptions": self.descriptions.__dict__.copy(),
             "hooks": {**self.hooks.__dict__, "types": list(self.hooks.types)},
             "ranking": self.ranking.__dict__.copy(),
+            "watermark": self.watermark.__dict__.copy(),
+            "story": self.story.__dict__.copy(),
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
             "gemini_model": self.gemini_model,
             "caption_preset": self.caption_preset,
             "laughter_specialist": self.laughter_specialist,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -434,6 +497,8 @@ class Settings:
             descriptions=_build(DescriptionSettings, data.get("descriptions")),
             hooks=hooks,
             ranking=_build(RankingSettings, data.get("ranking")),
+            watermark=_build(WatermarkSettings, data.get("watermark")),
+            story=_build(StorySettings, data.get("story")),
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),
@@ -442,6 +507,9 @@ class Settings:
             gemini_model=data.get("gemini_model") or DEFAULT_GEMINI_MODEL,
             caption_preset=data.get("caption_preset", "classic"),
             laughter_specialist=data.get("laughter_specialist", False),
+            # `or`, not a default: an empty string in a hand-edited file is
+            # no mode, and no mode is the clips chain (chains.chain_for).
+            mode=str(data.get("mode") or chains.DEFAULT_MODE),
         )
 
 

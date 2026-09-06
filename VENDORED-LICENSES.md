@@ -21,6 +21,7 @@ here. "Adapted" = algorithm/constants faithfully ported into our structures;
 | [qiuqiangkong/audioset_tagging_cnn](https://github.com/qiuqiangkong/audioset_tagging_cnn) | MIT | `pipeline/.../vendor/panns/` | Vendored: Cnn14_DecisionLevelMax inference subset + AudioSet labels |
 | [modelscope/3D-Speaker](https://github.com/modelscope/3D-Speaker) | Apache-2.0 | `pipeline/.../vendor/campplus/` | Vendored: CAM++ model definition (DTDNN + layers) |
 | [artbyjazi/autoclip](https://github.com/artbyjazi/autoclip) | MIT | `pipeline/.../candidates/windows.py`, `events/post.py` | Adapted: IOU span dedupe pattern |
+| [hexgrad/kokoro](https://github.com/hexgrad/kokoro) | Apache-2.0 | `pipeline/.../narrate/kokoro_tts.py` | Dependency (pinned in uv.lock, `kokoro>=0.9.4`): the story narrator (E20-F02). Its G2P chain is a dependency too: `misaki` (Apache-2.0), `phonemizer-fork` (GPL-3.0-or-later), `espeakng-loader` bundling espeak-ng (GPL-3.0-or-later), `num2words` (LGPL-2.1), `spacy` + `en_core_web_sm` (MIT). GPL-3.0 and LGPL are AGPL-3.0-compatible (GPLv3 §13); nothing is vendored, nothing modified. Verified from the installed package metadata 2026-09-06 |
 
 ## Model weights (downloaded at runtime, never redistributed by us)
 
@@ -36,6 +37,8 @@ here. "Adapted" = algorithm/constants faithfully ported into our structures;
 | UltraFace RFB-320 ONNX | MIT | Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB via clip-forge |
 | speechbrain SER (wav2vec2-IEMOCAP) | Apache-2.0 code/weights | huggingface.co/speechbrain |
 | ffmpeg static (optional fetch) | GPL build | ffmpeg.martin-riedl.de |
+| Kokoro-82M (`kokoro-v1_0.pth`, `config.json`, six `voices/*.pt`) | Apache-2.0 (commercial use explicitly permitted) | huggingface.co/hexgrad/Kokoro-82M (ungated — verified 2026-09-06; sha256 pinned per file in `models/specs.py` from the repo's LFS oids). Generic synthetic voices only — no real person's voice is or can be used (CLAUDE.md §8) |
+| spaCy `en_core_web_sm` 3.8.0 | MIT | github.com/explosion/spacy-models, declared as a locked wheel dependency because `misaki` pip-installs it at first use otherwise, which `uv sync` would strip on the next launch |
 
 ## Fonts (bundled, SIL OFL 1.1)
 

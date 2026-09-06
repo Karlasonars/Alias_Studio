@@ -205,6 +205,15 @@ def letterbox_geometry(content_w: float, content_h: float) -> tuple[int, int] | 
     return scaled_h, (OUT_H - scaled_h) // 2
 
 
+def cover_vf() -> str:
+    """Scale to COVER the 1080x1920 canvas and centre-crop the overflow —
+    the one expression for "fill the frame with this picture". The blur
+    fill's backdrop (scale_pad_vf below) and the story background
+    (render_story, E20-F03) both use it, so a 16:9 story background is
+    cropped through exactly the geometry the letterbox fill uses."""
+    return f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H}"
+
+
 def scale_pad_vf(content_w: float, content_h: float, fill: str = "black") -> list[str]:
     """Scale-to-width + fill-to-height -vf fragment for a crop window whose
     aspect ratio doesn't match 9:16 (the gameplay end of the framing dial —
@@ -242,8 +251,7 @@ def scale_pad_vf(content_w: float, content_h: float, fill: str = "black") -> lis
     # own [vc]/[vb]/[ov*] labels.
     return [
         f"split=2[lb_a][lb_b]"
-        f";[lb_a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase"
-        f",crop={OUT_W}:{OUT_H},gblur=sigma={BLUR_SIGMA}[lb_bg]"
+        f";[lb_a]{cover_vf()},gblur=sigma={BLUR_SIGMA}[lb_bg]"
         f";[lb_b]scale={OUT_W}:{scaled_h}:flags=lanczos[lb_fg]"
         f";[lb_bg][lb_fg]overlay=0:{pad_y}"
     ]
@@ -265,6 +273,7 @@ def render_clip(
     hardware_encode: bool = False,
     letterbox_fill: str = "black",
     edge_fade_s: float = 0.0,
+    overlay_vf: str = "",
 ) -> None:
     """One clip, one ffmpeg run.
 
@@ -273,7 +282,11 @@ def render_clip(
     command line is byte-identical to what it always was; the ranking
     montage (render/ranking.py) sets it because a hard cut mid-waveform
     clicks, and in a montage the click is followed by more audio instead
-    of the end of the file."""
+    of the end of the file.
+
+    `overlay_vf` is a ready filter fragment spliced after the scale/pad and
+    BEFORE the caption burn, so captions draw over whatever it adds — the
+    watermark (render/watermark.py). Empty, the default, adds nothing."""
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
     if not boxes:
@@ -292,6 +305,8 @@ def render_clip(
         ),
         "setsar=1",
     ]
+    if overlay_vf:
+        vf_parts.append(overlay_vf)
     if ass_path is not None:
         sub = f"subtitles=filename={_q(ass_path)}"
         if fonts_dir is not None:
@@ -321,6 +336,59 @@ def render_clip(
     ]
     proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     cmd_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Render failed: {(proc.stderr or '')[-800:]}")
+
+
+def render_story(
+    background: str,
+    narration: str,
+    out_path: Path,
+    duration: float,
+    ass_path: Path | None,
+    fonts_dir: Path | None,
+    lufs: float = -14.0,
+    true_peak: float = -1.0,
+    timeout: float = 1800.0,
+    hardware_encode: bool = False,
+    overlay_vf: str = "",
+) -> None:
+    """One story (E20-F03), one ffmpeg run: the background looped or
+    trimmed to `duration`, its own audio never mapped, covered and
+    centre-cropped to 9:16, the narration as the only audio, captions
+    burned, loudnorm'd — through the same encoder tiering, output flags
+    and metadata scrub as render_clip. Not a second encoder path (T-42):
+    what differs from a clip is the input side alone.
+
+    `-stream_loop -1` reads the background forever and `-t` on the output
+    stops the file at the story's length, which is both the loop for a
+    short background and the trim for a long one. `apad` keeps audio
+    flowing under the tail after the narrator's last word."""
+    vf_parts = [cover_vf(), "setsar=1"]
+    if overlay_vf:
+        vf_parts.append(overlay_vf)
+    if ass_path is not None:
+        sub = f"subtitles=filename={_q(ass_path)}"
+        if fonts_dir is not None:
+            sub += f":fontsdir={_q(fonts_dir)}"
+        vf_parts.append(sub)
+    vcodec = video_encoder_args(hardware_encode)
+    args = [
+        ffmpeg_bin.ffmpeg(), "-y", "-v", "error",
+        "-stream_loop", "-1", "-i", background,
+        "-i", narration,
+        "-t", f"{duration:.3f}",
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-vf", ",".join(vf_parts),
+        "-af", f"apad,loudnorm=I={lufs}:TP={true_peak}:LRA=11",
+        *vcodec,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-movflags", "+faststart",
+        "-map_metadata", "-1",
+        str(out_path),
+    ]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"Render failed: {(proc.stderr or '')[-800:]}")
 

@@ -151,7 +151,7 @@ def test_gather_skips_what_is_already_on_disk(monkeypatch):
             vfr=False, start_time=0.0, video_codec="h264", has_audio=True,
         ),
     )
-    monkeypatch.setattr(disk.setup_mod, "status", lambda s: {"items": []})
+    monkeypatch.setattr(disk.setup_mod, "status", lambda s, mode="clips": {"items": []})
 
     needs, unknown = disk.gather(job, config.Settings())
     labels = [n.label for n in needs]
@@ -170,7 +170,7 @@ def test_gather_skips_what_is_already_on_disk(monkeypatch):
 def test_gather_degrades_to_unknown_when_it_cannot_learn(monkeypatch):
     # A file job whose source cannot be probed: the check must not raise —
     # ingest owns reporting that failure properly (§5.9).
-    monkeypatch.setattr(disk.setup_mod, "status", lambda s: {"items": []})
+    monkeypatch.setattr(disk.setup_mod, "status", lambda s, mode="clips": {"items": []})
     job = queue.create_job("file", "C:/definitely/not/here.mp4", _settings_json())
     needs, unknown = disk.gather(job, config.Settings())
     assert any("source duration" in u for u in unknown)

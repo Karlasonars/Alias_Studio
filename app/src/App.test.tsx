@@ -25,10 +25,16 @@ vi.mock('@tauri-apps/api/event', async () => {
   return { listen: t.listenMock }
 })
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: async () => {} }))
+// E19-F02: the PNG picker is a plugin call, mocked at the same seam as the
+// rest of the boundary; each test sets what the dialog answers.
+const { dialogOpen } = vi.hoisted(() => ({ dialogOpen: vi.fn(async (): Promise<string | null> => null) }))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: dialogOpen }))
 
 beforeEach(() => {
   resetTauri()
   idleAppCommands()
+  dialogOpen.mockReset()
+  dialogOpen.mockResolvedValue(null)
 })
 
 async function mountStudio() {
@@ -296,21 +302,23 @@ describe('the letterbox fill is decided before CUT IT (E6-F09)', () => {
   })
 })
 
-describe('the output format is decided before CUT IT (E18-F01)', () => {
+describe('the ranking videos are decided before CUT IT (E18-F01, D-18)', () => {
   it('the moments control exists only while ranking is on', async () => {
     await mountStudio()
-    // clips is the default and the count would change nothing — §5.2
+    // off is the default and the count would change nothing — §5.2
     expect(screen.queryByText('moments')).toBeNull()
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     expect(screen.getByText('moments')).toBeTruthy()
     expect(screen.getByText('5').className).toContain('opt-on')
-    fireEvent.click(screen.getByText('clips'))
+    // D-18: the deck says the clips are made either way
+    expect(screen.getByText(/beside the clips/)).toBeTruthy()
+    fireEvent.click(screen.getByText('off'))
     expect(screen.queryByText('moments')).toBeNull()
   })
 
   it('says where the list goes at podcast framing, and only there', async () => {
     await mountStudio()
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     expect(screen.getByText(/list sits over the top of the picture/)).toBeTruthy()
     fireEvent.click(screen.getByText('gameplay'))
     expect(screen.queryByText(/list sits over the top of the picture/)).toBeNull()
@@ -319,7 +327,7 @@ describe('the output format is decided before CUT IT (E18-F01)', () => {
   it('CUT IT carries the format and the count into the enqueue', async () => {
     await mountStudio()
     commands.enqueue_job = () => 'job-rank'
-    fireEvent.click(screen.getByText('ranking'))
+    fireEvent.click(screen.getByText('on'))
     fireEvent.click(screen.getByText('7'))
     fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
       target: { value: 'C:/videos/stream.mp4' }
@@ -342,5 +350,210 @@ describe('the output format is decided before CUT IT (E18-F01)', () => {
     })
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
     expect(call?.[1]).toMatchObject({ ranking: false, rankingCount: 5 })
+  })
+})
+
+describe('the watermark is decided before CUT IT (E19-F02)', () => {
+  async function cutIt(source: string) {
+    fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
+      target: { value: source }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    return invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')?.[1]
+  }
+
+  it('a plain cut sends an explicit "none" rather than leaving the mark to a default', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-plain'
+    expect(screen.getByText('none').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/a.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '' })
+  })
+
+  it('a word is carried into the enqueue, trimmed', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-word'
+    fireEvent.click(screen.getByText('word'))
+    fireEvent.change(screen.getByPlaceholderText('@yourchannel'), { target: { value: '  @alias ' } })
+    expect(screen.getByText(/never over the captions/)).toBeTruthy()
+    expect(await cutIt('C:/videos/b.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '@alias' })
+  })
+
+  it('an image goes through the picker and the import, and the STORED path is what the job gets', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-logo'
+    dialogOpen.mockResolvedValue('C:/Pictures/logo.png')
+    const imports: unknown[] = []
+    commands.settings_tool = (args) => {
+      imports.push(args?.args)
+      return { ok: true, path: 'C:/home/watermarks/logo-1a2b3c4d.png', name: 'logo-1a2b3c4d.png', bytes: 512 }
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(imports).toEqual([['watermark-import', 'C:/Pictures/logo.png']])
+    expect(screen.getByText('logo-1a2b3c4d.png').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/c.mp4')).toMatchObject({
+      watermarkImage: 'C:/home/watermarks/logo-1a2b3c4d.png', watermarkText: ''
+    })
+  })
+
+  it('a refused file says why under the control and sends no image', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-refused'
+    dialogOpen.mockResolvedValue('C:/Pictures/logo.gif')
+    commands.settings_tool = () => ({ ok: false, error: 'logo.gif is not a PNG image' })
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(screen.getByText('logo.gif is not a PNG image')).toBeTruthy()
+    expect(screen.getByText('none').className).toContain('opt-on')
+    expect(await cutIt('C:/videos/d.mp4')).toMatchObject({ watermarkImage: '', watermarkText: '' })
+  })
+
+  it('a cancelled picker changes nothing', async () => {
+    await mountStudio()
+    commands.enqueue_job = () => 'job-cancel'
+    fireEvent.click(screen.getByText('word'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('image…'))
+    })
+    expect(callsTo('settings_tool')).toBe(0)
+    expect(screen.getByText('word').className).toContain('opt-on')
+  })
+})
+
+/* E20 — Stories mode on the deck (D-19: a second chain, chosen above CUT
+ * IT). Pinned here rather than hand-tested: the enqueue arguments, the
+ * limits from python's numbers, the chain rows from the job event, and the
+ * absence of the clips-only controls on the stories deck (§5.2). */
+const STORY_LIMITS = {
+  ok: true,
+  max_words: 1500,
+  warn_words: 500,
+  words_per_minute: 185,
+  voices: [
+    { id: 'af_heart', label: 'Heart · American, warm' },
+    { id: 'bm_george', label: 'George · British, measured' }
+  ],
+  default_voice: 'af_heart'
+}
+
+function storyCommands(background = 'C:/bg/parkour.mp4') {
+  commands.settings_tool = (args) => {
+    const verb = (args?.args as string[])[0]
+    if (verb === 'story-limits') return STORY_LIMITS
+    if (verb === 'get') return { ok: true, defaults: { story: { voice: 'af_heart', speed: 1, background } } }
+    if (verb === 'remember-background') return { ok: true, defaults: {} }
+    throw new Error(`unexpected settings verb ${verb}`)
+  }
+}
+
+async function openStories() {
+  await mountStudio()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('tab', { name: 'Stories' }))
+  })
+  // the limits and the saved defaults arrive
+  await screen.findByLabelText('story text')
+  await act(async () => {})
+}
+
+const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+
+describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
+  it('enqueues the story with the mode, the text, the voice and the speed, over the remembered background', async () => {
+    storyCommands()
+    commands.enqueue_job = () => 'job-story'
+    await openStories()
+    expect(screen.getByText(/TELL IT/)).toBeTruthy()
+    // Q2: the last-used background is a setting and comes back prefilled
+    expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
+
+    fireEvent.change(screen.getByLabelText('story text'), {
+      target: { value: 'The chair\n\nNobody had moved the chair.' }
+    })
+    expect(screen.getByText(/7 words · about/)).toBeTruthy()
+    fireEvent.click(screen.getByText('George'))
+    fireEvent.click(screen.getByText('1.2×'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
+    const args = call?.[1] as Record<string, unknown>
+    expect(args.mode).toBe('stories')
+    expect(args.source).toBe('C:/bg/parkour.mp4')
+    expect(args.storyText).toBe('The chair\n\nNobody had moved the chair.')
+    expect(args.voice).toBe('bm_george')
+    expect(args.speed).toBe(1.2)
+    expect(args.captions).toBe('story')
+    // the text clears after the cut, the background stays for the next story
+    expect((screen.getByLabelText('story text') as HTMLTextAreaElement).value).toBe('')
+    expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
+  })
+
+  it('refuses above the word limit with the limit named, and warns above the soft one', async () => {
+    storyCommands()
+    await openStories()
+    const text = screen.getByLabelText('story text')
+    fireEvent.change(text, { target: { value: words(1501) } })
+    expect(screen.getByText(/the limit is 1500/)).toBeTruthy()
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(text, { target: { value: words(501) } })
+    expect(screen.queryByText(/the limit is 1500/)).toBeNull()
+    expect(screen.getByText(/Stories under 500 words tend to hold better/)).toBeTruthy()
+    expect(screen.getByText(/501 words · about 2 min 42 s of narration/)).toBeTruthy()
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(false)
+
+    // nothing to narrate, nothing to cut
+    fireEvent.change(text, { target: { value: '   ' } })
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('does not show the clips-only controls on the stories deck (§5.2)', async () => {
+    storyCommands()
+    await openStories()
+    expect(screen.queryByText('brain')).toBeNull()
+    expect(screen.queryByText('framing')).toBeNull()
+    expect(screen.queryByText('ranking videos')).toBeNull()
+    expect(screen.getByText('voice')).toBeTruthy()
+    expect(screen.getByText('speed')).toBeTruthy()
+    expect(screen.getByText('watermark')).toBeTruthy()
+    // and back on the clips deck they return, the story panel goes
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Clips' }))
+    })
+    expect(screen.getByText('brain')).toBeTruthy()
+    expect(screen.queryByLabelText('story text')).toBeNull()
+  })
+
+  it('draws the running chain\'s rows from the job event, whichever chain it is', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-story', mode: 'stories' })
+    await pipelineEvent({ event: 'progress', stage: 'narrate', fraction: -1, message: 'Narrating…' })
+    expect(document.querySelectorAll('.deck-row').length).toBe(4)
+    expect(screen.getByText('NARRATE')).toBeTruthy()
+    expect(screen.queryByText('SPEAKERS')).toBeNull()
+
+    await pipelineEvent({ event: 'result', ok: false, error: 'stopped' })
+    // a job event without a mode is a clips job: every job on disk today
+    await pipelineEvent({ event: 'job', job_id: 'job-clips' })
+    expect(document.querySelectorAll('.deck-row').length).toBe(8)
+    expect(screen.queryByText('NARRATE')).toBeNull()
+  })
+
+  it('shows a refused story where the press was', async () => {
+    storyCommands()
+    commands.enqueue_job = () => {
+      throw new Error('The story is 1600 words; the limit is 1500.')
+    }
+    await openStories()
+    fireEvent.change(screen.getByLabelText('story text'), { target: { value: 'A title\nsome words' } })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    expect(screen.getAllByText(/the limit is 1500/).length).toBeGreaterThan(0)
   })
 })

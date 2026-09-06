@@ -1,11 +1,14 @@
 """Render stage: finalist clips + trajectories + captions → finished 9:16
 MP4s, each verified (streams present, duration sane) before being reported.
 
-Two output units share this stage. Clip mode (the default) writes one file
-per finalist. Ranking mode (E18, `settings.ranking.enabled`) writes ONE
-montage of the top N under a numbered list — render/ranking.py — and the
-checkpoint carries a `ranking` key that artifacts_ok discriminates on, the
-same way it already discriminates on `fills`."""
+One file per finalist, always. Ranking mode (E18, `settings.ranking.enabled`)
+then adds up to two montages of the top moments under a numbered list —
+render/ranking.py — appended to the same outputs list (D-18: as well as the
+clips, never instead), and the checkpoint carries a `ranking` key that
+artifacts_ok discriminates on, the same way it already discriminates on
+`fills`. Three shapes exist on disk: no `ranking` key (a clip render), a
+`ranking` without `montages` (the one-montage checkpoints E18-F02..F04
+wrote, which serve nothing now), and `ranking.montages` (this build)."""
 
 from __future__ import annotations
 
@@ -13,7 +16,9 @@ import json
 from pathlib import Path
 
 from ..camera.stage import sans_letterbox_fill
+from ..captions import title as title_mod
 from ..jobs.queue import Stage, StageContext, StageError
+from . import watermark
 from .inputs import clip_captions, clip_style, load_inputs
 
 
@@ -73,23 +78,38 @@ def _previous_outputs(job_dir: Path) -> dict:
     vanishing. A ranking montage entry is never a clip's editor version —
     its `clip` is only the rank-1 index for the review panel — so it is
     skipped here: without that, a clip-mode run after a ranking run would
-    adopt the montage as that clip's file."""
+    adopt the montage as that clip's file. A story entry (E20, D-20) is
+    skipped for the same reason: it is not a clip and nothing is ever
+    adopted into it."""
     try:
         return {
             str(o["clip"]): o
             for o in _previous_render(job_dir).get("outputs", [])
-            if not o.get("montage") and Path(o["path"]).exists()
+            if not o.get("montage") and not o.get("story") and Path(o["path"]).exists()
         }
     except (KeyError, TypeError, AttributeError):
         return {}
 
 
-def _previous_montage(job_dir: Path) -> dict | None:
-    """The montage entry of the last render, if the last render was one."""
-    for entry in _previous_render(job_dir).get("outputs", []) or []:
-        if isinstance(entry, dict) and entry.get("montage"):
-            return entry
-    return None
+def _previous_stories(job_dir: Path) -> list[dict]:
+    """The story entries of the last render (E20, D-20): one, for a story
+    job; none for a clips job."""
+    return [
+        entry
+        for entry in _previous_render(job_dir).get("outputs", []) or []
+        if isinstance(entry, dict) and entry.get("story")
+    ]
+
+
+def _previous_montages(job_dir: Path) -> list[dict]:
+    """The montage entries of the last render, in the order written: none
+    for a clip render, one for the one-montage checkpoints E18-F02..F04
+    wrote, up to two since D-18."""
+    return [
+        entry
+        for entry in _previous_render(job_dir).get("outputs", []) or []
+        if isinstance(entry, dict) and entry.get("montage")
+    ]
 
 
 def drop_reproducible_outputs(job_dir: Path) -> list[int]:
@@ -105,8 +125,9 @@ def drop_reproducible_outputs(job_dir: Path) -> list[int]:
     resume is honestly a no-op).
 
     A ranking montage is always reproducible (nothing is ever adopted into
-    it), so it is unlinked outright; its `clip` — the rank-1 index — is what
-    gets reported, since that is the one clip index the entry carries."""
+    it), so each is unlinked outright. Its `clip` — the rank-1 index — is
+    reported only when no clip entry already did: since D-18 that clip has
+    its own entry, and the one-montage shape carried nothing else."""
     previous = _previous_outputs(job_dir)
     edits = _load_clip_edits(job_dir)
     try:
@@ -125,12 +146,24 @@ def drop_reproducible_outputs(job_dir: Path) -> list[int]:
             continue
         Path(entry["path"]).unlink(missing_ok=True)
         dropped.append(idx)
-    montage = _previous_montage(job_dir)
-    if montage is not None:
+    for montage in _previous_montages(job_dir):
         path = Path(str(montage.get("path", "")))
         if path.name and path.exists():
             path.unlink(missing_ok=True)
-            dropped.append(int(montage.get("clip", 0) or 0))
+            idx = int(montage.get("clip", 0) or 0)
+            if idx not in dropped:
+                dropped.append(idx)
+    # D-20's first guard: a story output is always reproducible — the
+    # editor never touches it, so there is no adoption to protect — and
+    # the clip-keyed logic above would have judged it against a score.json
+    # a story job does not have. Unlinked outright, like a montage.
+    for story in _previous_stories(job_dir):
+        path = Path(str(story.get("path", "")))
+        if path.name and path.exists():
+            path.unlink(missing_ok=True)
+            idx = int(story.get("clip", 0) or 0)
+            if idx not in dropped:
+                dropped.append(idx)
     return sorted(dropped)
 
 
@@ -170,6 +203,13 @@ def _clip_edits_fingerprint(job_dir: Path) -> dict:
             )
             if edit.get(k) not in (None, {}, [])
         }
+        # E19-F01: the burned title, resolved exactly as the render resolves
+        # it (whitespace-only is nothing), so the fingerprint cannot drift
+        # from the thing it protects. An untouched clip stores "" and stays
+        # out, as before the field existed.
+        burned = title_mod.burned_title(edit)
+        if burned:
+            relevant["burned_title"] = burned
         if relevant:
             out[key] = relevant
     return out
@@ -191,15 +231,14 @@ def _effective_fill(edit: dict, settings) -> str:
 
 
 def _fill_keys(data: dict) -> list[str]:
-    """Which clips a checkpoint's `fills` map covers: the montage's segments
-    in ranking mode, else one per output entry. artifacts_ok recomputes the
-    map over exactly these keys — in ranking mode `outputs` is one entry,
-    and iterating it would compare a one-clip map against the N-clip map
-    run() stored, invalidating every ranking checkpoint forever."""
-    ranking = data.get("ranking")
-    if isinstance(ranking, dict):
-        return [str(c) for c in ranking.get("order", [])]
-    return [str(o.get("clip")) for o in data.get("outputs", [])]
+    """Which clips a checkpoint's `fills` map covers: one per clip entry,
+    montage entries skipped. artifacts_ok recomputes the map over exactly
+    these keys. A montage entry carries its rank-1 clip's index (D-18 put
+    the clips back beside the montages), so counting it would set a
+    duplicate key against the map run() stored over the clips alone."""
+    return [
+        str(o.get("clip")) for o in data.get("outputs", []) if not o.get("montage")
+    ]
 
 
 def _fills_for(keys: list[str], edits: dict, settings) -> dict[str, str]:
@@ -232,6 +271,7 @@ def _fingerprint(ctx: StageContext) -> dict:
         "audio": _audio_fingerprint(ctx),
         "encoder": _encoder_fingerprint(ctx),
         "clip_edits": _clip_edits_fingerprint(ctx.job_dir),
+        "watermark": watermark.fingerprint(ctx.settings),
     }
 
 
@@ -249,8 +289,18 @@ class RenderStage(Stage):
         stored_ranking = data.get("ranking") if isinstance(data.get("ranking"), dict) else None
         if want_ranking != (stored_ranking is not None):
             return False  # the output unit changed → re-render
-        if stored_ranking is not None and stored_ranking.get("count") != ctx.settings.ranking.count:
-            return False  # a different top N is a different montage
+        if stored_ranking is not None:
+            if "montages" not in stored_ranking:
+                # The one-montage checkpoint E18-F02..F04 wrote under D-17's
+                # "one format, not both": a single montage entry and no clip
+                # files. D-18 wants the clips too, so it cannot serve a
+                # ranking job — the one re-render this reversal costs, paid
+                # only by the ranking renders made in those days. Presence
+                # of `montages` is the shape version, as `ranking` itself
+                # is against clip checkpoints.
+                return False
+            if stored_ranking.get("count") != ctx.settings.ranking.count:
+                return False  # a different top N is a different pair of videos
         if data.get("caption_preset") != ctx.settings.caption_preset:
             return False  # restyle requested → re-render
         if "fills" in data:
@@ -288,6 +338,13 @@ class RenderStage(Stage):
             return False  # loudness targets are baked in by loudnorm
         if data.get("encoder") != _encoder_fingerprint(ctx):
             return False
+        # E19-F02: the mark is in every output's pixels. {} for none is
+        # also what a checkpoint from before the setting existed reads as,
+        # so a job that never had a mark keeps its render (§4 rule 3); a
+        # logo replaced under the same path re-renders because the content
+        # hash, not the path, is what differs (§4 rule 1).
+        if (data.get("watermark") or {}) != watermark.fingerprint(ctx.settings):
+            return False
         # A clip edited in the editor renders differently from the job's
         # settings, so editing one must re-run this stage — otherwise the
         # edit is only visible until the next restyle overwrites it.
@@ -296,105 +353,11 @@ class RenderStage(Stage):
         return all(Path(c["path"]).exists() for c in data.get("outputs", []))
 
     def run(self, ctx: StageContext) -> dict:
-        from ..captions import ass as ass_mod
-        from . import renderer
-
         inputs = load_inputs(ctx, _load_clip_edits(ctx.job_dir))
-        if ctx.settings.ranking.enabled:
-            from . import ranking
-
-            return ranking.render_montage(ctx, inputs, _fingerprint(ctx))
-
-        outputs = []
-        clips = inputs.clips
-
-        # Per-clip edits are the user's most specific intent for a clip, and
-        # this path used to ignore them completely — so a job-level restyle
-        # silently re-rendered a hand-tuned clip at the job's settings,
-        # discarding its framing, its caption tweaks, and (worst) its trimmed
-        # bounds. Style overrides are applied below; structural edits (bounds,
-        # dead-space cuts, overlays) need the edit path's trim/concat graph,
-        # which this stage does not build, so those clips keep the render the
-        # editor already produced and are reported rather than overwritten.
-        clip_edits = inputs.clip_edits
-        previous = _previous_outputs(ctx.job_dir)
-        kept_from_editor: list[int] = []
-        # Resolved fill per output clip, adopted ones included — the
-        # fingerprint recomputes this same map with the same helper, and it
-        # must cover every clip artifacts_ok will iterate.
-        fills: dict[str, str] = {}
-
-        for i, clip in enumerate(clips):
-            traj_path = inputs.trajectories.get(str(i))
-            if not traj_path or not Path(traj_path).exists():
-                continue
-            edit = clip_edits.get(str(i)) or {}
-            fills.update(_fills_for([str(i)], clip_edits, ctx.settings))
-
-            # A clip the editor reshaped cannot be reproduced here; re-rendering
-            # it from the job settings would throw that work away.
-            if _has_structural_edits(edit, clip) and str(i) in previous:
-                outputs.append(previous[str(i)])
-                kept_from_editor.append(i)
-                ctx.emit(
-                    i / max(1, len(clips)),
-                    f"Clip {i + 1} keeps its editor version (custom bounds/cuts)",
-                )
-                continue
-
-            trajectory = json.loads(Path(traj_path).read_text(encoding="utf-8"))
-            start, end = clip["start"], clip["end"]
-            ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
-
-            words, clip_events = clip_captions(inputs, start, end)
-            style = clip_style(ctx, edit)
-
-            ass_path = inputs.out_dir / f"clip_{i:02d}.ass"
-            ass_doc = ass_mod.build_ass(
-                words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
-                overrides=style["overrides"],
-            )
-            ass_path.write_text(ass_doc, encoding="utf-8")
-
-            out_path = inputs.out_dir / f"clip_{i:02d}.mp4"
-            try:
-                renderer.render_clip(
-                    inputs.media, out_path, start, end, trajectory,
-                    ass_path if inputs.captions_ok else None, ass_mod.FONTS_DIR,
-                    lufs=style["lufs"], true_peak=style["true_peak"],
-                    src_w=inputs.src_w, src_h=inputs.src_h,
-                    hardware_encode=ctx.settings.performance.hardware_encode,
-                    letterbox_fill=fills[str(i)],
-                )
-            except RuntimeError as err:
-                # renderer's message leads with raw ffmpeg stderr — headline
-                # material for a developer, disclosure material for a user.
-                raise StageError(
-                    f"Clip {i} failed to encode.", code="render-failed", detail=str(err)
-                ) from err
-            check = renderer.verify_output(out_path, end - start)
-            if not check["ok"]:
-                raise StageError(
-                    f"Clip {i} failed verification (duration {check['duration']:.1f}s, "
-                    f"{check['width']}x{check['height']}).",
-                    code="clip-verification-failed",
-                )
-            outputs.append(
-                {
-                    "clip": i,
-                    "path": str(out_path),
-                    "ass": str(ass_path),
-                    "score": clip["score"],
-                    "best_platform": clip["best_platform"],
-                    "duration": round(check["duration"], 2),
-                    "words": len(words),
-                    "event_tags": len(clip_events),
-                }
-            )
-
+        outputs, kept_from_editor, fills = _render_clips(ctx, inputs)
         if not outputs:
             raise StageError("No clips were rendered.", code="no-clips-rendered")
-        return {
+        data = {
             "outputs": outputs,
             "kept_from_editor": kept_from_editor,
             "emoji_ok": inputs.emoji_ok,
@@ -402,7 +365,138 @@ class RenderStage(Stage):
             **_fingerprint(ctx),
             # Presence of this key is what routes artifacts_ok onto the
             # fill-aware path; old checkpoints without it keep the legacy
-            # strict camera compare. Keys match outputs exactly: every clip
-            # with a trajectory lands in both.
+            # strict camera compare. Keys match the clip entries exactly:
+            # every clip with a trajectory lands in both.
             "fills": fills,
         }
+        if ctx.settings.ranking.enabled:
+            from . import ranking
+
+            montages, summary = ranking.render_montages(ctx, inputs, fills)
+            # Clip entries first, montage entries after — the order the
+            # review panel lists them in. No reader depends on it any more:
+            # a montage entry carries its rank-1 clip's index, and every
+            # reader that finds a clip by index (the editor's checkpoint
+            # sync, _previous_outputs, _fill_keys) skips entries carrying
+            # the `montage` marker instead of trusting position. Presence
+            # of `ranking` is the shape version artifacts_ok discriminates
+            # on (E18-F01, D-18).
+            data["outputs"] = outputs + montages
+            data["ranking"] = summary
+        return data
+
+
+def _render_clips(
+    ctx: StageContext, inputs
+) -> tuple[list[dict], list[int], dict[str, str]]:
+    """The clip loop: one file per finalist with a trajectory, in every
+    mode. Ranking mode adds its montages AFTER this and never instead of it
+    (D-18): clips and ranking videos are two products of the same hour, and
+    choosing between them meant running the job twice. Returns the output
+    entries, the clips kept from the editor, and the resolved fill per clip.
+
+    Per-clip edits are the user's most specific intent for a clip, and
+    this path used to ignore them completely — so a job-level restyle
+    silently re-rendered a hand-tuned clip at the job's settings,
+    discarding its framing, its caption tweaks, and (worst) its trimmed
+    bounds. Style overrides are applied below; structural edits (bounds,
+    dead-space cuts, overlays) need the edit path's trim/concat graph,
+    which this stage does not build, so those clips keep the render the
+    editor already produced and are reported rather than overwritten.
+    """
+    from ..captions import ass as ass_mod
+    from . import renderer
+
+    outputs: list[dict] = []
+    clips = inputs.clips
+    clip_edits = inputs.clip_edits
+    previous = _previous_outputs(ctx.job_dir)
+    kept_from_editor: list[int] = []
+    # Resolved fill per output clip, adopted ones included — the
+    # fingerprint recomputes this same map with the same helper, and it
+    # must cover every clip artifacts_ok will iterate.
+    fills: dict[str, str] = {}
+
+    for i, clip in enumerate(clips):
+        traj_path = inputs.trajectories.get(str(i))
+        if not traj_path or not Path(traj_path).exists():
+            continue
+        edit = clip_edits.get(str(i)) or {}
+        fills.update(_fills_for([str(i)], clip_edits, ctx.settings))
+
+        # A clip the editor reshaped cannot be reproduced here; re-rendering
+        # it from the job settings would throw that work away.
+        if _has_structural_edits(edit, clip) and str(i) in previous:
+            outputs.append(previous[str(i)])
+            kept_from_editor.append(i)
+            ctx.emit(
+                i / max(1, len(clips)),
+                f"Clip {i + 1} keeps its editor version (custom bounds/cuts)",
+            )
+            continue
+
+        trajectory = json.loads(Path(traj_path).read_text(encoding="utf-8"))
+        start, end = clip["start"], clip["end"]
+        ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
+
+        words, clip_events = clip_captions(inputs, start, end)
+        style = clip_style(ctx, edit)
+        preset = ass_mod.resolve_preset(style["preset"], style["overrides"])
+        # E19-F01: the title the user marked, reproduced here as a style —
+        # which is what lets a restyle keep it. E19-F02: the watermark,
+        # placed for THIS clip's framing and under its captions. Both
+        # through the functions the editor's render path calls (§5.8).
+        title_styles, title_events = title_mod.overlay(
+            preset, style["burned_title"], end - start
+        )
+        mark = watermark.compose(
+            inputs.watermark, trajectory.get("content_w", 0), trajectory.get("content_h", 0),
+            preset, end - start, say=lambda m: ctx.emit(-1, m),
+        )
+
+        ass_path = inputs.out_dir / f"clip_{i:02d}.ass"
+        ass_doc = ass_mod.build_ass(
+            words, clip_events, preset_name=style["preset"], emoji_ok=inputs.emoji_ok,
+            overrides=style["overrides"],
+            extra_styles=title_styles + mark.styles,
+            extra_events=title_events + mark.events,
+        )
+        ass_path.write_text(ass_doc, encoding="utf-8")
+
+        out_path = inputs.out_dir / f"clip_{i:02d}.mp4"
+        try:
+            renderer.render_clip(
+                inputs.media, out_path, start, end, trajectory,
+                ass_path if inputs.captions_ok else None, ass_mod.FONTS_DIR,
+                lufs=style["lufs"], true_peak=style["true_peak"],
+                src_w=inputs.src_w, src_h=inputs.src_h,
+                hardware_encode=ctx.settings.performance.hardware_encode,
+                letterbox_fill=fills[str(i)],
+                overlay_vf=mark.vf,
+            )
+        except RuntimeError as err:
+            # renderer's message leads with raw ffmpeg stderr — headline
+            # material for a developer, disclosure material for a user.
+            raise StageError(
+                f"Clip {i} failed to encode.", code="render-failed", detail=str(err)
+            ) from err
+        check = renderer.verify_output(out_path, end - start)
+        if not check["ok"]:
+            raise StageError(
+                f"Clip {i} failed verification (duration {check['duration']:.1f}s, "
+                f"{check['width']}x{check['height']}).",
+                code="clip-verification-failed",
+            )
+        outputs.append(
+            {
+                "clip": i,
+                "path": str(out_path),
+                "ass": str(ass_path),
+                "score": clip["score"],
+                "best_platform": clip["best_platform"],
+                "duration": round(check["duration"], 2),
+                "words": len(words),
+                "event_tags": len(clip_events),
+            }
+        )
+    return outputs, kept_from_editor, fills

@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { api } from './api'
-import type { ErrorInfo, HardwareProfile, JobResults, JobSummary, LogLine, PipelineEvent, QueueStateResult, SetupState } from './types'
+import type {
+  ErrorInfo,
+  HardwareProfile,
+  JobResults,
+  JobSummary,
+  LogLine,
+  PipelineEvent,
+  QueueStateResult,
+  SetupState,
+  StoryRun
+} from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
 import Review from './components/Review'
@@ -60,6 +70,9 @@ export default function App() {
   const [activeJob, setActiveJob] = useState<string | null>(null)
   const [results, setResults] = useState<JobResults | null>(null)
   const [stages, setStages] = useState<Record<string, { fraction: number; message: string }>>({})
+  // E20: the running job's chain, from the job event — the one place a job
+  // start is observed (§5.12) — so the deck draws that chain's rows.
+  const [activeMode, setActiveMode] = useState('clips')
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<ErrorInfo | null>(null)
   const [cancelled, setCancelled] = useState(false)
@@ -188,6 +201,7 @@ export default function App() {
         // Cancel button - T-07 unreachable for queued jobs), and a
         // busy-enqueue would have wrongly taken the idle path.
         setActiveJob(payload.job_id)
+        setActiveMode(typeof payload.mode === 'string' && payload.mode ? payload.mode : 'clips')
         setResults(null)
         setStages({})
         setLog([])
@@ -266,7 +280,10 @@ export default function App() {
       gameplayAmount: number,
       letterboxFill: string,
       ranking: boolean,
-      rankingCount: number
+      rankingCount: number,
+      watermarkImage: string,
+      watermarkText: string,
+      story: StoryRun | null
     ) => {
       // While a job is running this only enqueues - the running job's log
       // and stage bars must not be cleared out from under it.
@@ -282,7 +299,10 @@ export default function App() {
       }
       setEnqueueing((n) => n + 1)
       try {
-        await api.enqueueJob(source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount)
+        await api.enqueueJob(
+          source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+          watermarkImage, watermarkText, story
+        )
         if (!wasIdle) {
           // A busy-enqueue used to change nothing on screen - the rail
           // refreshes only on run events, so six presses queued six
@@ -344,6 +364,8 @@ export default function App() {
           setLog([])
           setActiveJob(results.job_id)
           setView('studio')
+          // a story restyle carries the captions alone (E20): camera and
+          // framing are undefined and no flag reaches the resume
           api.resumeJob(results.job_id, undefined, captions, camera, gameplayAmount)
         }}
       />
@@ -362,6 +384,7 @@ export default function App() {
         enqueueing={enqueueing > 0}
         queued={queuedCount}
         hardware={hardware}
+        chain={activeMode}
         onCancel={() => {
           api.cancelJob().catch(() => {})
         }}

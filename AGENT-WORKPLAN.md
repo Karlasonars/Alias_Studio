@@ -830,6 +830,44 @@ on Google's retryDelay), per-account caps unpublished, and free-tier
 prompts "may be used to improve our products" — a privacy fact T-17's
 notice must state.
 
+### T-43 · Calibration attributes a ranking video's metrics to its rank-1 clip  [P1, found in E18-F05]
+
+```
+Blocked by  nothing
+Touches     insights/calibration.py — rendered_clips(), the render.json
+            output walk near the top of the file, which is what the Loop
+            screen's clip library, the match suggestions and link_clip read
+Proves it   a render.json carrying a montage entry (montage: true, ranks,
+            clip = its rank-1 index) yields no row that attributes the
+            montage's path or duration to that clip; the clip's own entry
+            still yields exactly its own row
+Watch out   E17-F06 (statistical honesty) forbids exactly this failure
+            shape — a poisoned data set that never fails visibly. Do not
+            "fix" it by dropping montages silently either: a published
+            ranking video is an outcome of its own, and where its metrics
+            should land (a row of their own, or nowhere) is a product
+            decision to record, not an implementation detail
+```
+
+`rendered_clips()` walks `render.json`'s `outputs` and keys every entry by its
+`clip` index. Since D-18 a ranking video's entry carries its rank-1 clip's
+index (`montage: true`, `ranks: [a, b]`) beside that clip's own entry, and the
+walk cannot tell the two apart: it emits a second row for the same
+`(job_id, clip_index)` carrying the montage's path and duration. Every other
+reader of the checkpoint learned the marker in E18-F05 and E19 — the editor's
+sync, `_previous_outputs`, `_fill_keys`, `drop_reproducible_outputs` — and this
+one did not, and it is the one that writes into the calibration data set.
+
+What happens, and when: nothing, until a ranking video is **published and
+linked**. Then its views and watch time are stored against a clip that is only
+its index carrier — a ninety-second five-moment video's retention credited to
+one twenty-second clip's score — with no error and no warning; `fit_constants`
+simply learns from a pair that was never a pair. That is the silent poisoning
+E17-F06 was written against, and why this is P1 although it bites only once
+someone links a montage: by then the bad row is in the set and nothing marks
+it. Found while scoping E18-F05, where the PR named it as a fifth reader,
+adjacent and untouched; recorded here by E19's instruction rather than fixed.
+
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
 ```
