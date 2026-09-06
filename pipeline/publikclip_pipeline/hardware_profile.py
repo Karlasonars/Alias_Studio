@@ -140,6 +140,15 @@ def update_after_job(job_id: str, run_started: float) -> dict | None:
     job = queue.get_job(job_id)
     if job is None:
         return None
+    if job.mode != chains.DEFAULT_MODE:
+        # The profile's number is a clips-chain estimate, every ratio
+        # normalised by the SOURCE duration. A story job's stages scale
+        # with the narration, not with the background it ingested, so its
+        # timings would land under the same keys with the wrong
+        # denominator and quietly bend the clips estimate. Story jobs are
+        # not profiled; their resume picker shows no estimate, which is
+        # honest (§5.9) — a measured story estimate is a later task.
+        return None
     # Read the ingest envelope directly rather than via read_checkpoint:
     # that helper enforces a schema_version this module has no business
     # knowing, and the probe's duration stays valid across schema drift.

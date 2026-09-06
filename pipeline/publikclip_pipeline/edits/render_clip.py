@@ -14,7 +14,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from .. import config
+from .. import chains, config
 from ..captions import ass as ass_mod
 from ..captions import title as title_mod
 from ..render import ffmpeg_bin, renderer, watermark
@@ -32,7 +32,24 @@ def _load_stage(job_dir: Path, stage: str) -> dict:
 
 
 def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
-    """Everything the timeline UI needs, in one JSON blob."""
+    """Everything the timeline UI needs, in one JSON blob — or a decline,
+    {ok: False, error}, for a job the editor cannot tune."""
+    settings = _job_settings(job_dir)
+    if settings.mode != chains.DEFAULT_MODE:
+        # E20: a story job has no diarize, events or score checkpoint, and
+        # this function used to fall over the first one it opened — a
+        # traceback where the answer is simply "not this kind of job". The
+        # editor shows the error; the review panel does not offer the
+        # editor for story outputs in the first place (§5.9).
+        return {
+            "ok": False,
+            "code": "story-not-editable",
+            "error": (
+                "This is a story job — the clip editor tunes clips cut from a long "
+                "video, and a story has none. Change the text, the voice or the "
+                "background and run it again instead."
+            ),
+        }
     ingest = _load_stage(job_dir, "ingest")
     diarize = _load_stage(job_dir, "diarize")
     events = _load_stage(job_dir, "events")
@@ -60,7 +77,6 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
     all_words = [
         w for seg in diarize["segments"] for w in seg.get("words", [])
     ]
-    settings = _job_settings(job_dir)
     cuts = detect_dead_space(
         all_words, events["timeline"], edit.start, edit.end,
         resolve_pacing(settings, edit),

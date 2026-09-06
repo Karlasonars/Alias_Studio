@@ -407,10 +407,19 @@ def resume_info(job: Job) -> dict:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         pass
 
+    # THIS job's chain (E20): a story job lists its four stages, never the
+    # five it does not run — a picker offering "redo from SPEAKERS" on a
+    # story job would invalidate nothing and promise a re-run that never
+    # happens.
+    names = list(config.chains.chain_for(job.mode))
+
     profile = hardware_profile.load()
     bucket = (profile.get("measured") or {}).get(profile.get("key")) or {}
     medians: dict[str, float | None] = {}
-    for name in hardware_profile.STAGES:
+    for name in names:
+        # Only clips stages are ever profiled (hardware_profile.update_after_job
+        # says why); a stage with no bucket has no median and the tail's
+        # estimate honestly stays None.
         samples = ((bucket.get("stages") or {}).get(name) or {}).get("samples") or []
         medians[name] = statistics.median(samples) if samples else None
 
@@ -420,12 +429,11 @@ def resume_info(job: Job) -> dict:
     if job.status == "failed":
         try:
             payload = json.loads((job.dir / ERROR_FILE).read_text(encoding="utf-8"))
-            if payload.get("stage") in hardware_profile.STAGES:
+            if payload.get("stage") in names:
                 failed_stage = payload["stage"]
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             pass
 
-    names = list(hardware_profile.STAGES)
     stages = []
     for i, name in enumerate(names):
         tail = [medians[n] for n in names[i:]]

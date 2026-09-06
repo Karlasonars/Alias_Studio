@@ -196,6 +196,14 @@ def _ffmpeg_present() -> bool:
     return ffmpeg_bin.supports_captions()
 
 
+#: Which chains (E20) load an item. The onboarding fetch and `setup status`
+#: stay the clips set — what a first job downloads — and the disk
+#: pre-flight asks for the job's own chain, so a story job is never
+#: charged for the speaker, event and face models it does not load.
+CLIPS_ONLY = frozenset({"clips"})
+EVERY_CHAIN = frozenset({"clips", "stories"})
+
+
 @dataclass(frozen=True)
 class SetupItem:
     id: str
@@ -203,6 +211,7 @@ class SetupItem:
     bytes: int | None  # expected download size; None = depends on the machine
     present: Callable[[], bool]
     fetch: Callable[[ProgressFn], None]
+    modes: frozenset[str] = CLIPS_ONLY
 
 
 def _registry_fetch(spec: registry.ModelSpec) -> Callable[[ProgressFn], None]:
@@ -225,21 +234,29 @@ def _vision_fetch(progress: ProgressFn) -> None:
         registry.ensure(spec, lambda f, m, i=i: progress((i + f) / len(trio), m))
 
 
-def items(settings: "config.Settings | None" = None) -> list[SetupItem]:
+def items(settings: "config.Settings | None" = None, mode: str = "clips") -> list[SetupItem]:
     """In the order a job consumes them, so a job started mid-setup has the
-    best chance its early stages find their models already on disk."""
+    best chance its early stages find their models already on disk. `mode`
+    narrows the list to what that chain loads (E20); the default is the
+    clips set, which is what onboarding fetches."""
     if settings is None:
         settings = config.load_defaults()
     out = [
-        SetupItem("ffmpeg", "ffmpeg (subtitle-capable)", None, _ffmpeg_present, _fetch_ffmpeg),
+        SetupItem(
+            "ffmpeg", "ffmpeg (subtitle-capable)", None, _ffmpeg_present, _fetch_ffmpeg,
+            modes=EVERY_CHAIN,
+        ),
         SetupItem(
             "whisper", "Speech recognition (Whisper large-v3-turbo)",
-            _WHISPER_BYTES, _whisper_present, _fetch_whisper,
+            _WHISPER_BYTES, _whisper_present, _fetch_whisper, modes=EVERY_CHAIN,
         ),
-        SetupItem("vad", "Voice activity detection (Silero)", _SILERO_BYTES, _silero_present, _fetch_silero),
+        SetupItem(
+            "vad", "Voice activity detection (Silero)", _SILERO_BYTES, _silero_present,
+            _fetch_silero, modes=EVERY_CHAIN,
+        ),
         SetupItem(
             "align-en", "Word alignment, English (wav2vec2)",
-            _ALIGN_EN_BYTES, _align_en_present, _fetch_align_en,
+            _ALIGN_EN_BYTES, _align_en_present, _fetch_align_en, modes=EVERY_CHAIN,
         ),
         SetupItem(
             "campplus", "Speaker embeddings (CAM++)",
@@ -269,7 +286,7 @@ def items(settings: "config.Settings | None" = None) -> list[SetupItem]:
             ),
         ]
     )
-    return out
+    return [item for item in out if mode in item.modes]
 
 
 def item_dir(item_id: str) -> Path:
@@ -287,12 +304,12 @@ def item_dir(item_id: str) -> Path:
     return config.models_dir()
 
 
-def status(settings: "config.Settings | None" = None) -> dict:
+def status(settings: "config.Settings | None" = None, mode: str = "clips") -> dict:
     """Cheap, offline, filesystem-only — safe to call on every screen entry.
     total_missing_bytes is what E1-F01 shows BEFORE any download starts."""
     listed = [
         {"id": item.id, "label": item.label, "bytes": item.bytes, "present": item.present()}
-        for item in items(settings)
+        for item in items(settings, mode)
     ]
     return {
         "items": listed,

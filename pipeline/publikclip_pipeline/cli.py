@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import chains, config, errors, hardware_profile, winpatches
+from . import chains, config, errors, winpatches
 from .jobs import queue
 
 winpatches.apply_all()
@@ -138,6 +138,17 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # stage; run_stages' cascade re-runs everything after it and nothing
     # before. Without the flag, resume behaves exactly as it always has.
     if getattr(args, "from_stage", None):
+        # The choices list spans every chain (argparse cannot know the job
+        # yet); the job's own chain is the real gate. A stage outside it
+        # would delete nothing and re-run nothing — a resume that silently
+        # did not do what was asked.
+        if args.from_stage not in chains.chain_for(job.mode):
+            print(
+                f"{args.from_stage} is not a stage of this {job.mode} job "
+                f"(its stages: {', '.join(chains.chain_for(job.mode))})",
+                file=sys.stderr,
+            )
+            return 2
         queue.invalidate_stage(job, args.from_stage)
     # Every settings flag resume accepts must be listed here: one that is
     # parsed but not listed is accepted and silently changes nothing (§5.2).
@@ -480,6 +491,8 @@ def cmd_edit(args: argparse.Namespace) -> int:
     job_dir = Path(job.dir)
 
     if args.edit_cmd == "context":
+        # A declined context (E20: a story job has no clips to tune)
+        # arrives with its own ok=False and error; the merge lets it win.
         print(json.dumps({"ok": True, **rc.context_for_clip(job_dir, args.clip)}))
         return 0
 
@@ -810,10 +823,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_resume)
     _add_watermark_flags(p_resume)
-    # hardware_profile.STAGES is the light-import copy of cli._stages()'s
-    # order (a test pins them equal); argparse must not pay the torch tax.
+    # chains.ALL_STAGES is the light-import union of every chain's stages
+    # (a test pins each chain equal to cli._stages()); argparse must not
+    # pay the torch tax, and it cannot know the job's chain yet — cmd_resume
+    # applies that gate once it has the job.
     p_resume.add_argument(
-        "--from-stage", dest="from_stage", choices=list(hardware_profile.STAGES),
+        "--from-stage", dest="from_stage", choices=list(chains.ALL_STAGES),
         default=None,
         help="invalidate this stage first, so the run re-does it and everything after (T-14)",
     )

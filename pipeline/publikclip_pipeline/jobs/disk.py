@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .. import config
+from .. import chains, config
 from .. import setup as setup_mod
 
 # The wav is exact: 16 kHz mono s16 (normalize.extract_analysis_audio).
@@ -180,9 +180,14 @@ def gather(job, settings: "config.Settings") -> tuple[list[Need], list[str]]:
 
     needs: list[Need] = []
     unknown: list[str] = []
+    # E20: a story job loads the speech models and nothing else on the
+    # clips list — no speaker, event or face models — and writes one story
+    # video, not N clips. Charging it the clips set could block a story on
+    # a fresh machine for ~350 MB of models the chain never fetches.
+    story = settings.mode != chains.DEFAULT_MODE
 
     try:
-        status = setup_mod.status(settings)
+        status = setup_mod.status(settings, mode=settings.mode)
         for item in status["items"]:
             if item["present"]:
                 continue
@@ -231,13 +236,19 @@ def gather(job, settings: "config.Settings") -> tuple[list[Need], list[str]]:
             except Exception:  # noqa: BLE001 — offline or a dead URL: ingest reports it properly
                 unknown.append("source size (could not fetch video metadata)")
 
-    if not (job.dir / "audio16k.wav").exists():
+    if not story and not (job.dir / "audio16k.wav").exists():
+        # the story chain extracts no analysis audio: asr hears the narration
         if duration:
             needs.append(Need("analysis audio", job.dir, wav_need(duration), wav_need(duration)))
         # duration unknown → already named in `unknown` above
 
-    low, high = clips_need(settings.clips)
-    needs.append(Need("rendered clips", job.dir, low, high))
+    if story:
+        # One file whose length is the narration's, which does not exist
+        # until the narrate stage runs — named, never invented (§5.9).
+        unknown.append("the story video (sized once the narration exists)")
+    else:
+        low, high = clips_need(settings.clips)
+        needs.append(Need("rendered clips", job.dir, low, high))
     return needs, unknown
 
 
