@@ -41,13 +41,27 @@ class AsrStage(Stage):
     name = "asr"
     schema_version = 1
 
+    def __init__(self, source: str = "ingest"):
+        # E20: which prior stage's `audio_path` this stage transcribes. The
+        # clips chain hears the ingested media; the story chain hears the
+        # narration the run just produced (F04: word timings come from
+        # transcribing the narration, never from the synthesiser's own
+        # alignment). One parameter, because the two differ in nothing
+        # else — and a re-run of the source stage invalidates this one
+        # through the cascade, so no fingerprint is needed here.
+        self.source = source
+
     def run(self, ctx: StageContext) -> dict:
-        ingest = ctx.prior.get("ingest") if ctx.prior else None
-        if not ingest:
-            raise StageError("ASR needs the ingest stage output.", code="prior-stage-missing")
-        audio_path = Path(ingest["audio_path"])
+        prior = ctx.prior.get(self.source) if ctx.prior else None
+        if not prior or not prior.get("audio_path"):
+            raise StageError(
+                f"ASR needs the {self.source} stage output.", code="prior-stage-missing"
+            )
+        audio_path = Path(prior["audio_path"])
         if not audio_path.exists():
-            raise StageError("Analysis audio missing — re-run ingest.", code="prior-stage-missing")
+            raise StageError(
+                f"Analysis audio missing — re-run {self.source}.", code="prior-stage-missing"
+            )
 
         _point_caches_at_home()
         ctx.emit(-1, "Loading speech model (downloads ~1.6 GB on first run)…")

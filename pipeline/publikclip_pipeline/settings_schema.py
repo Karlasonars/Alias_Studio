@@ -282,6 +282,30 @@ GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "key": "story",
+        "label": "Stories",
+        "help": "The story format (Stories on the deck): a narrated text over a background video of your own, with one-word captions and a title card. These are the defaults a story job starts from; the deck chooses per job. The story text itself is never a setting.",
+        "cost": COST_MODERATE,
+        "cost_note": "Changing the voice or the speed re-narrates the story, re-transcribes the narration and re-renders it. Clips jobs are untouched.",
+        "fields": [
+            {"key": "story.voice", "label": "Narrator voice", "type": "select",
+             "options": [
+                 {"value": "af_heart", "label": "Heart · American, warm"},
+                 {"value": "af_bella", "label": "Bella · American, bright"},
+                 {"value": "am_adam", "label": "Adam · American, low"},
+                 {"value": "am_michael", "label": "Michael · American, even"},
+                 {"value": "bf_emma", "label": "Emma · British, soft"},
+                 {"value": "bm_george", "label": "George · British, measured"},
+             ],
+             "help": "One of Kokoro's generic synthetic voices, run from local weights (about 330 MB, fetched on the first story). No real person's voice is or can be used here."},
+            {"key": "story.speed", "label": "Narration speed", "type": "number",
+             "min": 0.7, "max": 1.3, "step": 0.05,
+             "help": "A multiplier on the voice's natural pace. 1.0 is neutral; 1.1 to 1.2 reads as the brisk delivery the format usually has. The deck's length estimate follows it."},
+            {"key": "story.background", "label": "Last background video", "type": "text",
+             "help": "The background file the deck used most recently, remembered so the next story starts with it. The deck overwrites this whenever a different file is picked; clear it to start blank."},
+        ],
+    },
+    {
         "key": "titles",
         "label": "Titles",
         "help": "Generated title options for each clip. Several are written per clip so you can compare framings rather than accept the first thing the model says.",
@@ -450,15 +474,37 @@ def _resolve(data: dict, dotted: str) -> Any:
     return node
 
 
+#: Settings fields that are PER JOB by nature and deliberately have no
+#: control in the global panel (E20). The reverse check below would
+#: otherwise demand one, and a "default chain" control there would be a
+#: control that changes nothing on the deck, where the chain is actually
+#: chosen (§5.2). This is a classification list in the sense of
+#: test_house_rules' CLIP_EDIT_RENDER_IRRELEVANT: an entry names a field
+#: and says why the panel does not show it; it does not tell the check
+#: to stop looking. Every key here must still resolve to a real field
+#: and must not ALSO appear in GROUPS — validate_schema checks both.
+PER_JOB_FIELDS: dict[str, str] = {
+    "mode": "which chain runs (clips | stories) — chosen on the deck per job, "
+            "never a global default",
+}
+
+
 def validate_schema() -> list[str]:
     """Every schema key must point at a real settings field, and every
-    settings field should be reachable from the UI. Returns problems."""
+    settings field should be reachable from the UI — or be declared
+    per-job in PER_JOB_FIELDS, with a reason. Returns problems."""
     from .captions import ass as ass_mod
 
     problems: list[str] = []
     data = config.Settings().to_json()
 
     covered: set[str] = set()
+    for key in PER_JOB_FIELDS:
+        try:
+            _resolve(data, key)
+        except KeyError:
+            problems.append(f"per-job exemption names no settings field: {key}")
+        covered.add(key)
     for group in GROUPS:
         for fielddef in group.get("fields", []):
             key = fielddef["key"]
@@ -466,6 +512,8 @@ def validate_schema() -> list[str]:
                 _resolve(data, key)
             except KeyError:
                 problems.append(f"schema key has no settings field: {key}")
+            if key in PER_JOB_FIELDS:
+                problems.append(f"field is both per-job and in the panel: {key}")
             covered.add(key)
         matrix = group.get("matrix")
         if matrix:

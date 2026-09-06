@@ -471,6 +471,28 @@ every clip without a mark, with one line in the log, and fingerprints as
 
 ---
 
+### The story chain (E20)
+
+A second list over the same runner, chosen on the deck as `Clips | Stories`
+(D-19): `ingest` → `narrate` → `asr` → `render`. The table of the lists is
+`chains.py`; `cli._stages(mode)` builds the instances and a test pins the two
+equal for every chain. The job's chain is `Settings.mode` in its snapshot —
+a snapshot without the key is a clips job — and `resume` never takes the
+flag. What differs from the clips chain: `ingest` is built with
+`needs_audio=False` (silent b-roll is the normal background; no analysis
+wav), `narrate` (`narrate/stage.py`) reads `story.txt` from the job dir and
+writes `narration.wav` through Kokoro-82M from registry weights (title and
+body synthesised separately so the checkpoint knows where the title ends),
+`asr` is built with `source="narrate"` so the captions' word timings come
+from transcribing the narration, and `render` is `render/story.py` under the
+clips render's name (D-20): the background looped or trimmed to the
+narration with its own audio never mapped, covered and centre-cropped through
+`renderer.cover_vf`, one word at a time through the built-in `story` caption
+preset, and the story card (`captions/story_card.py`) riding the same ASS
+document. The story text is content, not a setting: `jobs create
+--story-file` validates it against `narrate/limits.py` before the job row
+exists and copies it into the job dir.
+
 ## 5. The checkpoint contract
 
 This is the part most likely to bite a new contributor.
@@ -592,7 +614,8 @@ whole tunable surface, grouped by what it controls:
 | `hooks` | hook types, count, ranking |
 | `ranking` | the ranking videos (E18): on/off, moments per video |
 | `watermark` | the channel mark on every output (E19-F02): a PNG by its imported path, or a word |
-| top level | `lufs_target`, `true_peak_db`, `llm_mode`, `gemini_model`, `caption_preset`, `laughter_specialist` |
+| `story` | the story chain's defaults (E20): narrator voice, speed, and the last-used background |
+| top level | `lufs_target`, `true_peak_db`, `llm_mode`, `gemini_model`, `caption_preset`, `laughter_specialist`, `mode` (the job's chain, `clips` or `stories`; per job, chosen on the deck, exempt from the panel via `settings_schema.PER_JOB_FIELDS`) |
 
 Two rules govern this file, stated in its own docstring:
 

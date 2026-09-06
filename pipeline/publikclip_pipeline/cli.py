@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, errors, hardware_profile, winpatches
+from . import chains, config, errors, winpatches
 from .jobs import queue
 
 winpatches.apply_all()
@@ -23,29 +23,50 @@ winpatches.apply_all()
 errors.install_excepthook()
 
 
-def _stages() -> list[queue.Stage]:
-    # Grows per milestone: ingest → asr → diarize → events → candidates →
-    # score → camera → render. Stage imports are deferred so `publikclip
-    # jobs` doesn't pay the torch import tax.
-    from .asr.stage import AsrStage
-    from .camera.stage import CameraStage
-    from .candidates.stage import CandidatesStage
-    from .diarize.stage import DiarizeStage
-    from .events.stage import EventsStage
-    from .ingest.stage import IngestStage
-    from .render.stage import RenderStage
-    from .scoring.stage import ScoreStage
+def _stages(mode: str = chains.DEFAULT_MODE) -> list[queue.Stage]:
+    """The stage instances for one chain (E20 / D-19), in the order
+    chains.CHAINS gives — that table is the light-import truth and a test
+    pins this function to it for every chain. Stage imports are deferred so
+    `publikclip jobs` doesn't pay the torch import tax."""
+    names = chains.chain_for(mode)
+    if names == chains.CLIPS_CHAIN:
+        from .asr.stage import AsrStage
+        from .camera.stage import CameraStage
+        from .candidates.stage import CandidatesStage
+        from .diarize.stage import DiarizeStage
+        from .events.stage import EventsStage
+        from .ingest.stage import IngestStage
+        from .render.stage import RenderStage
+        from .scoring.stage import ScoreStage
 
-    return [
-        IngestStage(),
-        AsrStage(),
-        DiarizeStage(),
-        EventsStage(),
-        CandidatesStage(),
-        ScoreStage(),
-        CameraStage(),
-        RenderStage(),
-    ]
+        built = [
+            IngestStage(),
+            AsrStage(),
+            DiarizeStage(),
+            EventsStage(),
+            CandidatesStage(),
+            ScoreStage(),
+            CameraStage(),
+            RenderStage(),
+        ]
+    elif names == chains.STORY_CHAIN:
+        from .asr.stage import AsrStage
+        from .ingest.stage import IngestStage
+        from .narrate.stage import NarrateStage
+        from .render.story import StoryRenderStage
+
+        built = [
+            # silent b-roll is the normal background; its sound is never used
+            IngestStage(needs_audio=False),
+            NarrateStage(),
+            # F04: the captions' timings come from transcribing the narration
+            AsrStage(source="narrate"),
+            StoryRenderStage(),
+        ]
+    else:  # pragma: no cover - chain_for refused every other mode above
+        raise ValueError(f"no stage builder for mode {mode!r}")
+    assert tuple(s.name for s in built) == names, (mode, built, names)
+    return built
 
 
 def _progress_printer(jsonl: bool):
@@ -105,14 +126,70 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     watermark_text = getattr(args, "watermark_text", None)
     if watermark_text is not None:
         settings.watermark.text = watermark_text.strip()
+    # E20 (D-19): which chain. Only `run` and `jobs create` carry the flag —
+    # a job's chain is fixed at creation, because its checkpoints belong to
+    # that chain; resume reads the snapshot and never takes the flag.
+    mode = getattr(args, "mode", None)
+    if mode:
+        settings.mode = mode
+    # E20-F02: the narrator. Explicit on the deck like the rest, so the
+    # snapshot records the choice; `resume --voice` re-narrates.
+    voice = getattr(args, "voice", None)
+    if voice:
+        settings.story.voice = voice
+    speed = getattr(args, "speed", None)
+    if speed is not None:
+        settings.story.speed = float(speed)
     return settings
+
+
+def _story_input(args: argparse.Namespace, settings: "config.Settings") -> tuple[str | None, str | None]:
+    """(text, refusal) for a story job's `--story-file` (E20-F01). Read
+    here, validated here, BEFORE the job row exists, so a refused story
+    never leaves a pending job the queue would try to run. A clips job
+    answers (None, None). The tool never fetches text from anywhere: this
+    is the only way a story reaches a job."""
+    if settings.mode != "stories":
+        return None, None
+    from .narrate import limits
+
+    path = getattr(args, "story_file", None)
+    if not path:
+        return None, "A story job needs its text: pass --story-file <a .txt file>."
+    try:
+        text = Path(path).expanduser().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, f"Story file not found: {path}"
+    except UnicodeDecodeError:
+        return None, f"Story file is not UTF-8 text: {path}"
+    except OSError as err:
+        return None, f"Story file could not be read: {err}"
+    refusal = limits.check(text)
+    if refusal:
+        return None, refusal
+    return text, None
+
+
+def _store_story(job: queue.Job, text: str | None) -> None:
+    """The copy into the job dir (E20-F01): content travels WITH the job,
+    never in the settings snapshot."""
+    if text is None:
+        return
+    from .narrate import story
+
+    story.store(job.dir, text)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     # New jobs start from the user's saved global settings; CLI flags
     # override just those fields. Existing jobs keep their own snapshot.
     settings = _apply_setting_flags(config.load_defaults(), args)
+    text, refusal = _story_input(args, settings)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
     job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
+    _store_story(job, text)
     return _execute(job, args.jsonl)
 
 
@@ -125,6 +202,17 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # stage; run_stages' cascade re-runs everything after it and nothing
     # before. Without the flag, resume behaves exactly as it always has.
     if getattr(args, "from_stage", None):
+        # The choices list spans every chain (argparse cannot know the job
+        # yet); the job's own chain is the real gate. A stage outside it
+        # would delete nothing and re-run nothing — a resume that silently
+        # did not do what was asked.
+        if args.from_stage not in chains.chain_for(job.mode):
+            print(
+                f"{args.from_stage} is not a stage of this {job.mode} job "
+                f"(its stages: {', '.join(chains.chain_for(job.mode))})",
+                file=sys.stderr,
+            )
+            return 2
         queue.invalidate_stage(job, args.from_stage)
     # Every settings flag resume accepts must be listed here: one that is
     # parsed but not listed is accepted and silently changes nothing (§5.2).
@@ -136,6 +224,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "ranking_count", None) is not None
         or getattr(args, "watermark_image", None) is not None
         or getattr(args, "watermark_text", None) is not None
+        or getattr(args, "voice", None)
+        or getattr(args, "speed", None) is not None
     ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -165,10 +255,17 @@ def _failure_payload(job: queue.Job, err: BaseException) -> dict:
 
 def _execute(job: queue.Job, jsonl: bool) -> int:
     emit = _progress_printer(jsonl)
+    # `mode` rides the job event (E20): the deck draws the running chain's
+    # rows from it, and this event is the one place a job start is observed
+    # (§5.12) — so the chain reaches the screen with the same transition
+    # that resets it, whichever of the four paths started the job.
     if jsonl:
-        print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir)}), flush=True)
+        print(
+            json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir), "mode": job.mode}),
+            flush=True,
+        )
     else:
-        print(f"job {job.id} → {job.dir}", file=sys.stderr)
+        print(f"job {job.id} ({job.mode}) → {job.dir}", file=sys.stderr)
     # E1-F07: per-volume disk pre-flight before anything heavy writes. A
     # confident shortfall fails the job with the numbers in its error —
     # never leaves it pending, which the shell's auto-advance would respawn
@@ -205,7 +302,7 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     ffmpeg_bin.ensure_capable(progress=lambda f, m: emit("setup", f, m))
     run_started = time.time()
     try:
-        results = queue.run_stages(job, _stages(), emit)
+        results = queue.run_stages(job, _stages(job.mode), emit)
     except queue.JobCancelled:
         # Deliberate stop, exit 0: a non-zero exit would land in the shell's
         # 'exited' crash handler and a cancel would read as a crash even with
@@ -306,7 +403,14 @@ def cmd_jobs(args: argparse.Namespace) -> int:
         # its settings snapshot) exists before any run does - that is what
         # makes a job that has not started representable at all (T-08).
         settings = _apply_setting_flags(config.load_defaults(), args)
+        text, refusal = _story_input(args, settings)
+        if refusal:
+            # JSON, because the shell reads this line: the deck shows the
+            # refusal where the press happened (E20-F01's limit, named).
+            print(json.dumps({"ok": False, "error": refusal}))
+            return 2
         job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
+        _store_story(job, text)
         print(json.dumps({"job_id": job.id, "status": job.status}))
         return 0
     if sub == "next":
@@ -426,6 +530,55 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(json.dumps(payload()))
         return 0
 
+    if args.settings_cmd == "story-limits":
+        # E20-F01: the deck's numbers — the word limits, the words-per-minute
+        # its length estimate uses, and the voices on offer — from the one
+        # module that applies them, so the deck cannot drift from the gate.
+        from .narrate import limits
+
+        print(json.dumps(limits.limits_payload()))
+        return 0
+
+    if args.settings_cmd == "story-read":
+        # E20-F01: a .txt the user picked, read for the deck's textarea so
+        # the estimate and the limits apply to it exactly as to pasted
+        # text. The frontend has no file access of its own; python reads
+        # it and the deck edits it like anything pasted. The tool never
+        # fetches text from anywhere else.
+        from .narrate import limits
+
+        path = Path(args.path).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": f"not found: {args.path}"}))
+            return 1
+        except UnicodeDecodeError:
+            print(json.dumps({"ok": False, "error": f"not a UTF-8 text file: {path.name}"}))
+            return 1
+        except OSError as err:
+            print(json.dumps({"ok": False, "error": f"could not read {path.name}: {err}"}))
+            return 1
+        print(json.dumps({
+            "ok": True, "text": text, "name": path.name, "words": limits.word_count(text),
+            "refusal": limits.check(text), "warning": limits.warning(text),
+        }))
+        return 0
+
+    if args.settings_cmd == "remember-background":
+        # E20 (Q2): the last-used background is a real setting. The deck
+        # calls this on every pick; a missing file is refused so a stale
+        # path is never remembered as a default.
+        path = Path(args.path).expanduser()
+        if not path.is_file():
+            print(json.dumps({"ok": False, "error": f"not a file: {args.path}"}))
+            return 1
+        defaults = config.load_defaults()
+        defaults.story.background = str(path)
+        config.save_defaults(defaults)
+        print(json.dumps(payload()))
+        return 0
+
     if args.settings_cmd == "watermark-import":
         # E19-F02: the deck's PNG picker lands here. The copy into
         # PUBLIKCLIP_HOME and the PNG check are python's — testable here,
@@ -460,6 +613,8 @@ def cmd_edit(args: argparse.Namespace) -> int:
     job_dir = Path(job.dir)
 
     if args.edit_cmd == "context":
+        # A declined context (E20: a story job has no clips to tune)
+        # arrives with its own ok=False and error; the merge lets it win.
         print(json.dumps({"ok": True, **rc.context_for_clip(job_dir, args.clip)}))
         return 0
 
@@ -729,6 +884,37 @@ def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_mode_flag(parser: argparse.ArgumentParser) -> None:
+    """E20's chain choice, on `run` and `jobs create` only — never on
+    resume: a job's checkpoints belong to the chain that wrote them."""
+    parser.add_argument(
+        "--mode", choices=sorted(chains.CHAINS), default=None,
+        help="which chain runs: clips (the default) cuts a long video into scored clips; "
+             "stories narrates a text over a background video of yours",
+    )
+
+
+def _add_story_flags(parser: argparse.ArgumentParser, with_text: bool) -> None:
+    """E20's narrator flags — voice and speed on run, resume and `jobs
+    create`; the story file only where a job is created, because the text
+    is content copied into the job dir once (F01), not a setting."""
+    from .narrate import kokoro_tts
+
+    if with_text:
+        parser.add_argument(
+            "--story-file", dest="story_file", default=None,
+            help="stories mode: a UTF-8 .txt whose first line is the title; copied into the job",
+        )
+    parser.add_argument(
+        "--voice", choices=list(kokoro_tts.VOICE_IDS), default=None,
+        help="stories mode: the narrator voice (a generic Kokoro speaker)",
+    )
+    parser.add_argument(
+        "--speed", type=float, default=None,
+        help="stories mode: narration speed multiplier, 1.0 = the voice's natural pace",
+    )
+
+
 def _add_watermark_flags(parser: argparse.ArgumentParser) -> None:
     """E19-F02's two flags, identical on run, resume and `jobs create`. No
     choices list: the image is a path and the word is free text, and an
@@ -763,6 +949,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_run)
     _add_watermark_flags(p_run)
+    _add_mode_flag(p_run)
+    _add_story_flags(p_run, with_text=True)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -780,10 +968,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_resume)
     _add_watermark_flags(p_resume)
-    # hardware_profile.STAGES is the light-import copy of cli._stages()'s
-    # order (a test pins them equal); argparse must not pay the torch tax.
+    _add_story_flags(p_resume, with_text=False)
+    # chains.ALL_STAGES is the light-import union of every chain's stages
+    # (a test pins each chain equal to cli._stages()); argparse must not
+    # pay the torch tax, and it cannot know the job's chain yet — cmd_resume
+    # applies that gate once it has the job.
     p_resume.add_argument(
-        "--from-stage", dest="from_stage", choices=list(hardware_profile.STAGES),
+        "--from-stage", dest="from_stage", choices=list(chains.ALL_STAGES),
         default=None,
         help="invalidate this stage first, so the run re-does it and everything after (T-14)",
     )
@@ -831,6 +1022,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_create)
     _add_watermark_flags(p_create)
+    _add_mode_flag(p_create)
+    _add_story_flags(p_create, with_text=True)
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(
         "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"
@@ -857,6 +1050,19 @@ def main(argv: list[str] | None = None) -> int:
         help="copy a PNG into the app's watermark folder and print its stored path (E19-F02)",
     )
     p_wm.add_argument("path")
+    set_sub.add_parser(
+        "story-limits",
+        help="the story word limits, the words-per-minute estimate and the voices (E20)",
+    )
+    p_sr = set_sub.add_parser(
+        "story-read", help="read a UTF-8 .txt for the deck's story field, with its word count (E20)"
+    )
+    p_sr.add_argument("path")
+    p_bg = set_sub.add_parser(
+        "remember-background",
+        help="save a background video path as the default the next story starts from (E20)",
+    )
+    p_bg.add_argument("path")
     p_set.set_defaults(fn=cmd_settings)
 
     p_edit = sub.add_parser("edit", help="per-clip editing (context / visuals / render)")

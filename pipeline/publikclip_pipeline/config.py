@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
+from . import chains
+
 
 def home_dir() -> Path:
     return Path(os.environ.get("PUBLIKCLIP_HOME", str(Path.home() / ".publikclip")))
@@ -323,6 +325,21 @@ DEFAULT_HOOK_TYPES = [
 
 
 @dataclass
+class StorySettings:
+    """The story chain's knobs (E20). Per-job values are chosen on the deck
+    and sent explicitly; these are what a story job starts from. The story
+    TEXT is deliberately not here — it is content, copied into the job dir
+    (narrate/story.py), never a default."""
+
+    voice: str = "af_heart"    # a kokoro_tts.VOICES id — generic synthetic speakers only (§8)
+    speed: float = 1.0         # Kokoro's rate multiplier; 1.0 is the voice's natural pace
+    # The last background video the deck used, remembered (E20 Q2): someone
+    # making ten stories will not pick the same file ten times. A setting,
+    # unlike the text, because it is a preference that outlives one job.
+    background: str = ""
+
+
+@dataclass
 class TitleSettings:
     variants: int = 3
     min_chars: int = 20
@@ -393,6 +410,7 @@ class Settings:
     hooks: HookSettings = field(default_factory=HookSettings)
     ranking: RankingSettings = field(default_factory=RankingSettings)
     watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
+    story: StorySettings = field(default_factory=StorySettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
@@ -406,6 +424,13 @@ class Settings:
     # laughter classes cover the bus at 320 ms resolution for a fraction of
     # the compute; flip on for the two-detector agreement boost.
     laughter_specialist: bool = False
+    # Which chain runs this job (E20 / D-19): 'clips' or 'stories', a key
+    # of chains.CHAINS. Per-job, chosen on the deck, and a field HERE
+    # rather than a DB column because the snapshot is the one place a
+    # job's own state already lives — a column would be this project's
+    # first schema migration. A snapshot written before the field existed
+    # lacks it and reads as 'clips', so every job on disk keeps its chain.
+    mode: str = chains.DEFAULT_MODE
 
     def to_json(self) -> dict:
         return {
@@ -425,12 +450,14 @@ class Settings:
             "hooks": {**self.hooks.__dict__, "types": list(self.hooks.types)},
             "ranking": self.ranking.__dict__.copy(),
             "watermark": self.watermark.__dict__.copy(),
+            "story": self.story.__dict__.copy(),
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
             "gemini_model": self.gemini_model,
             "caption_preset": self.caption_preset,
             "laughter_specialist": self.laughter_specialist,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -471,6 +498,7 @@ class Settings:
             hooks=hooks,
             ranking=_build(RankingSettings, data.get("ranking")),
             watermark=_build(WatermarkSettings, data.get("watermark")),
+            story=_build(StorySettings, data.get("story")),
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),
@@ -479,6 +507,9 @@ class Settings:
             gemini_model=data.get("gemini_model") or DEFAULT_GEMINI_MODEL,
             caption_preset=data.get("caption_preset", "classic"),
             laughter_specialist=data.get("laughter_specialist", False),
+            # `or`, not a default: an empty string in a hand-edited file is
+            # no mode, and no mode is the clips chain (chains.chain_for).
+            mode=str(data.get("mode") or chains.DEFAULT_MODE),
         )
 
 

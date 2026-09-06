@@ -220,6 +220,10 @@ export interface RenderOutput {
   duration: number
   words: number
   event_tags: number
+  /** E20: this entry is the whole story — one file, no score, no clip.
+   * `clip` is 0 and means nothing; `title` is the story's title. */
+  story?: boolean
+  title?: string
   /** E18: this entry is a whole ranking video, not one clip's file. Its
    * `clip` is the rank-1 index so the audit panel shows the winning moment;
    * `ranks` is the global rank range it plays (1–5, then 6–10). */
@@ -256,6 +260,14 @@ export interface JobResults {
     heatmap: unknown[] | null
     probe: { duration_sec: number; width: number; height: number }
   } | null
+  /** E20: the narrate checkpoint; null (or absent) for a clips job. */
+  narrate?: {
+    title: string
+    duration_sec: number
+    title_end_sec: number
+    word_count: number
+    settings_used: { voice: string; speed: number }
+  } | null
   score: { clips: Clip[]; llm_mode: string; model: string; scored_count: number } | null
   render: {
     outputs: RenderOutput[]
@@ -288,6 +300,38 @@ export interface JobResults {
       gameplay_amount: number
     }
   } | null
+}
+
+/* ---------- E20 stories ---------- */
+
+/** What the deck sends for a story job (api.enqueueJob's last argument). */
+export interface StoryRun {
+  text: string
+  voice: string
+  speed: number
+}
+
+/** `settings story-limits`: the word limits and the estimate's rate, from
+ *  narrate/limits.py — the deck shows the estimate and applies the same
+ *  gates, with these numbers, never its own. */
+export interface StoryLimits {
+  ok: boolean
+  max_words: number
+  warn_words: number
+  words_per_minute: number
+  voices: { id: string; label: string }[]
+  default_voice: string
+}
+
+/** `settings story-read`: a picked .txt, read by python. */
+export interface StoryRead {
+  ok: boolean
+  error?: string
+  text?: string
+  name?: string
+  words?: number
+  refusal?: string | null
+  warning?: string | null
 }
 
 export interface JobSummary {

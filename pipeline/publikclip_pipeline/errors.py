@@ -240,6 +240,27 @@ CATALOG: dict[str, Entry] = {
         "This video has no audio track, and Alias Studio needs speech to find moments.",
         ("Use a version of the video that includes its audio.",),
     ),
+    # --- the story chain (E20) ---------------------------------------------
+    "story-text-missing": Entry(
+        "This story job has no story text — story.txt is missing from its folder.",
+        ("Start a new story from the deck; the text is copied into the job when it is created.",),
+    ),
+    "story-too-long": Entry(
+        "The story is longer than the narrator's limit.",
+        ("Cut the text down to the limit named in the message, or split it into two stories.",),
+    ),
+    "narrator-unavailable": Entry(
+        "The narrator voice could not be loaded on this machine.",
+        ("Check your connection — the voice weights (about 330 MB) download on the first story, "
+         "and the download resumes where it stopped.",
+         "If it keeps failing, copy the technical details and open an issue."),
+        docs=DOCS,
+    ),
+    "narration-empty": Entry(
+        "The narrator produced no audio for this story.",
+        ("Check that the text is plain English prose; symbols and markup alone read as silence.",
+         REPORT_ACTION),
+    ),
     "no-speech": Entry(
         "No speech was found in this video, and Alias Studio needs dialogue to find moments.",
         ("Check that the right audio track is present and audible.",),

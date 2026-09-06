@@ -78,15 +78,27 @@ def _previous_outputs(job_dir: Path) -> dict:
     vanishing. A ranking montage entry is never a clip's editor version —
     its `clip` is only the rank-1 index for the review panel — so it is
     skipped here: without that, a clip-mode run after a ranking run would
-    adopt the montage as that clip's file."""
+    adopt the montage as that clip's file. A story entry (E20, D-20) is
+    skipped for the same reason: it is not a clip and nothing is ever
+    adopted into it."""
     try:
         return {
             str(o["clip"]): o
             for o in _previous_render(job_dir).get("outputs", [])
-            if not o.get("montage") and Path(o["path"]).exists()
+            if not o.get("montage") and not o.get("story") and Path(o["path"]).exists()
         }
     except (KeyError, TypeError, AttributeError):
         return {}
+
+
+def _previous_stories(job_dir: Path) -> list[dict]:
+    """The story entries of the last render (E20, D-20): one, for a story
+    job; none for a clips job."""
+    return [
+        entry
+        for entry in _previous_render(job_dir).get("outputs", []) or []
+        if isinstance(entry, dict) and entry.get("story")
+    ]
 
 
 def _previous_montages(job_dir: Path) -> list[dict]:
@@ -139,6 +151,17 @@ def drop_reproducible_outputs(job_dir: Path) -> list[int]:
         if path.name and path.exists():
             path.unlink(missing_ok=True)
             idx = int(montage.get("clip", 0) or 0)
+            if idx not in dropped:
+                dropped.append(idx)
+    # D-20's first guard: a story output is always reproducible — the
+    # editor never touches it, so there is no adoption to protect — and
+    # the clip-keyed logic above would have judged it against a score.json
+    # a story job does not have. Unlinked outright, like a montage.
+    for story in _previous_stories(job_dir):
+        path = Path(str(story.get("path", "")))
+        if path.name and path.exists():
+            path.unlink(missing_ok=True)
+            idx = int(story.get("clip", 0) or 0)
             if idx not in dropped:
                 dropped.append(idx)
     return sorted(dropped)

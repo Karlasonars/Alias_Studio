@@ -44,7 +44,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import config, errors, hardware_profile, setup
+from . import chains, config, errors, hardware_profile, setup
 from .jobs import disk as disk_mod
 from .jobs import queue
 
@@ -65,7 +65,7 @@ MANIFEST: dict[str, set[str] | str] = {
         "duration_sec", "width", "height", "fps", "vfr", "start_time",
         "video_codec", "has_audio",
     },
-    "stages.json": set(hardware_profile.STAGES) | {
+    "stages.json": set(chains.ALL_STAGES) | {
         "status", "seconds", "error", "checkpoint", "schema_version",
         "checkpoint_bytes",
     },
@@ -153,7 +153,10 @@ def _stages_file(job: queue.Job) -> dict:
         ).fetchall()
     by_stage = {r["stage"]: r for r in rows}
     out: dict[str, dict] = {}
-    for name in hardware_profile.STAGES:
+    # The job's own chain (E20): a story bundle lists narrate and omits the
+    # five stages it never ran, instead of five "never started" rows that
+    # read as a job that died early.
+    for name in chains.chain_for(job.mode):
         row = by_stage.get(name)
         path = queue.checkpoint_path(job, name)
         entry: dict = {

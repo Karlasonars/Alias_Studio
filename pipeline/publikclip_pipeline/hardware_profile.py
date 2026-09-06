@@ -29,7 +29,7 @@ import statistics
 import time
 from pathlib import Path
 
-from . import config, hardware
+from . import chains, config, hardware
 from .jobs import queue
 
 PROFILE_FILE = "hardware_profile.json"
@@ -50,10 +50,13 @@ KEY_FIELDS = (
     "cpu_threads",
 )
 
-# Keep in sync with cli._stages(). An estimate is only offered once every
-# stage has at least one sample under the current key - a partial sum
-# would silently understate, which is a fabricated number with extra steps.
-STAGES = ("ingest", "asr", "diarize", "events", "candidates", "score", "camera", "render")
+# The clips chain, from the one table (chains.py; a test pins it equal to
+# cli._stages()). The profile's headline number - "a 60 min video ≈ N
+# min" - is a clips-chain estimate, and stays one: only clips stages feed
+# it, and an estimate is only offered once every one of them has at least
+# one sample under the current key - a partial sum would silently
+# understate, which is a fabricated number with extra steps.
+STAGES = chains.CLIPS_CHAIN
 
 # Median of the last N samples per stage: the median so one pathological
 # job (a source that hit a degenerate path) cannot own the estimate, the
@@ -136,6 +139,15 @@ def update_after_job(job_id: str, run_started: float) -> dict | None:
     """
     job = queue.get_job(job_id)
     if job is None:
+        return None
+    if job.mode != chains.DEFAULT_MODE:
+        # The profile's number is a clips-chain estimate, every ratio
+        # normalised by the SOURCE duration. A story job's stages scale
+        # with the narration, not with the background it ingested, so its
+        # timings would land under the same keys with the wrong
+        # denominator and quietly bend the clips estimate. Story jobs are
+        # not profiled; their resume picker shows no estimate, which is
+        # honest (§5.9) — a measured story estimate is a later task.
         return None
     # Read the ingest envelope directly rather than via read_checkpoint:
     # that helper enforces a schema_version this module has no business
