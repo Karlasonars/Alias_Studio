@@ -1,16 +1,20 @@
 """The story card (E20-F05): the title, on screen while the narrator reads
 it, as a channel card in the app's OWN design.
 
-What it is: a rounded dark card in the middle of the frame, laid out top
-to bottom the way a social post card is — a header row (an avatar circle,
-the user's channel name beside it), the story title in the caption
-preset's face sized by its length, and a meta row where a post card would
-put its engagement. That row carries the story's DURATION, which the
-narrate stage measured from the audio it produced: a real number the job
-computed, placed exactly so the layout tempts nobody to fill it with an
-invented one. It appears at 0 and leaves when the narrator finishes the
-title — `title_end_sec` from the narrate checkpoint, never a fixed number
-of seconds — and the one-word captions start on the first body word.
+What it is: an opaque WHITE rounded card with a soft shadow, in the middle
+of the frame, laid out top to bottom the way a social post card is — a
+header row (a large avatar circle, the user's channel name in bold beside
+it), the story title in near-black in the caption preset's face, sentence
+case whatever the preset says, sized by its length, and a bottom row where
+a post card would put its engagement: a bare heart glyph on the left, a
+bare share glyph beside it, and the story's DURATION on the right, which
+the narrate stage measured from the audio it produced. Opaque and white on
+purpose: the format this imitates works because the card sits on top of a
+busy background and wins; the translucent dark panel this replaced read as
+a murky slide over bright footage. It appears at 0 and leaves when the
+narrator finishes the title — `title_end_sec` from the narrate
+checkpoint, never a fixed number of seconds — and the one-word captions
+start on the first body word.
 
 The avatar circle is the user's own avatar PNG (`story.avatar`, E20-F06):
 a picture of its own, imported through the watermark's import helper into
@@ -26,26 +30,33 @@ absent.
 
 What it is NOT, and this is a product constraint rather than a style
 preference: it carries no other platform's logo or wordmark, no invented
-username, and no vote, share, comment or view counts. A tool that draws
-another platform's post frame with fabricated engagement numbers is a
-fake-record generator. Every number on this card is one the job computed;
-if the format ever seems to need another, the answer is no.
+username, no verified badge, no award icons, and no vote, share, comment
+or view counts. The line the bottom row walks: a bare glyph is decoration
+and claims nothing; a glyph with a number beside it — "99+", "1.2k", a
+digit — claims how people responded, and a verified badge claims a
+platform vouched for this account. Both would be false on a card the app
+draws for its own user. A tool that draws another platform's post frame
+with fabricated engagement is a fake-record generator. Every number on
+this card is one the job computed; if the format ever seems to need
+another, the answer is no — not as a setting, not as a lookalike glyph.
 
 Like the ranking list (captions/ranking.py) and the burned title
 (captions/title.py) it rides the caption document through `extra_styles`
 / `extra_events`, so the card costs no second subtitle pass and no
-drawtext (which the resolved ffmpeg may lack — §5.7).
+drawtext (which the resolved ffmpeg may lack — §5.7). The glyphs are ASS
+drawings, not font glyphs: the bundled faces are not guaranteed to carry
+a heart, and a drawing is the same on every machine.
 
 Geometry, in PlayRes units (1080x1920):
 
     +---------------------------------+  0
     |   +-------------------------+   |  PANEL_Y
-    |   |  (o) channel name       |   |  header: AVATAR_D circle, name beside it
+    |   |  (O)  Channel name      |   |  header: AVATAR_D circle, bold name beside it
     |   |                         |   |
-    |   |  The title, wrapped     |   |  title, left-aligned, sized by length
+    |   |  The title, wrapped     |   |  title, left-aligned, sentence case, sized by length
     |   |  over a few lines       |   |
-    |   |  ---------------------  |   |  divider
-    |   |  1:23                   |   |  meta row: the narration's duration
+    |   |                         |   |
+    |   |  ♥  ➦             1:23  |   |  bottom row: bare glyphs, the narration's duration
     |   +-------------------------+   |  PANEL_Y + PANEL_H
     +---------------------------------+  1920
 """
@@ -56,39 +67,48 @@ from dataclasses import dataclass
 
 from . import ass as ass_mod
 
-CARD_VERSION = 3      # bumped when the drawing changes, so cached renders re-run
+CARD_VERSION = 4      # bumped when the drawing changes, so cached renders re-run
 
 PANEL_X = 90
 PANEL_W = ass_mod.PLAY_RES_X - 2 * PANEL_X
-PANEL_Y = 560
-PANEL_H = 800
-PANEL_RADIUS = 40
-PANEL_ALPHA = "&H26&"   # ASS alpha: 00 opaque → 0x26 is 85 % opaque black
-INSET = 60             # from the panel's edge to everything inside it
-AVATAR_D = 120         # the avatar circle's diameter
-INITIAL_SIZE = 60      # the fallback initial inside it
-NAME_SIZE = 44         # the channel name beside it
-HEADER_GAP = 44        # from the header's bottom to the title's top
+PANEL_Y = 540
+PANEL_H = 840
+PANEL_RADIUS = 48
+CARD_FILL = "&HFFFFFF&"     # BBGGRR: white, and opaque — the card must win over the video
+INK = "&H1A1A1A&"           # near-black text
+INK_SOFT = "&H666666&"      # the duration, quieter than the title
+INITIAL_INK = "&HFFFFFF&"   # the initial, white on the accent circle
+# The soft shadow that lifts the card off the video: the panel's own shape,
+# black at 40 % under a blur, drawn a little lower on the layer beneath.
+SHADOW_OFFSET = 14
+SHADOW_BLUR = 18
+SHADOW_ALPHA = "&H99&"      # ASS alpha: 00 opaque → 0x99 is 60 % transparent
+INSET = 64                  # from the panel's edge to everything inside it
+AVATAR_D = 160              # the avatar circle's diameter — the header is the identity
+INITIAL_SIZE = 76           # the fallback initial inside it
+NAME_SIZE = 56              # the channel name beside it, bold
+NAME_GAP = 32               # between the circle and the name
+HEADER_GAP = 40             # from the header's bottom to the title's top
 # The title in the caption face, sized by its length so an eighty-character
-# title still fits three or four lines above the meta row.
+# title still fits three or four lines above the bottom row.
 TITLE_SIZE_SHORT = 76   # up to SHORT_CHARS
 TITLE_SIZE_MID = 62     # up to MID_CHARS
 TITLE_SIZE_LONG = 50    # beyond
 SHORT_CHARS = 36
 MID_CHARS = 72
-META_H = 140           # the meta row's band at the bottom of the panel
-DIVIDER_H = 2
-META_SIZE = 40
-DIM_ALPHA = "&H66&"    # 60 % opaque: the divider and the duration read as secondary
+META_H = 150            # the bottom row's band
+GLYPH = 44              # the heart's and the share glyph's height
+GLYPH_GAP = 44          # between the two glyphs
+META_SIZE = 40          # the duration
 FADE_IN_MS = 160
 FADE_OUT_MS = 220
 
 
 @dataclass(frozen=True)
 class Card:
-    """What one story's card shows. `avatar` is the watermark PNG's path,
-    "" for the initial fallback; `duration_sec` is the narration's length
-    as narrate measured it, 0 for no meta row."""
+    """What one story's card shows. `avatar` is the avatar PNG's path, ""
+    for the initial fallback; `duration_sec` is the narration's length as
+    narrate measured it, 0 for no bottom row."""
 
     title: str
     end_sec: float
@@ -168,39 +188,110 @@ def circle(cx: int, cy: int, r: int) -> str:
     )
 
 
+def _path(points: list[tuple[str, list[tuple[float, float]]]], x: int, y: int, s: float) -> str:
+    """An ASS drawing from (command, points) pairs on a 32-unit grid,
+    scaled to `s` px and placed at (x, y). Integers only: the drawing
+    grammar allows decimals but a rounded grid renders the same everywhere."""
+    out: list[str] = []
+    for cmd, pts in points:
+        out.append(cmd)
+        for px, py in pts:
+            out.append(f"{x + int(round(px * s / 32))} {y + int(round(py * s / 32))}")
+    return " ".join(out)
+
+
+def heart(x: int, y: int, s: int = GLYPH) -> str:
+    """A filled heart in an s×s box at (x, y): two lobes of cubic arcs
+    meeting at the bottom point. Solid, at the weight of the reference's
+    icon, and carrying NOTHING beside it — see the module docstring."""
+    return _path(
+        [
+            ("m", [(16, 29)]),
+            ("b", [(16, 29), (2, 20), (2, 10)]),
+            ("b", [(2, 5), (6, 2), (10, 2)]),
+            ("b", [(13, 2), (15, 4), (16, 6)]),
+            ("b", [(17, 4), (19, 2), (22, 2)]),
+            ("b", [(26, 2), (30, 5), (30, 10)]),
+            ("b", [(30, 20), (16, 29), (16, 29)]),
+        ],
+        x, y, s,
+    )
+
+
+def share(x: int, y: int, s: int = GLYPH) -> str:
+    """A filled forward arrow in an s×s box at (x, y): an arrow head on
+    the right with a curved tail sweeping down to the left — the share
+    glyph a post card carries, solid, and likewise bare."""
+    return _path(
+        [
+            ("m", [(18, 3)]),
+            ("l", [(31, 14), (18, 25), (18, 19)]),
+            ("b", [(11, 18), (5, 22), (1, 29)]),
+            ("b", [(2, 19), (8, 10), (18, 9)]),
+            ("l", [(18, 3)]),
+        ],
+        x, y, s,
+    )
+
+
 def overlay_styles(preset: ass_mod.Preset) -> str:
-    """The card's styles in the caption preset's face: the title (top-left,
-    7, wrapped by libass between the panel's margins), the channel name and
-    the duration (middle-left, 4), the initial (centred, 5), and a drawing
-    style for the shapes — no font involved, everything set per event."""
-    bold = -1 if preset.bold else 0
+    """The card's styles in the caption preset's face, on the white card:
+    near-black ink, no outline — the title (top-left, 7, wrapped by libass
+    between the panel's margins), the channel name (bold, middle-left, 4),
+    the duration (middle-right, 6), the initial (centred, 5, white on the
+    accent circle), and a drawing style for the shapes — no font involved,
+    everything set per event."""
     m = PANEL_X + INSET
-    text = f"{preset.primary},{preset.primary},{preset.outline_color},&H00000000"
+
+    def colours(tag_colour: str) -> str:
+        # A \1c tag colour (&HBBGGRR&) as the style's four colour fields:
+        # primary and secondary in that ink, outline and back black — with
+        # the AA byte a style line needs and a tag does not.
+        ink = "&H00" + tag_colour[2:-1]
+        return f"{ink},{ink},&H00000000,&H00000000"
+
     return (
-        f"Style: StoryTitle,{preset.font},{TITLE_SIZE_SHORT},{text},{bold},0,0,0,100,100,0,0,1,3,0,7,{m},{m},0,1\n"
-        f"Style: StoryName,{preset.font},{NAME_SIZE},{text},{bold},0,0,0,100,100,0,0,1,0,0,4,0,0,0,1\n"
-        f"Style: StoryMeta,{preset.font},{META_SIZE},{text},0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1\n"
-        f"Style: StoryInitial,{preset.font},{INITIAL_SIZE},{text},-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n"
+        f"Style: StoryTitle,{preset.font},{TITLE_SIZE_SHORT},{colours(INK)},0,0,0,0,100,100,0,0,1,0,0,7,{m},{m},0,1\n"
+        f"Style: StoryName,{preset.font},{NAME_SIZE},{colours(INK)},-1,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1\n"
+        f"Style: StoryMeta,{preset.font},{META_SIZE},{colours(INK_SOFT)},0,0,0,0,100,100,0,0,1,0,0,6,0,0,0,1\n"
+        f"Style: StoryInitial,{preset.font},{INITIAL_SIZE},{colours(INITIAL_INK)},-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n"
         "Style: StoryShape,Inter,20,&H00000000,&H00000000,&H00000000,&H00000000,0,0,0,0,"
         "100,100,0,0,1,0,0,7,0,0,0,1\n"
     )
 
 
+def _dialogue(layer: int, start: str, end: str, style: str, name: str, body: str) -> str:
+    """One event. `name` rides the ASS Name (actor) field, which renderers
+    ignore: it says what the event IS — panel, heart, duration — so a test
+    can find a part by what it is rather than by its position or its
+    coordinates, and so a reader of the document can too."""
+    return f"Dialogue: {layer},{start},{end},{style},{name},0,0,0,{body}\n"
+
+
 def overlay_events(preset: ass_mod.Preset, card: Card) -> str:
     """The Dialogue lines, 0 → end_sec, on layers above the captions (which
-    do not exist during the card anyway): the panel, the header, the title,
-    the meta row. All share one fade, so the card moves as one thing — the
-    picture avatar is the exception, overlaid by ffmpeg and switched off
-    when the fade-out begins (render/story.py says why)."""
+    do not exist during the card anyway): the shadow, the card, the
+    header, the title, the bottom row. All share one fade, so the card
+    moves as one thing — the picture avatar is the exception, overlaid by
+    ffmpeg and switched off when the fade-out begins (render/story.py says
+    why)."""
     start, end = ass_mod._fmt_time(0.0), ass_mod._fmt_time(max(0.04, card.end_sec))
     fade = f"\\fad({FADE_IN_MS},{FADE_OUT_MS})"
-    shape = "\\an7\\pos(0,0)\\bord0\\shad0"
+    shape = "\\an7\\bord0\\shad0"
+    panel = rounded_rect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, PANEL_RADIUS)
     lines = [
-        f"Dialogue: 3,{start},{end},StoryShape,,0,0,0,"
-        f"{{{shape}\\1c&H000000&\\1a{PANEL_ALPHA}{fade}\\p1}}"
-        f"{rounded_rect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, PANEL_RADIUS)}{{\\p0}}\n"
+        _dialogue(
+            2, start, end, "StoryShape", "shadow",
+            f"{{{shape}\\pos(0,{SHADOW_OFFSET})\\1c&H000000&\\1a{SHADOW_ALPHA}\\blur{SHADOW_BLUR}{fade}\\p1}}"
+            f"{panel}{{\\p0}}",
+        ),
+        _dialogue(
+            3, start, end, "StoryShape", "panel",
+            f"{{{shape}\\pos(0,0)\\1c{CARD_FILL}\\1a&H00&{fade}\\p1}}{panel}{{\\p0}}",
+        ),
     ]
     left = PANEL_X + INSET
+    right = PANEL_X + PANEL_W - INSET
     title_y = PANEL_Y + INSET
     if card.has_header:
         ax, ay, d = avatar_box()
@@ -209,37 +300,46 @@ def overlay_events(preset: ass_mod.Preset, card: Card) -> str:
         if not card.avatar and initial:
             # No picture: the initial on the accent colour. With a picture
             # nothing is drawn here — ffmpeg puts the image on these pixels.
-            lines.append(
-                f"Dialogue: 4,{start},{end},StoryShape,,0,0,0,"
-                f"{{{shape}\\1c{_rgb(preset.active)}\\1a&H00&{fade}\\p1}}{circle(cx, cy, r)}{{\\p0}}\n"
-            )
-            lines.append(
-                f"Dialogue: 5,{start},{end},StoryInitial,,0,0,0,"
-                f"{{\\an5\\pos({cx},{cy}){fade}}}{ass_mod._esc(initial)}\n"
-            )
+            lines.append(_dialogue(
+                4, start, end, "StoryShape", "avatar",
+                f"{{{shape}\\pos(0,0)\\1c{_rgb(preset.active)}\\1a&H00&{fade}\\p1}}{circle(cx, cy, r)}{{\\p0}}",
+            ))
+            lines.append(_dialogue(
+                5, start, end, "StoryInitial", "initial",
+                f"{{\\an5\\pos({cx},{cy})\\bord0\\shad0{fade}}}{ass_mod._esc(initial)}",
+            ))
         if card.channel:
-            lines.append(
-                f"Dialogue: 5,{start},{end},StoryName,,0,0,0,"
-                f"{{\\an4\\pos({ax + d + 28},{cy})\\q2{fade}}}{ass_mod._esc(card.channel)}\n"
-            )
+            lines.append(_dialogue(
+                5, start, end, "StoryName", "name",
+                f"{{\\an4\\pos({ax + d + NAME_GAP},{cy})\\q2\\bord0\\shad0{fade}}}{ass_mod._esc(card.channel)}",
+            ))
         title_y = ay + d + HEADER_GAP
-    shown = ass_mod._esc(card.title.upper() if preset.uppercase else card.title)
-    lines.append(
-        f"Dialogue: 5,{start},{end},StoryTitle,,0,0,0,"
-        f"{{\\an7\\pos({left},{title_y})\\q0\\fs{title_size(card.title)}{fade}}}{shown}\n"
-    )
+    # Sentence case, whatever the preset's `uppercase` says: the reference
+    # reads like a post because it is written like one; caps reads like a
+    # banner. The captions keep the preset's case — this is the card's.
+    lines.append(_dialogue(
+        5, start, end, "StoryTitle", "title",
+        f"{{\\an7\\pos({left},{title_y})\\q0\\bord0\\shad0\\fs{title_size(card.title)}{fade}}}"
+        f"{ass_mod._esc(card.title)}",
+    ))
     if card.duration_sec > 0:
-        meta_top = PANEL_Y + PANEL_H - META_H
-        lines.append(
-            f"Dialogue: 4,{start},{end},StoryShape,,0,0,0,"
-            f"{{{shape}\\1c{_rgb(preset.primary)}\\1a{DIM_ALPHA}{fade}\\p1}}"
-            f"{rounded_rect(left, meta_top, PANEL_W - 2 * INSET, DIVIDER_H, 0)}{{\\p0}}\n"
-        )
-        lines.append(
-            f"Dialogue: 5,{start},{end},StoryMeta,,0,0,0,"
-            f"{{\\an4\\pos({left},{meta_top + META_H // 2})\\alpha{DIM_ALPHA}{fade}}}"
-            f"{duration_label(card.duration_sec)}\n"
-        )
+        row_y = PANEL_Y + PANEL_H - META_H // 2
+        glyph_y = row_y - GLYPH // 2
+        # Two bare glyphs and one real number. Nothing may ever sit beside
+        # a glyph: the drawing IS the whole event, and the row's only text
+        # is the duration, right-aligned away from them.
+        lines.append(_dialogue(
+            4, start, end, "StoryShape", "heart",
+            f"{{{shape}\\pos(0,0)\\1c{INK}\\1a&H00&{fade}\\p1}}{heart(left, glyph_y)}{{\\p0}}",
+        ))
+        lines.append(_dialogue(
+            4, start, end, "StoryShape", "share",
+            f"{{{shape}\\pos(0,0)\\1c{INK}\\1a&H00&{fade}\\p1}}{share(left + GLYPH + GLYPH_GAP, glyph_y)}{{\\p0}}",
+        ))
+        lines.append(_dialogue(
+            5, start, end, "StoryMeta", "duration",
+            f"{{\\an6\\pos({right},{row_y})\\bord0\\shad0{fade}}}{duration_label(card.duration_sec)}",
+        ))
     return "".join(lines)
 
 
