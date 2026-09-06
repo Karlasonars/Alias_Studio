@@ -344,6 +344,12 @@ class StorySettings:
     # making ten stories will not pick the same file ten times. A setting,
     # unlike the text, because it is a preference that outlives one job.
     background: str = ""
+    # E20-F05: the name in the card's header — the user's OWN channel, never
+    # an invented handle. Read by render/story.py, in its fingerprint. The
+    # avatar beside it is deliberately NOT a setting: it is the watermark
+    # PNG (WatermarkSettings.image), so the card and the mark cannot
+    # disagree about which file it is.
+    channel_name: str = ""
 
 
 @dataclass

@@ -640,6 +640,7 @@ async fn enqueue_job(
     story_text: Option<String>,
     voice: Option<String>,
     speed: Option<f64>,
+    channel_name: Option<String>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
     // E20 (D-19): which chain. Forwarded as given; python owns the choices
@@ -677,6 +678,12 @@ async fn enqueue_job(
     if let Some(s) = speed {
         args.push("--speed".to_string());
         args.push(s.to_string());
+    }
+    // E20-F05. Forwarded even when empty: "" is the deck's explicit "no
+    // header", so a job never inherits a name the deck did not show.
+    if let Some(name) = channel_name {
+        args.push("--channel-name".to_string());
+        args.push(name);
     }
     if let Some(mode) = llm {
         args.push("--llm".to_string());

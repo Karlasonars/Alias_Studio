@@ -48,7 +48,8 @@ export const api = {
       mode: story ? 'stories' : 'clips',
       storyText: story?.text ?? null,
       voice: story?.voice ?? null,
-      speed: story?.speed ?? null
+      speed: story?.speed ?? null,
+      channelName: story?.channelName ?? null
     }),
   // E20-F01: the deck's numbers come from the module that applies them
   // (narrate/limits.py) — never a copy in this tree.

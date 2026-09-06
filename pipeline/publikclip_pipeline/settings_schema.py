@@ -309,6 +309,8 @@ GROUPS: list[dict[str, Any]] = [
              "help": "A multiplier on the voice's natural pace. 1.0 is neutral; 1.1 to 1.2 reads as the brisk delivery the format usually has. The deck's length estimate follows it."},
             {"key": "story.background", "label": "Last background video", "type": "text",
              "help": "The background file the deck used most recently, remembered so the next story starts with it. The deck overwrites this whenever a different file is picked; clear it to start blank."},
+            {"key": "story.channel_name", "label": "Channel name", "type": "text",
+             "help": "Your channel's name, in the header of the story card beside the avatar. The avatar is your watermark image (the same PNG, no second file); with no image the card shows this name's initial instead. Blank, and the card has no header. The card never carries another platform's branding or invented counts — only this name, the title and the story's real length."},
         ],
     },
     {

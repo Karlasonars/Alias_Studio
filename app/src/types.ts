@@ -315,6 +315,9 @@ export interface StoryRun {
   text: string
   voice: string
   speed: number
+  /** E20-F05: the channel name in the card's header; '' for no header.
+   * The avatar beside it is the watermark image — never sent separately. */
+  channelName: string
 }
 
 /** `settings story-limits`: the word limits and the estimate's rate, from

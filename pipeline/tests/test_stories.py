@@ -10,9 +10,12 @@ context, the disk pre-flight and the hardware profile."""
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import struct
 import subprocess
 import wave
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +28,7 @@ from publikclip_pipeline.captions import story_card
 from publikclip_pipeline.narrate import kokoro_tts, limits
 from publikclip_pipeline.narrate import stage as narrate_stage
 from publikclip_pipeline.narrate import story as story_mod
-from publikclip_pipeline.render import renderer
+from publikclip_pipeline.render import ffmpeg_bin, renderer, watermark
 from publikclip_pipeline.render import stage as render_stage
 from publikclip_pipeline.render import story as story_render
 
@@ -62,6 +65,42 @@ def _silent_video(path, seconds: float = 2.0):
         check=True, timeout=300,
     )
     return path
+
+
+def _avatar_png(path: Path, rgb=(220, 30, 30), width: int = 64, height: int = 40) -> Path:
+    """A solid-colour PNG written by hand (signature, IHDR, one IDAT, IEND),
+    as test_overlays does for the watermark — the same file serves both,
+    which is the point. Not square: the card must centre-crop it."""
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    path.write_bytes(
+        watermark.PNG_SIGNATURE
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    return path
+
+
+def _frame(path, at: float) -> np.ndarray:
+    """One decoded frame as an (1920, 1080, 3) RGB array."""
+    proc = subprocess.run(
+        [
+            ffmpeg_bin.ffmpeg(), "-v", "error", "-ss", f"{at:.2f}", "-i", str(path),
+            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ],
+        capture_output=True, timeout=120, check=True,
+    )
+    return np.frombuffer(proc.stdout, dtype=np.uint8).reshape(1920, 1080, 3)
+
+
+def _is_red(region: np.ndarray) -> bool:
+    mean = region.reshape(-1, 3).mean(axis=0)
+    return mean[0] > 150 and mean[1] < 100 and mean[2] < 100
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +457,7 @@ def test_jobs_create_copies_the_story_into_the_job_and_refuses_the_rest(tmp_path
     txt.write_text(STORY, encoding="utf-8")
     rc = cli.main([
         "jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt),
-        "--voice", "bm_george", "--speed", "1.1",
+        "--voice", "bm_george", "--speed", "1.1", "--channel-name", " Alias Studio ",
     ])
     assert rc == 0
     job = queue.get_job(_last_json(capsys)["job_id"])
@@ -427,6 +466,7 @@ def test_jobs_create_copies_the_story_into_the_job_and_refuses_the_rest(tmp_path
     assert stored.title == "The chair" and stored.sha256 == story_mod.parse(STORY).sha256
     saved = config.Settings.from_json(json.loads(job.settings_json))
     assert saved.story.voice == "bm_george" and saved.story.speed == 1.1
+    assert saved.story.channel_name == "Alias Studio"  # E20-F05, trimmed
     # the text is in the job dir and NOT in the snapshot
     assert "chair" not in job.settings_json
 
@@ -444,6 +484,25 @@ def test_jobs_create_copies_the_story_into_the_job_and_refuses_the_rest(tmp_path
     # a clips job needs no story and takes none
     assert cli.main(["jobs", "create", "C:/x.mp4", "--story-file", str(txt)]) == 0
     assert not story_mod.path_in(queue.get_job(_last_json(capsys)["job_id"]).dir).exists()
+
+
+def test_resume_channel_name_flag_reaches_the_job_snapshot(monkeypatch):
+    """E20-F05's flag on resume, listed in cmd_resume's guard like the
+    others — parsed but unlisted would be silently inert (§5.2). "" is an
+    explicit "no header", never "not mentioned"."""
+    from publikclip_pipeline import cli
+
+    job, _ = _story_job(channel_name="Old Name")
+    monkeypatch.setattr(cli, "_execute", lambda job, jsonl: 0)
+    assert cli.main(["resume", job.id, "--channel-name", "New Name"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.story.channel_name == "New Name"
+    assert cli.main(["resume", job.id, "--channel-name", ""]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.story.channel_name == ""
+    assert cli.main(["resume", job.id, "--speed", "1.2"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.story.channel_name == "" and saved.story.speed == 1.2  # untouched by another flag
 
 
 def test_story_limits_verb_prints_the_numbers_the_gate_uses(capsys):
@@ -573,24 +632,86 @@ def test_the_story_preset_is_one_word_at_a_time_through_the_same_chunker():
     assert ass_mod.chunk_words(words) != chunks  # the default preset groups them
 
 
-def test_the_card_is_the_apps_own_design_and_leaves_when_the_title_ends():
+def _dialogue(events: str) -> list[str]:
+    return [line for line in events.splitlines() if line.startswith("Dialogue")]
+
+
+def test_the_card_is_a_channel_card_in_the_apps_own_design_and_leaves_when_the_title_ends():
+    """E20-F05 (channel card): header — avatar circle and the user's channel
+    name — then the title, then a meta row with the narration's duration.
+    Everything spans 0 → title end and fades as one thing; nothing on it
+    belongs to another platform and no number on it is invented."""
     preset = ass_mod.resolve_preset("classic")
-    styles, events = story_card.overlay(preset, "The chair", 2.4)
-    assert "Style: StoryTitle,Inter" in styles and "Style: StoryShape" in styles
-    lines = [line for line in events.splitlines() if line.startswith("Dialogue")]
-    assert len(lines) == 3
-    assert all("0:00:00.00,0:00:02.40" in line for line in lines)
-    assert lines[0].startswith("Dialogue: 3,") and "\\p1" in lines[0] and "\\1a&H33&" in lines[0]
-    assert lines[1].startswith("Dialogue: 4,") and "\\1c&H00D7FF&" in lines[1]  # the preset's active colour
-    assert lines[2].startswith("Dialogue: 5,") and lines[2].endswith("The chair")
-    assert "\\pos(540,960)" in lines[2] and "\\q0" in lines[2] and "\\fad(" in lines[2]
+    card = story_card.Card("The chair", 2.4, channel="Alias Studio", duration_sec=83.0)
+    styles, events = story_card.overlay(preset, card)
+    for style in ("StoryTitle,Inter", "StoryName,Inter", "StoryMeta,Inter", "StoryInitial,Inter", "StoryShape"):
+        assert f"Style: {style}" in styles
+    lines = _dialogue(events)
+    assert len(lines) == 7  # panel, circle, initial, name, title, divider, duration
+    assert all("0:00:00.00,0:00:02.40" in line and "\\fad(" in line for line in lines)
+    assert lines[0].startswith("Dialogue: 3,") and "\\p1" in lines[0] and "\\1a&H26&" in lines[0]
+    assert "StoryShape" in lines[1] and "\\1c&H00D7FF&" in lines[1]   # the circle, preset's active colour
+    assert "StoryInitial" in lines[2] and lines[2].endswith("A")        # the channel's initial
+    assert "StoryName" in lines[3] and lines[3].endswith("Alias Studio")
+    assert "StoryTitle" in lines[4] and lines[4].endswith("The chair")
+    assert "\\an7" in lines[4] and "\\q0" in lines[4]                    # left-aligned, wrapped by libass
+    assert "StoryShape" in lines[5]                                      # the divider
+    assert "StoryMeta" in lines[6] and lines[6].endswith("1:23")         # the narration's length
+    # the initial sits on the circle's centre, the name beside it
+    ax, ay, d = story_card.avatar_box()
+    assert f"\\pos({ax + d // 2},{ay + d // 2})" in lines[2]
+    assert f"\\pos({ax + d + 28},{ay + d // 2})" in lines[3]
     # nothing that belongs to another platform, nothing invented
-    for forbidden in ("upvote", "comment", "share", "u/", "r/", "👍", "❤"):
+    for forbidden in ("upvote", "comment", "share", "views", "likes", "u/", "r/", "@", "👍", "❤"):
         assert forbidden not in events
-    assert story_card.overlay(preset, "", 2.4) == ("", "")
-    assert story_card.overlay(preset, "The chair", 0.0) == ("", "")
+    assert story_card.overlay(preset, story_card.Card("", 2.4, channel="Alias")) == ("", "")
+    assert story_card.overlay(preset, story_card.Card("The chair", 0.0)) == ("", "")
     assert story_card.title_size("short") > story_card.title_size("x" * 100)
     assert story_card.rounded_rect(0, 0, 10, 10, 20).startswith("m 5 0 ")
+    assert story_card.circle(100, 100, 50).startswith("m 150 100 b 150 128 128 150 100 150 ")
+
+
+def test_no_picture_means_the_initial_and_nothing_means_no_header():
+    """§5.9 on the card: a watermark PNG fills the circle (drawn by ffmpeg,
+    so the ASS draws no circle under it); none means the channel's initial
+    on the accent colour; no name and no picture means no header at all —
+    never an empty circle, and the title moves up into the space."""
+    preset = ass_mod.resolve_preset("classic")
+    with_picture = _dialogue(story_card.overlay_events(
+        preset, story_card.Card("T", 2.0, channel="Alias", avatar="C:/logo.png")))
+    assert not any("StoryInitial" in ln for ln in with_picture)
+    assert sum("StoryShape" in ln for ln in with_picture) == 1  # the panel alone: no circle
+    assert any("StoryName" in ln and ln.endswith("Alias") for ln in with_picture)
+
+    initial = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="@alias")))
+    assert any("StoryInitial" in ln and ln.endswith("A") for ln in initial)
+    assert story_card.initial_of("@alias") == "A" and story_card.initial_of("7up") == "7"
+    assert story_card.initial_of("...") == "" and story_card.initial_of("") == ""
+    # a name with no letter or digit: no circle rather than an empty one
+    dots = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="...")))
+    assert not any("StoryInitial" in ln for ln in dots) and sum("StoryShape" in ln for ln in dots) == 1
+
+    none = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0)))
+    assert not any("StoryName" in ln or "StoryInitial" in ln for ln in none)
+    title_y_without_header = story_card.PANEL_Y + story_card.INSET
+    assert any("StoryTitle" in ln and f",{title_y_without_header})" in ln for ln in none)
+    assert not any(f",{title_y_without_header})" in ln for ln in initial if "StoryTitle" in ln)
+    # a picture with no name still makes a header (the user's own file)
+    picture_only = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, avatar="C:/l.png")))
+    assert not any(f",{title_y_without_header})" in ln for ln in picture_only if "StoryTitle" in ln)
+
+
+def test_the_meta_row_is_the_narrations_duration_not_a_constant():
+    preset = ass_mod.resolve_preset("classic")
+    for seconds, label in ((42.0, "0:42"), (83.4, "1:23"), (600.0, "10:00")):
+        assert story_card.duration_label(seconds) == label
+        events = story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=seconds))
+        meta = [ln for ln in _dialogue(events) if "StoryMeta" in ln]
+        assert len(meta) == 1 and meta[0].endswith(label)
+    # no length known: no row, and no divider above it
+    events = story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=0.0))
+    assert not any("StoryMeta" in ln for ln in _dialogue(events))
+    assert sum("StoryShape" in ln for ln in _dialogue(events)) == 1
 
 
 def test_caption_words_start_after_the_title():
@@ -620,7 +741,10 @@ def test_the_story_command_loops_mutes_and_covers_through_the_shared_geometry(tm
 
     monkeypatch.setattr(renderer.subprocess, "run", fake_run)
     monkeypatch.setattr(renderer, "video_encoder_args", lambda hw: ["-c:v", "libx264"])
-    renderer.render_story("bg.mp4", "narr.wav", tmp_path / "out.mp4", 12.345, tmp_path / "c.ass", None)
+    renderer.render_story(
+        "bg.mp4", "narr.wav", tmp_path / "out.mp4", 12.345, tmp_path / "c.ass", None,
+        overlay_vf="null[wm_base];[wm_base]null", after_vf="null[av_base];[av_base]null",
+    )
     args = seen["args"]
     assert args[args.index("-stream_loop") + 1] == "-1"          # looped when short
     assert args[args.index("-t") + 1] == "12.345"                 # trimmed when long
@@ -629,6 +753,11 @@ def test_the_story_command_loops_mutes_and_covers_through_the_shared_geometry(tm
     vf = args[args.index("-vf") + 1]
     assert vf.startswith(renderer.cover_vf() + ",setsar=1")
     assert "subtitles=filename=" in vf
+    # the watermark goes under the captions, the card's avatar over them
+    # (E20-F05): the panel is drawn by the caption burn and would cover a
+    # picture placed before it
+    assert vf.index("[wm_base]") < vf.index("subtitles=") < vf.index("[av_base]")
+    assert vf.endswith("[av_base]null")
     # the same geometry the blur fill's backdrop uses, verbatim
     assert renderer.cover_vf() in renderer.scale_pad_vf(1920, 1080, "blur")[0]
     assert "apad" in args[args.index("-af") + 1]
@@ -668,6 +797,7 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
         lambda s: setattr(s, "lufs_target", -16.0),
         lambda s: setattr(s.watermark, "text", "@me"),
         lambda s: s.captions.overrides.update({"size": 40}),
+        lambda s: setattr(s.story, "channel_name", "Alias Studio"),  # E20-F05: the card's header
     ):
         other = config.Settings.from_json(settings.to_json())
         change(other)
@@ -677,6 +807,14 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
     other.camera.gameplay_amount = 1.0
     other.clips.select_count = 3
     assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is True
+    # the same name written differently is the same card: nothing re-renders
+    other.story.channel_name = "  "
+    assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is True
+    # the card was redrawn as a channel card: every story rendered with the
+    # old drawing re-renders once, and no job renders a card the code no
+    # longer has
+    assert story_card.CARD_VERSION >= 2
+    assert stage.artifacts_ok(ctx, {**data, "card_version": 1}) is False
     out.unlink()
     assert stage.artifacts_ok(ctx, data) is False
 
@@ -704,6 +842,90 @@ def test_the_story_render_makes_one_verified_vertical_file(tmp_path):
     assert "StoryTitle" in doc and "THE CHAIR" in doc  # the story preset is uppercase
     assert doc.count("Cap,,0,0,0,") == 5  # one Dialogue per word: one-word captions
     assert story_render.StoryRenderStage().artifacts_ok(ctx, data) is True
+    # no watermark configured, no channel name: a card with no header, its
+    # meta row the narration's length — and the render verified above
+    assert data["card"] == {"avatar": "", "duration_label": "0:04"}
+    assert "StoryInitial" not in doc.split("[Events]")[1] and "0:04" in doc
+
+
+def test_the_avatar_is_the_watermark_file_and_is_hashed_once(tmp_path):
+    """E20-F05: the card's avatar is the watermark PNG — the same path the
+    E19-F02 import stored, resolved by the same function, hashed once in
+    the fingerprint as the watermark. No second setting, no second hash,
+    so the card and the mark cannot disagree about which file it is; and
+    a missing file degrades both together."""
+    logo = _avatar_png(tmp_path / "logo.png")
+    job, settings = _story_job(channel_name="Alias")
+    settings.watermark.image = str(logo)
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    fp = story_render._fingerprint(ctx)
+    assert fp["watermark"] == {
+        "kind": "image", "path": str(logo), "sha256": hashlib.sha256(logo.read_bytes()).hexdigest(),
+    }
+    assert not any("avatar" in key for key in fp)
+    mark = watermark.resolve(settings)
+    assert mark.kind == "image" and mark.path == str(logo)
+    vf = story_render.avatar_vf(mark.path, 2.4)
+    assert vf.startswith("null[av_base];movie=filename=" + renderer._q(str(logo)))
+    x, y, d = story_card.avatar_box()
+    assert f",crop={d}:{d}," in vf and f"overlay=x={x}:y={y}" in vf
+    assert "hypot(" in vf and "format=gbrap,geq=" in vf                        # the circular mask
+    assert vf.endswith(f"enable='between(t,0,{2.4 - story_card.FADE_OUT_MS / 1000:.3f})'")
+    # gone from disk: the mark says so and renders without, the fingerprint
+    # says "missing", and the card takes the initial — one resolution
+    settings.watermark.image = str(tmp_path / "gone.png")
+    said: list[str] = []
+    assert watermark.resolve(settings, say=said.append) is None and len(said) == 1
+    assert story_render._fingerprint(ctx)["watermark"]["sha256"] == "missing"
+
+
+def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_watermark(tmp_path):
+    """Real pixels (§3's synthetic way), three renders of one story: with
+    the channel card, with no card at all, and with a red watermark PNG as
+    the avatar. The card darkens its panel; the avatar's centre is red and
+    the corner of its square is not (centre-cropped, masked to a disc);
+    after the title the avatar is gone with the card.
+
+    Sampled at 0.3 s, not at frame 0: the card fades in over 160 ms, so
+    frame 0 of a card render is identical to frame 0 without one BY
+    DESIGN, and at 0.3 s it is fully up."""
+    job, settings = _story_job(channel_name="Alias Studio")
+    settings.caption_preset = story_render.STORY_PRESET
+    prior = _story_prior(job, tmp_path)
+
+    def render(prior_data):
+        ctx = queue._ctx_for(
+            queue.StageContext(job=job, settings=settings, progress=_noop), "render", prior_data,
+        )
+        return story_render.StoryRenderStage().run(ctx)
+
+    with_card = render(prior)
+    path = Path(with_card["outputs"][0]["path"])
+    card_frame = _frame(path, 0.3)
+    doc = Path(with_card["outputs"][0]["ass"]).read_text(encoding="utf-8")  # before the bare render rewrites it
+    assert "Alias Studio" in doc and "StoryInitial" in doc and "0:04" in doc
+    bare = render({**prior, "narrate": {**prior["narrate"], "title": "", "title_end_sec": 0.0}})
+    assert bare["outputs"][0]["path"] == str(path)
+    bare_frame = _frame(path, 0.3)
+    assert not np.array_equal(card_frame, bare_frame)
+    # the panel's bottom-right, where nothing is written: much darker under
+    # the 85 % black card than the bare background
+    y0 = story_card.PANEL_Y + story_card.PANEL_H - 60
+    region = (slice(y0, y0 + 30), slice(700, 900))
+    assert card_frame[region].mean() < bare_frame[region].mean() - 40
+
+    logo = _avatar_png(tmp_path / "logo.png")
+    settings.watermark.image = str(logo)
+    with_avatar = render(prior)
+    assert with_avatar["card"]["avatar"] == str(logo) == with_avatar["watermark"]["path"]
+    frame = _frame(path, 0.3)
+    ax, ay, d = story_card.avatar_box()
+    cx, cy = ax + d // 2, ay + d // 2
+    assert _is_red(frame[cy - 8:cy + 8, cx - 8:cx + 8])            # the disc is the PNG
+    assert not _is_red(frame[ay + 2:ay + 8, ax + 2:ax + 8])        # its corner is masked away
+    assert not _is_red(_frame(path, 2.0)[cy - 8:cy + 8, cx - 8:cx + 8])   # gone with the card
+    check = renderer.verify_output(path, 3.5 + story_render.TAIL_SEC)
+    assert check["ok"], check
 
 
 # ---------------------------------------------------------------------------
