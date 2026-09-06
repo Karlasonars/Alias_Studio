@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import struct
 import subprocess
 import wave
@@ -636,39 +637,109 @@ def _dialogue(events: str) -> list[str]:
     return [line for line in events.splitlines() if line.startswith("Dialogue")]
 
 
+def _named(events: str) -> dict[str, str]:
+    """The card's events by what they are — the ASS Name field the module
+    fills in (panel, heart, duration…) — so a test finds a part by its
+    role, never by its position in the document or its coordinates."""
+    out: dict[str, str] = {}
+    for line in _dialogue(events):
+        # Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+        name = line.split(",", 9)[4]
+        assert name and name not in out, f"every card event is named once: {line[:60]}"
+        out[name] = line
+    return out
+
+
+def _text_of(line: str) -> str:
+    """What a Dialogue line shows once its override tags are stripped —
+    "" for a pure drawing, whose whole body is tags and path commands."""
+    body = line.split(",", 9)[9]
+    if "\\p1}" in body:
+        return body.rsplit("{\\p0}", 1)[1] if "{\\p0}" in body else ""
+    return body.rsplit("}", 1)[-1]
+
+
 def test_the_card_is_a_channel_card_in_the_apps_own_design_and_leaves_when_the_title_ends():
-    """E20-F05 (channel card): header — avatar circle and the user's channel
-    name — then the title, then a meta row with the narration's duration.
-    Everything spans 0 → title end and fades as one thing; nothing on it
-    belongs to another platform and no number on it is invented."""
+    """E20-F05 (channel card, the reference's look): an opaque white card
+    with a soft shadow; a large avatar circle and the bold channel name;
+    the title in sentence case, near-black; a bottom row of a bare heart,
+    a bare share glyph and the narration's duration. Everything spans
+    0 → title end and fades as one thing; nothing on it belongs to
+    another platform and no number on it is invented."""
     preset = ass_mod.resolve_preset("classic")
     card = story_card.Card("The chair", 2.4, channel="Alias Studio", duration_sec=83.0)
     styles, events = story_card.overlay(preset, card)
     for style in ("StoryTitle,Inter", "StoryName,Inter", "StoryMeta,Inter", "StoryInitial,Inter", "StoryShape"):
         assert f"Style: {style}" in styles
-    lines = _dialogue(events)
-    assert len(lines) == 7  # panel, circle, initial, name, title, divider, duration
-    assert all("0:00:00.00,0:00:02.40" in line and "\\fad(" in line for line in lines)
-    assert lines[0].startswith("Dialogue: 3,") and "\\p1" in lines[0] and "\\1a&H26&" in lines[0]
-    assert "StoryShape" in lines[1] and "\\1c&H00D7FF&" in lines[1]   # the circle, preset's active colour
-    assert "StoryInitial" in lines[2] and lines[2].endswith("A")        # the channel's initial
-    assert "StoryName" in lines[3] and lines[3].endswith("Alias Studio")
-    assert "StoryTitle" in lines[4] and lines[4].endswith("The chair")
-    assert "\\an7" in lines[4] and "\\q0" in lines[4]                    # left-aligned, wrapped by libass
-    assert "StoryShape" in lines[5]                                      # the divider
-    assert "StoryMeta" in lines[6] and lines[6].endswith("1:23")         # the narration's length
-    # the initial sits on the circle's centre, the name beside it
+    parts = _named(events)
+    assert set(parts) == {"shadow", "panel", "avatar", "initial", "name", "title", "heart", "share", "duration"}
+    assert all("0:00:00.00,0:00:02.40" in line and "\\fad(" in line for line in parts.values())
+    # the card: opaque white, rounded, on a blurred black shadow drawn beneath it
+    assert f"\\1c{story_card.CARD_FILL}\\1a&H00&" in parts["panel"] and "\\p1" in parts["panel"]
+    assert parts["panel"].startswith("Dialogue: 3,") and parts["shadow"].startswith("Dialogue: 2,")
+    assert "\\1c&H000000&" in parts["shadow"] and f"\\blur{story_card.SHADOW_BLUR}" in parts["shadow"]
+    assert f"\\pos(0,{story_card.SHADOW_OFFSET})" in parts["shadow"]
+    assert "\\1a&H26&" not in events                                     # the dark translucent panel is gone
+    # the header: the accent circle with the white initial, the bold name beside it
     ax, ay, d = story_card.avatar_box()
-    assert f"\\pos({ax + d // 2},{ay + d // 2})" in lines[2]
-    assert f"\\pos({ax + d + 28},{ay + d // 2})" in lines[3]
-    # nothing that belongs to another platform, nothing invented
-    for forbidden in ("upvote", "comment", "share", "views", "likes", "u/", "r/", "@", "👍", "❤"):
-        assert forbidden not in events
+    assert d >= 160 and story_card.NAME_SIZE >= 56
+    assert "\\1c&H00D7FF&" in parts["avatar"]                             # the preset's active colour
+    assert _text_of(parts["initial"]) == "A" and f"\\pos({ax + d // 2},{ay + d // 2})" in parts["initial"]
+    assert _text_of(parts["name"]) == "Alias Studio"
+    assert f"\\pos({ax + d + story_card.NAME_GAP},{ay + d // 2})" in parts["name"]
+    assert "Style: StoryName,Inter,56," in styles and ",-1,0,0,0," in styles.split("StoryName")[1].split("\n")[0]
+    # the title: near-black ink, no outline, left-aligned, wrapped by libass
+    assert _text_of(parts["title"]) == "The chair"
+    assert "\\an7" in parts["title"] and "\\q0" in parts["title"] and "\\bord0" in parts["title"]
+    assert f"Style: StoryTitle,Inter,{story_card.TITLE_SIZE_SHORT},&H001A1A1A,&H001A1A1A," in styles
+    # the bottom row: two bare glyphs — drawings, nothing beside them — and one real number
+    for glyph in ("heart", "share"):
+        assert "\\p1}" in parts[glyph] and parts[glyph].rstrip().endswith("{\\p0}")
+        assert _text_of(parts[glyph]) == ""                                # no digit, no text, nothing
+        assert f"\\1c{story_card.INK}" in parts[glyph]
+    assert _text_of(parts["duration"]) == "1:23" and "\\an6" in parts["duration"]
+    # the only text in the bottom band is the duration, and it is a length, not a count
+    row_top = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H
+    in_row = [n for n, ln in parts.items() if _text_of(ln) and int(ln.split("\\pos(")[1].split(",")[1].split(")")[0]) >= row_top]
+    assert in_row == ["duration"]
+    assert re.fullmatch(r"\d+:\d\d", _text_of(parts["duration"]))
+    assert "divider" not in parts and sum("\\p1" in ln for ln in parts.values()) == 5  # shadow, panel, circle, 2 glyphs
+    # nothing that belongs to another platform, nothing invented: no
+    # engagement words, no verified badge, no award, and never a count
+    lowered = events.lower()
+    for forbidden in (
+        "upvote", "comment", "views", "likes", "u/", "r/", "@", "👍", "❤", "99+",
+        "verified", "checkmark", "badge", "award", "✓", "✔", "☑",
+    ):
+        assert forbidden not in lowered, forbidden
     assert story_card.overlay(preset, story_card.Card("", 2.4, channel="Alias")) == ("", "")
     assert story_card.overlay(preset, story_card.Card("The chair", 0.0)) == ("", "")
     assert story_card.title_size("short") > story_card.title_size("x" * 100)
     assert story_card.rounded_rect(0, 0, 10, 10, 20).startswith("m 5 0 ")
     assert story_card.circle(100, 100, 50).startswith("m 150 100 b 150 128 128 150 100 150 ")
+
+
+def test_the_title_is_sentence_case_whatever_the_preset_says():
+    """The reference reads like a post because it is written like one;
+    caps reads like a banner. The `story` preset is uppercase for its
+    one-word captions — the card ignores that for the title."""
+    preset = ass_mod.resolve_preset(story_render.STORY_PRESET)
+    assert preset.uppercase is True
+    parts = _named(story_card.overlay_events(preset, story_card.Card("The chair nobody moved", 2.0)))
+    assert _text_of(parts["title"]) == "The chair nobody moved"
+
+
+def test_the_longest_title_still_fits_above_the_bottom_row():
+    """Legibility at 1080x1920 with the title at its longest: the smallest
+    title size over four wrapped lines, under a full header, ends above
+    the bottom row's band with air to spare."""
+    ax, ay, d = story_card.avatar_box()
+    title_top = ay + d + story_card.HEADER_GAP
+    four_lines = 4 * int(story_card.TITLE_SIZE_LONG * 1.2)
+    row_top = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H
+    assert title_top + four_lines + 40 <= row_top
+    assert story_card.TITLE_SIZE_LONG >= 48                    # never below phone-legible
+    assert story_card.PANEL_Y + story_card.PANEL_H < ass_mod.PLAY_RES_Y - 400  # clear of the captions' band
 
 
 def test_no_picture_means_the_initial_and_nothing_means_no_header():
@@ -677,41 +748,41 @@ def test_no_picture_means_the_initial_and_nothing_means_no_header():
     on the accent colour; no name and no picture means no header at all —
     never an empty circle, and the title moves up into the space."""
     preset = ass_mod.resolve_preset("classic")
-    with_picture = _dialogue(story_card.overlay_events(
+    with_picture = _named(story_card.overlay_events(
         preset, story_card.Card("T", 2.0, channel="Alias", avatar="C:/logo.png")))
-    assert not any("StoryInitial" in ln for ln in with_picture)
-    assert sum("StoryShape" in ln for ln in with_picture) == 1  # the panel alone: no circle
-    assert any("StoryName" in ln and ln.endswith("Alias") for ln in with_picture)
+    assert "initial" not in with_picture and "avatar" not in with_picture  # ffmpeg draws the picture
+    assert set(with_picture) == {"shadow", "panel", "name", "title"}
+    assert _text_of(with_picture["name"]) == "Alias"
 
-    initial = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="@alias")))
-    assert any("StoryInitial" in ln and ln.endswith("A") for ln in initial)
+    initial = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="@alias")))
+    assert _text_of(initial["initial"]) == "A" and "avatar" in initial
     assert story_card.initial_of("@alias") == "A" and story_card.initial_of("7up") == "7"
     assert story_card.initial_of("...") == "" and story_card.initial_of("") == ""
     # a name with no letter or digit: no circle rather than an empty one
-    dots = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="...")))
-    assert not any("StoryInitial" in ln for ln in dots) and sum("StoryShape" in ln for ln in dots) == 1
+    dots = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0, channel="...")))
+    assert set(dots) == {"shadow", "panel", "name", "title"}
 
-    none = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0)))
-    assert not any("StoryName" in ln or "StoryInitial" in ln for ln in none)
+    none = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0)))
+    assert set(none) == {"shadow", "panel", "title"}
     title_y_without_header = story_card.PANEL_Y + story_card.INSET
-    assert any("StoryTitle" in ln and f",{title_y_without_header})" in ln for ln in none)
-    assert not any(f",{title_y_without_header})" in ln for ln in initial if "StoryTitle" in ln)
+    assert f",{title_y_without_header})" in none["title"]
+    assert f",{title_y_without_header})" not in initial["title"]
     # a picture with no name still makes a header (the user's own file)
-    picture_only = _dialogue(story_card.overlay_events(preset, story_card.Card("T", 2.0, avatar="C:/l.png")))
-    assert not any(f",{title_y_without_header})" in ln for ln in picture_only if "StoryTitle" in ln)
+    picture_only = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0, avatar="C:/l.png")))
+    assert set(picture_only) == {"shadow", "panel", "title"}
+    assert f",{title_y_without_header})" not in picture_only["title"]
 
 
 def test_the_meta_row_is_the_narrations_duration_not_a_constant():
     preset = ass_mod.resolve_preset("classic")
     for seconds, label in ((42.0, "0:42"), (83.4, "1:23"), (600.0, "10:00")):
         assert story_card.duration_label(seconds) == label
-        events = story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=seconds))
-        meta = [ln for ln in _dialogue(events) if "StoryMeta" in ln]
-        assert len(meta) == 1 and meta[0].endswith(label)
-    # no length known: no row, and no divider above it
-    events = story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=0.0))
-    assert not any("StoryMeta" in ln for ln in _dialogue(events))
-    assert sum("StoryShape" in ln for ln in _dialogue(events)) == 1
+        parts = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=seconds)))
+        assert _text_of(parts["duration"]) == label
+        assert "heart" in parts and "share" in parts
+    # no length known: no row at all — no number, and no bare glyphs either
+    parts = _named(story_card.overlay_events(preset, story_card.Card("T", 2.0, duration_sec=0.0)))
+    assert set(parts) == {"shadow", "panel", "title"}
 
 
 def test_caption_words_start_after_the_title():
@@ -814,9 +885,9 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
     # the card was redrawn as a channel card: every story rendered with the
     # old drawing re-renders once, and no job renders a card the code no
     # longer has
-    assert story_card.CARD_VERSION >= 3  # E20-F06 bumped it again: the avatar is its own file now
-    assert stage.artifacts_ok(ctx, {**data, "card_version": 1}) is False
-    assert stage.artifacts_ok(ctx, {**data, "card_version": 2}) is False
+    assert story_card.CARD_VERSION >= 4  # the white card (E20-F05 look): every story re-renders once
+    for old in (1, 2, 3):
+        assert stage.artifacts_ok(ctx, {**data, "card_version": old}) is False
     out.unlink()
     assert stage.artifacts_ok(ctx, data) is False
 
@@ -841,7 +912,9 @@ def test_the_story_render_makes_one_verified_vertical_file(tmp_path):
     assert check["ok"], check
     assert check["width"] == 1080 and check["height"] == 1920
     doc = Path(out["ass"]).read_text(encoding="utf-8")
-    assert "StoryTitle" in doc and "THE CHAIR" in doc  # the story preset is uppercase
+    title_line = next(ln for ln in doc.splitlines() if ",StoryTitle," in ln)
+    assert title_line.endswith("The chair")  # sentence case on the card, though the story preset is uppercase
+    assert "CHAIR" in doc  # ...and the captions keep the preset's case
     assert doc.count("Cap,,0,0,0,") == 5  # one Dialogue per word: one-word captions
     assert story_render.StoryRenderStage().artifacts_ok(ctx, data) is True
     # no watermark configured, no channel name: a card with no header, its
@@ -1067,11 +1140,22 @@ def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_picture(tmp_path
     assert bare["outputs"][0]["path"] == str(path)
     bare_frame = _frame(path, 0.3)
     assert not np.array_equal(card_frame, bare_frame)
-    # the panel's bottom-right, where nothing is written: much darker under
-    # the 85 % black card than the bare background
-    y0 = story_card.PANEL_Y + story_card.PANEL_H - 60
-    region = (slice(y0, y0 + 30), slice(700, 900))
-    assert card_frame[region].mean() < bare_frame[region].mean() - 40
+    # Inside the card, under the one-line title and above the bottom row,
+    # where nothing is written: near-white in every channel and in every
+    # pixel — an opaque white card that wins over the busy background,
+    # which is the change the owner asked for and the one a refactor
+    # would silently undo. The bare frame there is testsrc2's colour.
+    ax, ay, d = story_card.avatar_box()
+    y0 = ay + d + story_card.HEADER_GAP + 2 * story_card.TITLE_SIZE_SHORT
+    region = (slice(y0, y0 + 40), slice(story_card.PANEL_X + 300, story_card.PANEL_X + 700))
+    white = card_frame[region].reshape(-1, 3)
+    assert white.mean(axis=0).min() > 235          # near-white on average, every channel
+    assert white.min() > 200                       # ...and nowhere does the video show through
+    assert bare_frame[region].reshape(-1, 3).mean(axis=0).min() < 200   # which it does without the card
+    # the title is near-black on it: darker pixels exist in the title's line
+    ty = ay + d + story_card.HEADER_GAP
+    title_band = card_frame[ty:ty + story_card.TITLE_SIZE_SHORT, story_card.PANEL_X + 64:story_card.PANEL_X + 400]
+    assert title_band.reshape(-1, 3).min() < 60
 
     red = _avatar_png(tmp_path / "avatar.png")
     green = _avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30))
