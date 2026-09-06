@@ -16,6 +16,7 @@ markup is understood, on purpose — a story is a story, not a document.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,13 +34,18 @@ class Story:
     word_count: int
 
 
+_BLANK_RUN = re.compile(r"\n{3,}")
+
+
 def normalise(text: str) -> str:
     """One canonical form for hashing: LF line endings, no trailing
-    whitespace per line, no leading or trailing blank lines. The same
-    story pasted from Windows and from a .txt therefore hashes the same,
-    and a saved-then-reloaded file does not re-narrate."""
+    whitespace per line, blank-line runs collapsed to one blank line, no
+    leading or trailing blank lines. The same story pasted from Windows,
+    saved through a text-mode writer (which doubles its line breaks) and
+    loaded from a .txt therefore hashes the same, and a saved-then-reloaded
+    file does not re-narrate."""
     lines = [line.rstrip() for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-    return "\n".join(lines).strip("\n").strip()
+    return _BLANK_RUN.sub("\n\n", "\n".join(lines)).strip("\n").strip()
 
 
 def parse(text: str) -> Story:

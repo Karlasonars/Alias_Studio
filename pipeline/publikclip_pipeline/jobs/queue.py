@@ -340,6 +340,11 @@ def _drop_corrupt_render_outputs(job: Job) -> None:
     outputs = (envelope.get("data") or {}).get("outputs") or []
     from ..render.renderer import verify_output  # deferred: no ffmpeg tax elsewhere
 
+    # D-20's second guard: this loop keys on nothing but `path` and
+    # `duration`, which a story entry (E20) carries exactly like a clip
+    # entry — so a story killed mid-encode loses its truncated file here
+    # and re-renders on resume, and an intact one is kept. Do not key this
+    # on `clip`: a story's is 0 and means nothing.
     for entry in outputs:
         if not isinstance(entry, dict) or entry.get("duration") is None:
             continue

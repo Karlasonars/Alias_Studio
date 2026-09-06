@@ -13,15 +13,21 @@ import dataclasses
 import json
 import subprocess
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from publikclip_pipeline import chains, config
 from publikclip_pipeline.jobs import queue
+from publikclip_pipeline.captions import ass as ass_mod
+from publikclip_pipeline.captions import story_card
 from publikclip_pipeline.narrate import kokoro_tts, limits
 from publikclip_pipeline.narrate import stage as narrate_stage
 from publikclip_pipeline.narrate import story as story_mod
+from publikclip_pipeline.render import renderer
+from publikclip_pipeline.render import stage as render_stage
+from publikclip_pipeline.render import story as story_render
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +186,8 @@ def test_story_parse_splits_title_from_body_and_hashes_the_normalised_text():
     assert a.sha256 == b.sha256 and a.text == b.text
     assert story_mod.parse("Only a title").body == ""
     assert story_mod.parse("   \n\n").word_count == 0
+    # a text-mode writer on Windows doubles line breaks: still the same story
+    assert story_mod.parse(STORY.replace("\n", "\r\n")).sha256 == a.sha256
 
 
 def test_story_store_and_load_round_trip_lf_utf8(tmp_path):
@@ -406,8 +414,6 @@ def _last_json(capsys) -> dict:
 def test_jobs_create_copies_the_story_into_the_job_and_refuses_the_rest(tmp_path, capsys):
     from publikclip_pipeline import cli
 
-    if "stories" not in chains.CHAINS:
-        pytest.skip("the stories chain is registered with its render stage")
     txt = tmp_path / "story.txt"
     txt.write_text(STORY, encoding="utf-8")
     rc = cli.main([
@@ -484,3 +490,249 @@ def test_a_story_job_is_charged_for_its_narration_and_video_by_word_count():
     assert by_label["narration audio"].low == int(seconds * kokoro_tts.SAMPLE_RATE * 2) + disk.WAV_HEADER_BYTES
     assert by_label["the story video"].high == int(seconds * disk.RENDER_BPS_HIGH)
     assert not any("story video" in u for u in unknown)
+
+
+# ---------------------------------------------------------------------------
+# The chain itself
+
+
+def test_the_stories_chain_is_ingest_narrate_asr_render():
+    from publikclip_pipeline import cli
+    from publikclip_pipeline.asr.stage import AsrStage
+    from publikclip_pipeline.ingest.stage import IngestStage
+
+    assert chains.chain_for("stories") == ("ingest", "narrate", "asr", "render")
+    built = cli._stages("stories")
+    assert [s.name for s in built] == list(chains.STORY_CHAIN)
+    assert isinstance(built[0], IngestStage) and built[0].needs_audio is False
+    assert isinstance(built[2], AsrStage) and built[2].source == "narrate"
+    assert isinstance(built[3], story_render.StoryRenderStage)
+    assert "narrate" in chains.ALL_STAGES
+
+
+def test_resume_info_lists_the_story_chain_and_the_picker_gate_holds(capsys):
+    from publikclip_pipeline import cli
+
+    job, _ = _story_job()
+    queue.write_checkpoint(job, "ingest", 1, {"probe": {"duration_sec": 5.0}})
+    queue.set_job_status(job.id, "failed", "narrate: boom")
+    (job.dir / queue.ERROR_FILE).write_text(
+        json.dumps({"code": "narrator-unavailable", "cause": "boom", "stage": "narrate"}),
+        encoding="utf-8",
+    )
+    info = queue.resume_info(queue.get_job(job.id))
+    assert [s["name"] for s in info["stages"]] == list(chains.STORY_CHAIN)
+    assert info["default_stage"] == "narrate"
+    assert {s["name"]: s["status"] for s in info["stages"]}["ingest"] == "done"
+    assert all(s["estimate_sec"] is None for s in info["stages"])  # story jobs are not profiled
+
+    # argparse accepts narrate now, and cmd_resume gates on the job's chain
+    assert cli.main(["resume", job.id, "--from-stage", "diarize"]) == 2
+    assert "not a stage of this stories job" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["resume", job.id, "--from-stage", "karaoke"])
+
+
+def test_diagnose_lists_a_story_jobs_own_stages():
+    from publikclip_pipeline import diagnose
+
+    job, _ = _story_job()
+    stages = diagnose._stages_file(job)
+    assert list(stages) == list(chains.STORY_CHAIN)
+    assert set(chains.ALL_STAGES) <= diagnose.MANIFEST["stages.json"]
+
+
+# ---------------------------------------------------------------------------
+# The card (F05) and the one-word captions (F04)
+
+
+def test_the_story_preset_is_one_word_at_a_time_through_the_same_chunker():
+    preset = ass_mod.resolve_preset(story_render.STORY_PRESET)
+    assert preset.max_words == 1
+    words = [ass_mod.Word(f"w{i}", i * 0.3, i * 0.3 + 0.25) for i in range(5)]
+    chunks = ass_mod.chunk_words(words, preset.max_words, preset.pause_break)
+    assert [len(c.words) for c in chunks] == [1, 1, 1, 1, 1]
+    assert ass_mod.chunk_words(words) != chunks  # the default preset groups them
+
+
+def test_the_card_is_the_apps_own_design_and_leaves_when_the_title_ends():
+    preset = ass_mod.resolve_preset("classic")
+    styles, events = story_card.overlay(preset, "The chair", 2.4)
+    assert "Style: StoryTitle,Inter" in styles and "Style: StoryShape" in styles
+    lines = [line for line in events.splitlines() if line.startswith("Dialogue")]
+    assert len(lines) == 3
+    assert all("0:00:00.00,0:00:02.40" in line for line in lines)
+    assert lines[0].startswith("Dialogue: 3,") and "\\p1" in lines[0] and "\\1a&H33&" in lines[0]
+    assert lines[1].startswith("Dialogue: 4,") and "\\1c&H00D7FF&" in lines[1]  # the preset's active colour
+    assert lines[2].startswith("Dialogue: 5,") and lines[2].endswith("The chair")
+    assert "\\pos(540,960)" in lines[2] and "\\q0" in lines[2] and "\\fad(" in lines[2]
+    # nothing that belongs to another platform, nothing invented
+    for forbidden in ("upvote", "comment", "share", "u/", "r/", "👍", "❤"):
+        assert forbidden not in events
+    assert story_card.overlay(preset, "", 2.4) == ("", "")
+    assert story_card.overlay(preset, "The chair", 0.0) == ("", "")
+    assert story_card.title_size("short") > story_card.title_size("x" * 100)
+    assert story_card.rounded_rect(0, 0, 10, 10, 20).startswith("m 5 0 ")
+
+
+def test_caption_words_start_after_the_title():
+    segments = [{"words": [
+        {"word": "The", "start": 0.0, "end": 0.2}, {"word": "chair", "start": 0.25, "end": 0.5},
+        {"word": "Nobody", "start": 0.97, "end": 1.3}, {"word": "moved", "start": 1.4, "end": 1.7},
+    ]}]
+    words = story_render.caption_words(segments, 1.0)
+    assert [w.text for w in words] == ["Nobody", "moved"]
+    assert words[0].start == 0.97
+
+
+# ---------------------------------------------------------------------------
+# The story render (F03): the command, the fingerprint, real pixels
+
+
+def test_the_story_command_loops_mutes_and_covers_through_the_shared_geometry(tmp_path, monkeypatch):
+    seen: dict = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+
+        class P:
+            returncode = 0
+            stderr = ""
+        return P()
+
+    monkeypatch.setattr(renderer.subprocess, "run", fake_run)
+    monkeypatch.setattr(renderer, "video_encoder_args", lambda hw: ["-c:v", "libx264"])
+    renderer.render_story("bg.mp4", "narr.wav", tmp_path / "out.mp4", 12.345, tmp_path / "c.ass", None)
+    args = seen["args"]
+    assert args[args.index("-stream_loop") + 1] == "-1"          # looped when short
+    assert args[args.index("-t") + 1] == "12.345"                 # trimmed when long
+    assert "-map" in args and args[args.index("-map") + 1] == "0:v:0"
+    assert args[args.index("-map", args.index("-map") + 1) + 1] == "1:a:0"  # background audio never mapped
+    vf = args[args.index("-vf") + 1]
+    assert vf.startswith(renderer.cover_vf() + ",setsar=1")
+    assert "subtitles=filename=" in vf
+    # the same geometry the blur fill's backdrop uses, verbatim
+    assert renderer.cover_vf() in renderer.scale_pad_vf(1920, 1080, "blur")[0]
+    assert "apad" in args[args.index("-af") + 1]
+
+
+def _story_prior(job, tmp_path, seconds: float = 3.5):
+    """ingest + narrate + asr checkpoints for a rendered story: a silent
+    16:9 background, a sine narration, and fake word timings."""
+    bg = _silent_video(tmp_path / "bg.mp4", seconds=2.0)  # shorter than the narration: must loop
+    wav = job.dir / narrate_stage.NARRATION_FILE
+    t = np.arange(int(seconds * kokoro_tts.SAMPLE_RATE)) / kokoro_tts.SAMPLE_RATE
+    narrate_stage.write_wav(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    words = [{"word": w, "start": 0.2 + i * 0.4, "end": 0.5 + i * 0.4} for i, w in enumerate(
+        ["The", "chair", "Nobody", "had", "moved", "the", "chair"])]
+    return {
+        "ingest": {"media_path": str(bg), "probe": {"width": 640, "height": 360, "has_audio": False}},
+        "narrate": {"audio_path": str(wav), "duration_sec": seconds, "title": "The chair",
+                    "title_end_sec": 1.0},
+        "asr": {"segments": [{"words": words}]},
+    }
+
+
+def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
+    job, settings = _story_job()
+    stage = story_render.StoryRenderStage()
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    out = job.dir / "clips" / "story.mp4"
+    out.parent.mkdir()
+    out.write_bytes(b"x")
+    data = {"story": True, "outputs": [{"clip": 0, "story": True, "path": str(out), "duration": 4.1}],
+            **story_render._fingerprint(ctx)}
+    assert stage.artifacts_ok(ctx, data) is True
+    # a clip checkpoint never serves a story job
+    assert stage.artifacts_ok(ctx, {**data, "story": False}) is False
+    for change in (
+        lambda s: setattr(s, "caption_preset", "beast"),
+        lambda s: setattr(s, "lufs_target", -16.0),
+        lambda s: setattr(s.watermark, "text", "@me"),
+        lambda s: s.captions.overrides.update({"size": 40}),
+    ):
+        other = config.Settings.from_json(settings.to_json())
+        change(other)
+        assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is False
+    # and things the story does not read leave it alone
+    other = config.Settings.from_json(settings.to_json())
+    other.camera.gameplay_amount = 1.0
+    other.clips.select_count = 3
+    assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is True
+    out.unlink()
+    assert stage.artifacts_ok(ctx, data) is False
+
+
+def test_the_story_render_makes_one_verified_vertical_file(tmp_path):
+    """Real pixels through the shared encoder path (§3's synthetic way): a
+    2 s silent 16:9 background under 3.5 s of narration renders a 1080x1920
+    file of the narration's length plus the tail, captioned one word at a
+    time after the card."""
+    job, settings = _story_job()
+    settings.caption_preset = story_render.STORY_PRESET
+    ctx = queue._ctx_for(
+        queue.StageContext(job=job, settings=settings, progress=_noop), "render",
+        _story_prior(job, tmp_path),
+    )
+    data = story_render.StoryRenderStage().run(ctx)
+    assert data["story"] is True and len(data["outputs"]) == 1
+    out = data["outputs"][0]
+    assert out["story"] is True and out["clip"] == 0 and out["title"] == "The chair"
+    assert out["words"] == 5  # the two title words are the card's, not captions
+    check = renderer.verify_output(Path(out["path"]), 3.5 + story_render.TAIL_SEC)
+    assert check["ok"], check
+    assert check["width"] == 1080 and check["height"] == 1920
+    doc = Path(out["ass"]).read_text(encoding="utf-8")
+    assert "StoryTitle" in doc and "THE CHAIR" in doc  # the story preset is uppercase
+    assert doc.count("Cap,,0,0,0,") == 5  # one Dialogue per word: one-word captions
+    assert story_render.StoryRenderStage().artifacts_ok(ctx, data) is True
+
+
+# ---------------------------------------------------------------------------
+# D-20: the two guards on the clip-keyed readers of render.json
+
+
+def test_invalidating_render_on_a_story_job_drops_the_story_file(tmp_path):
+    job, _ = _story_job()
+    out = job.dir / "clips" / "story.mp4"
+    out.parent.mkdir()
+    out.write_bytes(b"story")
+    queue.write_checkpoint(job, "render", 1, {
+        "story": True, "outputs": [{"clip": 0, "story": True, "path": str(out), "duration": 4.0}],
+    })
+    assert queue.invalidate_stage(job, "render") == {"stage": "render", "dropped_clips": [0]}
+    assert not out.exists()
+    assert queue.checkpoint_path(job, "render").exists()  # the file, never the checkpoint
+    # and a story entry is never mistaken for an adoptable clip
+    out.write_bytes(b"story")
+    assert render_stage._previous_outputs(job.dir) == {}
+
+
+def test_a_story_killed_mid_encode_loses_only_its_truncated_file(monkeypatch):
+    job, _ = _story_job()
+    out = job.dir / "clips" / "story.mp4"
+    out.parent.mkdir()
+    out.write_bytes(b"truncated")
+    queue.write_checkpoint(job, "render", 1, {
+        "story": True, "outputs": [{"clip": 0, "story": True, "path": str(out), "duration": 4.0}],
+    })
+    queue.mark_stage(job.id, "render", "running", 1)
+    queue.set_job_status(job.id, "running")
+    monkeypatch.setattr(
+        "publikclip_pipeline.render.renderer.verify_output",
+        lambda out_path, expected_duration: {"ok": False},
+    )
+    assert queue.mark_cancelled(job.id)["marked"] is True
+    assert not out.exists()
+    assert queue.checkpoint_path(job, "render").exists()
+
+    # an intact story survives the same kill
+    out.write_bytes(b"whole")
+    queue.set_job_status(job.id, "running")
+    queue.mark_stage(job.id, "render", "running", 1)
+    monkeypatch.setattr(
+        "publikclip_pipeline.render.renderer.verify_output",
+        lambda out_path, expected_duration: {"ok": True},
+    )
+    assert queue.mark_cancelled(job.id)["marked"] is True
+    assert out.exists()

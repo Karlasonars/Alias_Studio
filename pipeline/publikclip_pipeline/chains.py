@@ -30,10 +30,17 @@ CLIPS_CHAIN: tuple[str, ...] = (
     "ingest", "asr", "diarize", "events", "candidates", "score", "camera", "render",
 )
 
+#: The story format (E20): a background, a narrated text, the narration
+#: transcribed for word timings, one rendered file. `asr` is the clips
+#: chain's stage with one parameter (which prior it hears); `render` is
+#: a different stage under the same name (D-20).
+STORY_CHAIN: tuple[str, ...] = ("ingest", "narrate", "asr", "render")
+
 #: mode → the stages that run for it, in order. A mode not in this table
 #: does not exist; `chain_for` refuses it rather than guessing a chain.
 CHAINS: dict[str, tuple[str, ...]] = {
     "clips": CLIPS_CHAIN,
+    "stories": STORY_CHAIN,
 }
 
 #: Every stage name any chain runs, first appearance first — what a

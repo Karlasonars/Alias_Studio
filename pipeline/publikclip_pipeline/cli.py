@@ -49,6 +49,20 @@ def _stages(mode: str = chains.DEFAULT_MODE) -> list[queue.Stage]:
             CameraStage(),
             RenderStage(),
         ]
+    elif names == chains.STORY_CHAIN:
+        from .asr.stage import AsrStage
+        from .ingest.stage import IngestStage
+        from .narrate.stage import NarrateStage
+        from .render.story import StoryRenderStage
+
+        built = [
+            # silent b-roll is the normal background; its sound is never used
+            IngestStage(needs_audio=False),
+            NarrateStage(),
+            # F04: the captions' timings come from transcribing the narration
+            AsrStage(source="narrate"),
+            StoryRenderStage(),
+        ]
     else:  # pragma: no cover - chain_for refused every other mode above
         raise ValueError(f"no stage builder for mode {mode!r}")
     assert tuple(s.name for s in built) == names, (mode, built, names)
