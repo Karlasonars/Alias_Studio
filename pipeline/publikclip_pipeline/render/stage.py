@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 from ..camera.stage import sans_letterbox_fill
+from ..captions import ranking as overlay
 from ..captions import title as title_mod
 from ..jobs.queue import Stage, StageContext, StageError
 from . import watermark
@@ -301,6 +302,16 @@ class RenderStage(Stage):
                 return False
             if stored_ranking.get("count") != ctx.settings.ranking.count:
                 return False  # a different top N is a different pair of videos
+            # E18-F07. The play order is a setting and is compared; the
+            # shuffle's seed is an output and is NOT — a random number in
+            # the fingerprint would invalidate a render for no reason. A
+            # checkpoint from before the setting existed has no `order`
+            # and played the countdown, so a missing key reads as the
+            # factory default (§4 rule 3, by hand: the rest of this
+            # compare is strict, this one key must not be).
+            stored_order = stored_ranking.get("order", overlay.COUNTDOWN)
+            if stored_order != ctx.settings.ranking.order:
+                return False  # the moments play in a different order → a different file
         if data.get("caption_preset") != ctx.settings.caption_preset:
             return False  # restyle requested → re-render
         if "fills" in data:

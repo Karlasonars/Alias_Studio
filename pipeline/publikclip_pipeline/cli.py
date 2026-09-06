@@ -117,6 +117,10 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     ranking_count = getattr(args, "ranking_count", None)
     if ranking_count is not None:
         settings.ranking.count = max(1, int(ranking_count))
+    # E18-F07. argparse holds the choices; the snapshot stores the word.
+    ranking_order = getattr(args, "ranking_order", None)
+    if ranking_order is not None:
+        settings.ranking.order = ranking_order
     # E19-F02. `is not None`, never truthiness: "" is an explicit "no
     # watermark" — the deck sends it so a job never inherits a mark the
     # deck did not show, and `resume --watermark-text ""` clears one.
@@ -222,6 +226,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "letterbox_fill", None)
         or getattr(args, "ranking", None) is not None
         or getattr(args, "ranking_count", None) is not None
+        or getattr(args, "ranking_order", None) is not None
         or getattr(args, "watermark_image", None) is not None
         or getattr(args, "watermark_text", None) is not None
         or getattr(args, "voice", None)
@@ -881,6 +886,11 @@ def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ranking-count", dest="ranking_count", type=int, default=None,
         help="how many top moments one ranking video plays; the second takes the next N (default 5)",
+    )
+    parser.add_argument(
+        "--ranking-order", dest="ranking_order", choices=["countdown", "random"], default=None,
+        help="the order the moments play in: countdown (N first, 1 last; default) or random "
+             "(shuffled once per job and kept, so a re-render plays the same order)",
     )
 
 

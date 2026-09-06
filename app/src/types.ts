@@ -246,6 +246,12 @@ export interface RankingMontage {
  * `outputs` as always, first; the montage entries follow them. */
 export interface RankingSummary {
   count: number
+  /** E18-F07: the play order this render played ('countdown' | 'random'),
+   * and the seed a random order was drawn from — kept per job so a
+   * re-render plays the same order; null while the job has only ever
+   * played the countdown. Absent on checkpoints from before the setting. */
+  order?: string
+  seed?: number | null
   band: { top: number; line_h: number; boxed: boolean }
   montages: RankingMontage[]
   /** Why there is one video and not two, when that is the case. */

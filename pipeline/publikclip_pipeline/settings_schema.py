@@ -232,6 +232,12 @@ GROUPS: list[dict[str, Any]] = [
              "help": "On: the job produces its individual clips AND two ranking videos (one when there are not enough finalists for two — the log says why). Off: clips only, as before. Switching re-renders; nothing earlier re-runs."},
             {"key": "ranking.count", "label": "Moments per video", "type": "number", "min": 2, "max": 8, "step": 1,
              "help": "How many top-ranked moments one ranking video plays; the second video takes the next N, so two need 'Clips to render' at 2N or more. Independent of that setting — this only slices what scoring already ranked, so changing it re-renders and never rescores. Fewer than 8 fit comfortably above gameplay footage; above a podcast crop the list sits over the picture."},
+            {"key": "ranking.order", "label": "Play order", "type": "select",
+             "options": [
+                 {"value": "countdown", "label": "Countdown (N first, 1 last)"},
+                 {"value": "random", "label": "Random"},
+             ],
+             "help": "The order the moments play in. Countdown plays rank N first and rank 1 last, so the top slot is the last reveal. Random shuffles them; the shuffle is drawn once per job and kept, so re-rendering the same job plays the same order and both ranking videos get their own order from that one draw. Switching re-renders; there is no reshuffle."},
         ],
     },
     {

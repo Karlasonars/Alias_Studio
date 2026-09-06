@@ -633,6 +633,7 @@ async fn enqueue_job(
     letterbox_fill: Option<String>,
     ranking: Option<bool>,
     ranking_count: Option<u32>,
+    ranking_order: Option<String>,
     watermark_image: Option<String>,
     watermark_text: Option<String>,
     mode: Option<String>,
@@ -702,6 +703,13 @@ async fn enqueue_job(
     if let Some(n) = ranking_count {
         args.push("--ranking-count".to_string());
         args.push(n.to_string());
+    }
+    // E18-F07. Forwarded as given; python owns the choices list (countdown
+    // | random) and refuses an unknown one. The shuffle's seed is never
+    // an argument — it is drawn and kept by the render stage.
+    if let Some(order) = ranking_order {
+        args.push("--ranking-order".to_string());
+        args.push(order);
     }
     // E19-F02. Forwarded even when empty: "" is the deck's explicit "none",
     // so a job never inherits a mark the deck did not show. Which file and

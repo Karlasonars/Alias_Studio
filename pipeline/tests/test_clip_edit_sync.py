@@ -624,6 +624,52 @@ def test_shape_three_the_mixed_checkpoint_serves_a_ranking_job_with_the_same_cou
     assert stage.artifacts_ok(ctx, mixed) is False  # a video gone from disk: the disk wins
 
 
+def test_the_play_order_is_in_the_render_fingerprint_and_its_seed_is_not(ctx, tmp_path):
+    """E18-F07. `order` is a setting: switching countdown ↔ random
+    re-renders, because the file genuinely differs; re-rendering with it
+    unchanged does not. `seed` is an output: a different stored seed, or
+    none, must not invalidate anything — a random number would otherwise
+    decide when the user's hour is thrown away. And a checkpoint written
+    before `order` existed has no key and played the countdown, so it
+    stays valid for a countdown job (§4 rule 3) — every ranking job on
+    disk — and is invalid only once the user actually asks for random."""
+    ctx.settings.ranking.enabled = True
+    ctx.settings.ranking.count = 2
+    for name in ("clip_00.mp4", "clip_01.mp4", "ranking_1-2.mp4"):
+        (tmp_path / name).write_bytes(b"mp4")
+    stage = render_stage.RenderStage()
+
+    def checkpoint(**ranking) -> dict:
+        return {
+            **_clip_render_checkpoint(ctx),
+            "outputs": [
+                {"clip": 0, "path": str(tmp_path / "clip_00.mp4")},
+                {"clip": 1, "path": str(tmp_path / "clip_01.mp4")},
+                {"clip": 0, "path": str(tmp_path / "ranking_1-2.mp4"), "montage": True, "ranks": [1, 2]},
+            ],
+            "fills": {"0": "black", "1": "black"},
+            "ranking": {"count": 2, "montages": [{"path": str(tmp_path / "ranking_1-2.mp4")}], **ranking},
+        }
+
+    # before the setting existed: no key, countdown played
+    legacy = checkpoint()
+    assert "order" not in legacy["ranking"]
+    assert ctx.settings.ranking.order == "countdown"
+    assert stage.artifacts_ok(ctx, legacy) is True
+    ctx.settings.ranking.order = "random"
+    assert stage.artifacts_ok(ctx, legacy) is False   # random wanted, countdown on disk
+
+    # a random render: valid with order unchanged, whatever the seed says
+    shuffled = checkpoint(order="random", seed=4242)
+    assert stage.artifacts_ok(ctx, shuffled) is True
+    assert stage.artifacts_ok(ctx, checkpoint(order="random", seed=1)) is True
+    assert stage.artifacts_ok(ctx, checkpoint(order="random", seed=None)) is True
+    ctx.settings.ranking.order = "countdown"
+    assert stage.artifacts_ok(ctx, shuffled) is False  # countdown wanted, shuffle on disk
+    # a countdown render that carries a seed forward is still a countdown render
+    assert stage.artifacts_ok(ctx, checkpoint(order="countdown", seed=4242)) is True
+
+
 def test_the_fill_default_reaches_a_ranking_job_through_its_clip_entries(ctx, tmp_path):
     """The fills compare iterates the clip entries, montage entries
     skipped: a montage entry shares its rank-1 clip's index, and counting

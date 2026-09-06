@@ -82,6 +82,7 @@ interface Props {
     letterboxFill: string,
     ranking: boolean,
     rankingCount: number,
+    rankingOrder: string,
     watermarkImage: string,
     watermarkText: string,
     story: StoryRun | null
@@ -119,6 +120,10 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   // (E18-F06). Never instead of the clips — D-17 said so and was reversed.
   const [ranking, setRanking] = useState(false)
   const [rankingCount, setRankingCount] = useState(5)
+  // E18-F07: the order the moments play in. Countdown is the default; a
+  // random order is shuffled once per job by python and kept on the
+  // checkpoint, so the deck sends the word and never a seed.
+  const [rankingOrder, setRankingOrder] = useState<'countdown' | 'random'>('countdown')
   // E19-F02: the channel mark, decided before the cut like the rest of the
   // deck and sent explicitly — '' is "none", so a job never inherits a
   // mark the deck did not show (the Settings default seeds only jobs made
@@ -285,7 +290,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     if (mode === 'stories') {
       if (!storyReady) return
       onRun(
-        background.trim(), llm, storyCaptions, 0, 'black', false, rankingCount,
+        background.trim(), llm, storyCaptions, 0, 'black', false, rankingCount, rankingOrder,
         wmKind === 'image' ? wmImage : '',
         wmKind === 'text' ? wmText.trim() : '',
         { text: storyText, voice, speed }
@@ -298,7 +303,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     }
     if (!source.trim()) return
     onRun(
-      source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+      source.trim(), llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount, rankingOrder,
       wmKind === 'image' ? wmImage : '',
       wmKind === 'text' ? wmText.trim() : '',
       null
@@ -647,12 +652,39 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   ))}
                 </div>
               )}
+              {/* E18-F07: the play order, only while ranking is on for the
+                  same reason as the count. The shuffle itself is python's
+                  and is kept per job — there is no reshuffle here, on
+                  purpose: if the owner turns out to reshuffle constantly,
+                  that is the next requirement. */}
+              {mode === 'clips' && ranking && (
+                <div className="opt-group">
+                  <span className="opt-label">play order</span>
+                  <button
+                    className={`opt ${rankingOrder === 'countdown' ? 'opt-on' : ''}`}
+                    onClick={() => setRankingOrder('countdown')}
+                    title={`rank ${rankingCount} first, rank 1 last`}
+                  >
+                    countdown
+                  </button>
+                  <button
+                    className={`opt ${rankingOrder === 'random' ? 'opt-on' : ''}`}
+                    onClick={() => setRankingOrder('random')}
+                    title="shuffled once per job and kept; re-rendering plays the same order"
+                  >
+                    random
+                  </button>
+                </div>
+              )}
               {/* E18-F06: what "on" makes, said where it is chosen — the
                   second video exists only when the job has 2N finalists. */}
               {mode === 'clips' && ranking && (
                 <p className="opt-hint">
                   two ranking videos beside the clips — moments 1 to {rankingCount} and the next{' '}
                   {rankingCount}; one, if the job renders fewer than {rankingCount * 2} clips
+                  {rankingOrder === 'random' && (
+                    <>; shuffled once for this job and kept, so a re-render plays the same order</>
+                  )}
                 </p>
               )}
               {/* E19-F02: a picture or a word on every output file, clips
