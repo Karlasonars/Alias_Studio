@@ -450,15 +450,37 @@ def _resolve(data: dict, dotted: str) -> Any:
     return node
 
 
+#: Settings fields that are PER JOB by nature and deliberately have no
+#: control in the global panel (E20). The reverse check below would
+#: otherwise demand one, and a "default chain" control there would be a
+#: control that changes nothing on the deck, where the chain is actually
+#: chosen (§5.2). This is a classification list in the sense of
+#: test_house_rules' CLIP_EDIT_RENDER_IRRELEVANT: an entry names a field
+#: and says why the panel does not show it; it does not tell the check
+#: to stop looking. Every key here must still resolve to a real field
+#: and must not ALSO appear in GROUPS — validate_schema checks both.
+PER_JOB_FIELDS: dict[str, str] = {
+    "mode": "which chain runs (clips | stories) — chosen on the deck per job, "
+            "never a global default",
+}
+
+
 def validate_schema() -> list[str]:
     """Every schema key must point at a real settings field, and every
-    settings field should be reachable from the UI. Returns problems."""
+    settings field should be reachable from the UI — or be declared
+    per-job in PER_JOB_FIELDS, with a reason. Returns problems."""
     from .captions import ass as ass_mod
 
     problems: list[str] = []
     data = config.Settings().to_json()
 
     covered: set[str] = set()
+    for key in PER_JOB_FIELDS:
+        try:
+            _resolve(data, key)
+        except KeyError:
+            problems.append(f"per-job exemption names no settings field: {key}")
+        covered.add(key)
     for group in GROUPS:
         for fielddef in group.get("fields", []):
             key = fielddef["key"]
@@ -466,6 +488,8 @@ def validate_schema() -> list[str]:
                 _resolve(data, key)
             except KeyError:
                 problems.append(f"schema key has no settings field: {key}")
+            if key in PER_JOB_FIELDS:
+                problems.append(f"field is both per-job and in the panel: {key}")
             covered.add(key)
         matrix = group.get("matrix")
         if matrix:

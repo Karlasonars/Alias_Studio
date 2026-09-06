@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
+from . import chains
+
 
 def home_dir() -> Path:
     return Path(os.environ.get("PUBLIKCLIP_HOME", str(Path.home() / ".publikclip")))
@@ -406,6 +408,13 @@ class Settings:
     # laughter classes cover the bus at 320 ms resolution for a fraction of
     # the compute; flip on for the two-detector agreement boost.
     laughter_specialist: bool = False
+    # Which chain runs this job (E20 / D-19): 'clips' or 'stories', a key
+    # of chains.CHAINS. Per-job, chosen on the deck, and a field HERE
+    # rather than a DB column because the snapshot is the one place a
+    # job's own state already lives — a column would be this project's
+    # first schema migration. A snapshot written before the field existed
+    # lacks it and reads as 'clips', so every job on disk keeps its chain.
+    mode: str = chains.DEFAULT_MODE
 
     def to_json(self) -> dict:
         return {
@@ -431,6 +440,7 @@ class Settings:
             "gemini_model": self.gemini_model,
             "caption_preset": self.caption_preset,
             "laughter_specialist": self.laughter_specialist,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -479,6 +489,9 @@ class Settings:
             gemini_model=data.get("gemini_model") or DEFAULT_GEMINI_MODEL,
             caption_preset=data.get("caption_preset", "classic"),
             laughter_specialist=data.get("laughter_specialist", False),
+            # `or`, not a default: an empty string in a hand-edited file is
+            # no mode, and no mode is the clips chain (chains.chain_for).
+            mode=str(data.get("mode") or chains.DEFAULT_MODE),
         )
 
 

@@ -29,7 +29,7 @@ import statistics
 import time
 from pathlib import Path
 
-from . import config, hardware
+from . import chains, config, hardware
 from .jobs import queue
 
 PROFILE_FILE = "hardware_profile.json"
@@ -50,10 +50,13 @@ KEY_FIELDS = (
     "cpu_threads",
 )
 
-# Keep in sync with cli._stages(). An estimate is only offered once every
-# stage has at least one sample under the current key - a partial sum
-# would silently understate, which is a fabricated number with extra steps.
-STAGES = ("ingest", "asr", "diarize", "events", "candidates", "score", "camera", "render")
+# The clips chain, from the one table (chains.py; a test pins it equal to
+# cli._stages()). The profile's headline number - "a 60 min video ≈ N
+# min" - is a clips-chain estimate, and stays one: only clips stages feed
+# it, and an estimate is only offered once every one of them has at least
+# one sample under the current key - a partial sum would silently
+# understate, which is a fabricated number with extra steps.
+STAGES = chains.CLIPS_CHAIN
 
 # Median of the last N samples per stage: the median so one pathological
 # job (a source that hit a degenerate path) cannot own the estimate, the

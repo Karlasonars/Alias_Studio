@@ -65,6 +65,18 @@ class Job:
     def dir(self) -> Path:
         return config.jobs_dir() / self.id
 
+    @property
+    def mode(self) -> str:
+        """Which chain runs this job (E20 / D-19), read from its settings
+        snapshot through the one deserializer, so a row written before the
+        field existed answers 'clips' here exactly as it does everywhere
+        else. Never trust the raw key: `Settings.from_json` is what turns
+        a missing or empty value into the default."""
+        try:
+            return config.Settings.from_json(json.loads(self.settings_json)).mode
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return config.chains.DEFAULT_MODE
+
 
 def _connect() -> sqlite3.Connection:
     config.ensure_home()

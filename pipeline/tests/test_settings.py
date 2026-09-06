@@ -175,6 +175,29 @@ def test_ui_schema_matches_the_settings_tree():
     assert settings_schema.validate_schema() == []
 
 
+def test_the_per_job_exemption_is_a_declaration_not_a_blindfold(monkeypatch):
+    """E20: `mode` is chosen per job on the deck and has no global control,
+    so it is declared in settings_schema.PER_JOB_FIELDS instead. The
+    exemption must not weaken the reverse check: with the declaration
+    removed the field is reported missing (the check still looks), a
+    declaration naming no field is reported (the list cannot rot), and a
+    field that is both declared and in the panel is reported (the two
+    lists cannot overlap)."""
+    from publikclip_pipeline import settings_schema
+
+    assert "mode" in settings_schema.PER_JOB_FIELDS
+    assert settings_schema.validate_schema() == []
+
+    monkeypatch.setattr(settings_schema, "PER_JOB_FIELDS", {})
+    assert "settings field missing from UI schema: mode" in settings_schema.validate_schema()
+
+    monkeypatch.setattr(settings_schema, "PER_JOB_FIELDS", {"mode": "x", "no_such": "y"})
+    assert "per-job exemption names no settings field: no_such" in settings_schema.validate_schema()
+
+    monkeypatch.setattr(settings_schema, "PER_JOB_FIELDS", {"mode": "x", "lufs_target": "y"})
+    assert "field is both per-job and in the panel: lufs_target" in settings_schema.validate_schema()
+
+
 def test_every_schema_field_has_help_text():
     """The brief was explicit: each setting explains what it does."""
     from publikclip_pipeline import settings_schema

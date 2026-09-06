@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, errors, hardware_profile, winpatches
+from . import chains, config, errors, hardware_profile, winpatches
 from .jobs import queue
 
 winpatches.apply_all()
@@ -23,29 +23,36 @@ winpatches.apply_all()
 errors.install_excepthook()
 
 
-def _stages() -> list[queue.Stage]:
-    # Grows per milestone: ingest → asr → diarize → events → candidates →
-    # score → camera → render. Stage imports are deferred so `publikclip
-    # jobs` doesn't pay the torch import tax.
-    from .asr.stage import AsrStage
-    from .camera.stage import CameraStage
-    from .candidates.stage import CandidatesStage
-    from .diarize.stage import DiarizeStage
-    from .events.stage import EventsStage
-    from .ingest.stage import IngestStage
-    from .render.stage import RenderStage
-    from .scoring.stage import ScoreStage
+def _stages(mode: str = chains.DEFAULT_MODE) -> list[queue.Stage]:
+    """The stage instances for one chain (E20 / D-19), in the order
+    chains.CHAINS gives — that table is the light-import truth and a test
+    pins this function to it for every chain. Stage imports are deferred so
+    `publikclip jobs` doesn't pay the torch import tax."""
+    names = chains.chain_for(mode)
+    if names == chains.CLIPS_CHAIN:
+        from .asr.stage import AsrStage
+        from .camera.stage import CameraStage
+        from .candidates.stage import CandidatesStage
+        from .diarize.stage import DiarizeStage
+        from .events.stage import EventsStage
+        from .ingest.stage import IngestStage
+        from .render.stage import RenderStage
+        from .scoring.stage import ScoreStage
 
-    return [
-        IngestStage(),
-        AsrStage(),
-        DiarizeStage(),
-        EventsStage(),
-        CandidatesStage(),
-        ScoreStage(),
-        CameraStage(),
-        RenderStage(),
-    ]
+        built = [
+            IngestStage(),
+            AsrStage(),
+            DiarizeStage(),
+            EventsStage(),
+            CandidatesStage(),
+            ScoreStage(),
+            CameraStage(),
+            RenderStage(),
+        ]
+    else:  # pragma: no cover - chain_for refused every other mode above
+        raise ValueError(f"no stage builder for mode {mode!r}")
+    assert tuple(s.name for s in built) == names, (mode, built, names)
+    return built
 
 
 def _progress_printer(jsonl: bool):
@@ -105,6 +112,12 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     watermark_text = getattr(args, "watermark_text", None)
     if watermark_text is not None:
         settings.watermark.text = watermark_text.strip()
+    # E20 (D-19): which chain. Only `run` and `jobs create` carry the flag —
+    # a job's chain is fixed at creation, because its checkpoints belong to
+    # that chain; resume reads the snapshot and never takes the flag.
+    mode = getattr(args, "mode", None)
+    if mode:
+        settings.mode = mode
     return settings
 
 
@@ -165,10 +178,17 @@ def _failure_payload(job: queue.Job, err: BaseException) -> dict:
 
 def _execute(job: queue.Job, jsonl: bool) -> int:
     emit = _progress_printer(jsonl)
+    # `mode` rides the job event (E20): the deck draws the running chain's
+    # rows from it, and this event is the one place a job start is observed
+    # (§5.12) — so the chain reaches the screen with the same transition
+    # that resets it, whichever of the four paths started the job.
     if jsonl:
-        print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir)}), flush=True)
+        print(
+            json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir), "mode": job.mode}),
+            flush=True,
+        )
     else:
-        print(f"job {job.id} → {job.dir}", file=sys.stderr)
+        print(f"job {job.id} ({job.mode}) → {job.dir}", file=sys.stderr)
     # E1-F07: per-volume disk pre-flight before anything heavy writes. A
     # confident shortfall fails the job with the numbers in its error —
     # never leaves it pending, which the shell's auto-advance would respawn
@@ -205,7 +225,7 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     ffmpeg_bin.ensure_capable(progress=lambda f, m: emit("setup", f, m))
     run_started = time.time()
     try:
-        results = queue.run_stages(job, _stages(), emit)
+        results = queue.run_stages(job, _stages(job.mode), emit)
     except queue.JobCancelled:
         # Deliberate stop, exit 0: a non-zero exit would land in the shell's
         # 'exited' crash handler and a cancel would read as a crash even with
@@ -729,6 +749,15 @@ def _add_ranking_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_mode_flag(parser: argparse.ArgumentParser) -> None:
+    """E20's chain choice, on `run` and `jobs create` only — never on
+    resume: a job's checkpoints belong to the chain that wrote them."""
+    parser.add_argument(
+        "--mode", choices=sorted(chains.CHAINS), default=None,
+        help="which chain runs: clips (the default) cuts a long video into scored clips",
+    )
+
+
 def _add_watermark_flags(parser: argparse.ArgumentParser) -> None:
     """E19-F02's two flags, identical on run, resume and `jobs create`. No
     choices list: the image is a path and the word is free text, and an
@@ -763,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_run)
     _add_watermark_flags(p_run)
+    _add_mode_flag(p_run)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -831,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_create)
     _add_watermark_flags(p_create)
+    _add_mode_flag(p_create)
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(
         "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"
