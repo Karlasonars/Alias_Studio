@@ -652,15 +652,18 @@ def test_enqueue_flags_set_the_job_ranking_mode(capsys):
 
     assert cli.main([
         "jobs", "create", "C:/nowhere/a.mp4", "--ranking", "on", "--ranking-count", "7",
+        "--ranking-order", "random",
     ]) == 0
     job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
     saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
     assert saved.ranking.enabled is True and saved.ranking.count == 7
+    assert saved.ranking.order == "random"  # E18-F07
 
     assert cli.main(["jobs", "create", "C:/nowhere/b.mp4"]) == 0
     job_id = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["job_id"]
     saved = config.Settings.from_json(json.loads(queue.get_job(job_id).settings_json))
     assert saved.ranking.enabled is False and saved.ranking.count == 5
+    assert saved.ranking.order == "countdown"
 
 
 def test_resume_ranking_flags_reach_the_job_snapshot(monkeypatch):
@@ -683,6 +686,12 @@ def test_resume_ranking_flags_reach_the_job_snapshot(monkeypatch):
     assert cli.main(["resume", job.id, "--ranking-count", "3"]) == 0
     saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
     assert saved.ranking.count == 3 and saved.ranking.enabled is False  # untouched by the count flag
+
+    # E18-F07: the order flag on resume, listed in cmd_resume's guard like
+    # the others — parsed but unlisted would be silently inert
+    assert cli.main(["resume", job.id, "--ranking-order", "random"]) == 0
+    saved = config.Settings.from_json(json.loads(queue.get_job(job.id).settings_json))
+    assert saved.ranking.order == "random" and saved.ranking.count == 3
 
 
 def test_enqueue_flags_set_the_job_watermark(capsys):

@@ -28,11 +28,24 @@ setting of it: generated once, kept on the checkpoint (`ranking.labels`),
 reused verbatim by every later render of the same moment, and never part
 of artifacts_ok — a model's word choice must not invalidate a render, and
 the same job re-rendered must burn the same words. See moment_labels.
+
+Play order (E18-F07): `ranking.order` is countdown (the default) or random.
+The same discipline as the labels, for the same reason: a random order
+needs a seed, and the seed is an OUTPUT — drawn once, on the first render
+that needs one, kept on the checkpoint (`ranking.seed`), carried forward by
+every later render of the job whether or not it plays random, and never
+part of artifacts_ok. Without that, "is this cached result still correct
+for these settings" has no answer for a random job, and switching
+random → countdown → random would reshuffle. Both videos derive their own
+order from the one seed (captions/ranking.py:play_order), so the pair is
+reproducible together. There is no reshuffle in this version. See
+play_seed.
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 from pathlib import Path
 
 from ..captions import ass as ass_mod
@@ -188,6 +201,31 @@ def moment_labels(
     return labels, errors
 
 
+def new_seed() -> int:
+    """One draw, from the OS, never from the module's or the global random
+    state: the pure shuffle in captions/ranking.py must be the only thing
+    that reads a seed, and nothing here may leave state a later draw
+    inherits. 32 bits is plenty — the seed picks a permutation of at most
+    eight entries, and the point is reproducibility, not entropy."""
+    return secrets.randbits(32)
+
+
+def play_seed(ctx: StageContext) -> int | None:
+    """The job's shuffle seed: the one the last render stored, whatever
+    order that render played — a countdown render carries a seed forward
+    untouched, so random → countdown → random reuses it and gives the same
+    shuffle again (stable, not surprising; E18-F07). Drawn only when no
+    render of this job has stored one AND this render needs one; a job
+    that has only ever played the countdown stores None. The seed is an
+    output: never part of artifacts_ok (render/stage.py)."""
+    stored = (_previous_render(ctx.job_dir).get("ranking") or {}).get("seed")
+    if isinstance(stored, int) and not isinstance(stored, bool):
+        return stored
+    if ctx.settings.ranking.order == overlay.RANDOM:
+        return new_seed()
+    return None
+
+
 def montage_slices(ranked: list[int], count: int) -> list[list[int]]:
     """The moment slices the videos play, in rank order: ranks 1..N, then
     N+1..2N — the second only when it is a full N, so both videos are the
@@ -278,6 +316,11 @@ def render_montages(
     # The text next to each number, before the first encode, for every
     # moment of every video: one map, one reuse rule (moment_labels).
     labels, label_errors = moment_labels(ctx, inputs, used)
+    # E18-F07: the play order, and the seed it is drawn from when random —
+    # read from the last checkpoint BEFORE anything is written, like the
+    # labels, so a re-render reproduces the last one's order exactly.
+    order = settings.ranking.order
+    seed = play_seed(ctx)
 
     entries: list[dict] = []
     records: list[dict] = []
@@ -286,11 +329,18 @@ def render_montages(
         entry, record = _render_one(
             ctx, inputs, ranked_slice, ranks, trajectories, band, styles, job_preset,
             labels, fills, index=m + 1, total=len(slices),
+            positions=overlay.play_order(len(ranked_slice), order, seed, video=m),
         )
         entries.append(entry)
         records.append(record)
     return entries, {
         "count": count,
+        # E18-F07. `order` is the setting this render played and IS in the
+        # fingerprint; `seed` is what the shuffle was drawn from and is NOT
+        # (play_seed) — stored on every render, countdown ones included,
+        # so the next random render finds it.
+        "order": order,
+        "seed": seed,
         "band": {"top": band.top, "line_h": band.line_h, "boxed": band.boxed},
         # One record per video, in series order (ranks 1..N first). Presence
         # of this list is the shape version: a `ranking` without it is the
@@ -320,18 +370,22 @@ def _render_one(
     *,
     index: int,
     total: int,
+    positions: list[int],
 ) -> tuple[dict, dict]:
-    """One ranking video from `ranked` (its moments, rank order): the
-    countdown of segments, each through render_clip with the list spliced
+    """One ranking video from `ranked` (its moments, rank order): its
+    segments in play order, each through render_clip with the list spliced
     into its own caption document, then the remux. `ranks` is the global
     rank range it plays — its file name and what the review panel shows;
-    inside the video the list counts 1..N, so both videos are "TOP N"."""
+    inside the video the list counts 1..N, so both videos are "TOP N".
+    `positions` is the play order over rank positions (play_order), decided
+    by the caller so both videos come from the one seed."""
     settings = ctx.settings
     n = len(ranked)
     stem = MONTAGE_STEM.format(ranks[0], ranks[1])
-    # Play order is a countdown over rank positions; `order` is the clip
-    # index playing at each position.
-    order = [ranked[p] for p in overlay.play_order(n)]
+    # `order` is the clip index playing at each position. The overlay gets
+    # `positions` too: its reveal must follow what actually plays, and it
+    # cannot know the order on its own since E18-F07 made it a choice.
+    order = [ranked[p] for p in positions]
     label_texts = [(labels.get(str(i)) or {}).get("text") for i in ranked]
     total_s = sum(float(inputs.clips[i]["end"]) - float(inputs.clips[i]["start"]) for i in order)
     ctx.emit(
@@ -374,7 +428,9 @@ def _render_one(
             overrides=style["overrides"],
             extra_styles=styles + mark.styles,
             extra_events=(
-                overlay.overlay_events(job_preset, band, k, duration, labels=label_texts)
+                overlay.overlay_events(
+                    job_preset, band, k, duration, labels=label_texts, order=positions
+                )
                 + mark.events
             ),
         )

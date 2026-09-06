@@ -23,10 +23,69 @@ from publikclip_pipeline.scoring import llm as llm_mod
 
 def test_play_order_is_a_countdown():
     # Rank N first, rank 1 last: the list fills from the bottom and the top
-    # slot is the last reveal (D-17).
+    # slot is the last reveal (D-17). The default, with or without a seed:
+    # every checkpoint from before E18-F07 plays exactly this.
     assert overlay.play_order(5) == [4, 3, 2, 1, 0]
+    assert overlay.play_order(5, overlay.COUNTDOWN, seed=99) == [4, 3, 2, 1, 0]
     assert overlay.play_order(1) == [0]
     assert overlay.play_order(0) == []
+
+
+# E18-F07: a random order is a lookup of (count, seed, video), never a draw.
+
+
+def test_the_same_seed_and_count_give_the_same_order_twice():
+    """What lets the render stage store one number and reproduce the file:
+    the shuffle is a pure function of its seed, and a permutation of every
+    rank — nothing dropped, nothing doubled."""
+    first = overlay.play_order(8, overlay.RANDOM, seed=20260906)
+    assert overlay.play_order(8, overlay.RANDOM, seed=20260906) == first
+    assert sorted(first) == list(range(8))
+    assert overlay.play_order(0, overlay.RANDOM, seed=1) == []
+
+
+def test_different_seeds_give_different_orders():
+    """Twelve entries: 12! is about 479 million permutations, so two
+    unrelated shuffles agree once in ~5e8 — and the seeds here are fixed,
+    so this pins a fact about the function rather than tossing a coin.
+    The deck's maximum of eight would already be one in 40 320; twelve
+    leaves nothing to wonder about."""
+    a = overlay.play_order(12, overlay.RANDOM, seed=1)
+    b = overlay.play_order(12, overlay.RANDOM, seed=2)
+    assert a != b
+    assert sorted(a) == sorted(b) == list(range(12))
+
+
+def test_the_two_videos_get_different_orders_from_one_seed():
+    """E18-F06 meets E18-F07: one stored seed, two videos, each its own
+    shuffle — and each a lookup of (seed, video), so the pair comes back
+    together on a re-render rather than one of them drifting."""
+    first = overlay.play_order(8, overlay.RANDOM, seed=7, video=0)
+    second = overlay.play_order(8, overlay.RANDOM, seed=7, video=1)
+    assert first != second
+    assert sorted(first) == sorted(second) == list(range(8))
+    assert overlay.play_order(8, overlay.RANDOM, seed=7, video=0) == first
+    assert overlay.play_order(8, overlay.RANDOM, seed=7, video=1) == second
+
+
+def test_play_order_refuses_what_it_cannot_reproduce():
+    """No seed means no lookup, and an unknown order must not quietly play
+    the countdown — a setting that does nothing is a lie (§5.2)."""
+    with pytest.raises(ValueError):
+        overlay.play_order(5, overlay.RANDOM)
+    with pytest.raises(ValueError):
+        overlay.play_order(5, "shuffle", seed=1)
+
+
+def test_play_order_leaves_the_global_random_state_alone():
+    """A private generator per call: the module keeps no state and never
+    seeds the global instance, so nothing else in the process changes
+    because a ranking video was shuffled — or the other way round."""
+    import random
+
+    before = random.getstate()
+    overlay.play_order(8, overlay.RANDOM, seed=3)
+    assert random.getstate() == before
 
 
 @pytest.mark.parametrize(
@@ -83,6 +142,27 @@ def test_overlay_reveals_in_play_order_not_top_down():
     assert preset.active in last[0][0] and "\\fad" in last[0][0]
     assert "\\alpha" not in last[1][0] and "\\alpha" not in last[2][0]
     assert "\\fad" not in last[1][0] and "\\fad" not in last[2][0]
+
+
+def test_overlay_reveals_in_the_given_play_order():
+    """E18-F07: the reveal follows the order handed in, not a countdown the
+    overlay works out on its own — before this, it did, which was right
+    only while there was one order. Order [0, 2, 1]: rank 1 plays first,
+    then rank 3, then rank 2. At segment 1, rank 1 is played, rank 3 is
+    now, rank 2 still to come — and rank 2's label is the one still hidden."""
+    preset = ass_mod.PRESETS["classic"]
+    band = overlay.band_for([656], 3)
+    labels = ["one", "two", "three"]
+    doc = overlay.overlay_events(preset, band, 1, 4.0, labels=labels, order=[0, 2, 1])
+    mid = _entries(doc)
+    assert [n for _, n in mid] == ["1", "2", "3"]                     # rows never move
+    assert "\\alpha" not in mid[0][0] and "\\fad" not in mid[0][0]   # rank 1: played
+    assert "\\alpha&H80&" in mid[1][0]                                # rank 2: still to come
+    assert preset.active in mid[2][0] and "\\fad" in mid[2][0]        # rank 3: playing now
+    assert [t for _, t in _label_lines(doc)] == ["one", "three"]
+    # without an order the countdown is what it always was
+    same = overlay.overlay_events(preset, band, 1, 4.0, labels=labels)
+    assert same == overlay.overlay_events(preset, band, 1, 4.0, labels=labels, order=[2, 1, 0])
 
 
 def test_overlay_is_static_for_the_whole_segment():
@@ -922,3 +1002,101 @@ def test_a_re_render_unlinks_the_previous_montages_first(tmp_path, source, monke
     again = render_stage.RenderStage().run(ctx)
     assert [Path(o["path"]).name for o in _split(again)[1]] == ["ranking_1-4.mp4", "ranking_5-8.mp4"]
     assert not any(p.exists() for p in old)
+
+
+# ---------------------------------------------------------------------------
+# E18-F07: the play order, and the seed that makes a random one reproducible
+
+
+def _revealed_rows(job_dir, stem, n) -> list[int]:
+    """Which rank row lights up (fades in) in each segment of one video, in
+    play order — the reveal as the caption documents actually carry it."""
+    rows = []
+    for doc in _segment_docs(job_dir, stem, n):
+        lit = [row for row, (tags, _) in enumerate(_entries(doc)) if "\\fad" in tags]
+        assert len(lit) == 1
+        rows.append(lit[0])
+    return rows
+
+
+def test_countdown_is_the_default_and_stores_no_seed(tmp_path, source, monkeypatch):
+    """A job that has only ever played the countdown draws nothing: `seed`
+    is None on its checkpoint and the orders are what they were before the
+    setting existed."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS)
+    assert ctx.settings.ranking.order == "countdown"
+    data = render_stage.RenderStage().run(ctx)
+    assert data["ranking"]["order"] == "countdown" and data["ranking"]["seed"] is None
+    assert [r["order"] for r in data["ranking"]["montages"]] == [[4, 3, 2, 1, 0], [9, 8, 7, 6, 5]]
+    assert _revealed_rows(tmp_path, "ranking_1-5", 5) == [4, 3, 2, 1, 0]
+
+
+def test_new_seed_is_an_int_the_checkpoint_can_carry():
+    seed = ranking.new_seed()
+    assert isinstance(seed, int) and 0 <= seed < 2**32
+    assert json.loads(json.dumps({"seed": seed}))["seed"] == seed
+
+
+def test_a_random_order_draws_one_seed_and_a_re_render_plays_the_same_order(tmp_path, source, monkeypatch):
+    """The determinism guard, and the point of the whole change. The first
+    random render draws ONE seed and stores it; the next render of the
+    same job reads it back and plays the IDENTICAL order — asserted on the
+    orders and on the reveal in the caption documents, not on a seed
+    merely being present. Both videos come from that one seed, each with
+    its own shuffle, and the segments play the shuffle the list reveals."""
+    draws: list[int] = []
+
+    def draw():
+        draws.append(4242)
+        return 4242
+
+    monkeypatch.setattr(ranking, "new_seed", draw)
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS)
+    ctx.settings.ranking.order = "random"
+    data = render_stage.RenderStage().run(ctx)
+    assert data["ranking"]["order"] == "random" and data["ranking"]["seed"] == 4242
+    assert draws == [4242]
+    orders = [r["order"] for r in data["ranking"]["montages"]]
+    first = overlay.play_order(5, "random", 4242, video=0)
+    second = overlay.play_order(5, "random", 4242, video=1)
+    assert orders == [first, [5 + p for p in second]]
+    assert first != second and sorted(first) == sorted(second) == [0, 1, 2, 3, 4]
+    assert [[s["rank"] for s in r["segments"]] for r in data["ranking"]["montages"]] == [
+        [p + 1 for p in first], [p + 1 for p in second],
+    ]
+    # the overlay reveals what plays: segment k lights the row playing at k
+    assert _revealed_rows(tmp_path, "ranking_1-5", 5) == first
+    assert _revealed_rows(tmp_path, "ranking_6-10", 5) == second
+    docs = _segment_docs(tmp_path, "ranking_1-5", 5) + _segment_docs(tmp_path, "ranking_6-10", 5)
+
+    _checkpoint(tmp_path, data)
+    again = render_stage.RenderStage().run(ctx)
+    assert draws == [4242]                                   # no second draw
+    assert again["ranking"]["seed"] == 4242
+    assert [r["order"] for r in again["ranking"]["montages"]] == orders
+    assert _segment_docs(tmp_path, "ranking_1-5", 5) + _segment_docs(tmp_path, "ranking_6-10", 5) == docs
+
+
+def test_a_countdown_render_carries_the_seed_forward(tmp_path, source, monkeypatch):
+    """random → countdown → random reuses the stored seed and plays the
+    same shuffle again — stable, not surprising (E18-F07). So a countdown
+    render writes the seed it inherited rather than None, and there is no
+    path that draws a second one."""
+    ctx = _ranking_job(tmp_path, source, monkeypatch, TEN_WINDOWS[:6], count=3)
+    ctx.settings.ranking.order = "random"
+    first = render_stage.RenderStage().run(ctx)
+    seed = first["ranking"]["seed"]
+    shuffled = [r["order"] for r in first["ranking"]["montages"]]
+    monkeypatch.setattr(ranking, "new_seed", lambda: pytest.fail("a seed was drawn twice"))
+
+    _checkpoint(tmp_path, first)
+    ctx.settings.ranking.order = "countdown"
+    middle = render_stage.RenderStage().run(ctx)
+    assert middle["ranking"]["order"] == "countdown" and middle["ranking"]["seed"] == seed
+    assert [r["order"] for r in middle["ranking"]["montages"]] == [[2, 1, 0], [5, 4, 3]]
+
+    _checkpoint(tmp_path, middle)
+    ctx.settings.ranking.order = "random"
+    last = render_stage.RenderStage().run(ctx)
+    assert last["ranking"]["seed"] == seed
+    assert [r["order"] for r in last["ranking"]["montages"]] == shuffled

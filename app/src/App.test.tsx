@@ -349,7 +349,33 @@ describe('the ranking videos are decided before CUT IT (E18-F01, D-18)', () => {
       fireEvent.click(screen.getByText('CUT IT'))
     })
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
-    expect(call?.[1]).toMatchObject({ ranking: false, rankingCount: 5 })
+    expect(call?.[1]).toMatchObject({ ranking: false, rankingCount: 5, rankingOrder: 'countdown' })
+  })
+
+  it('the play order exists only while ranking is on, defaults to countdown, and rides the enqueue (E18-F07)', async () => {
+    await mountStudio()
+    // off: the order would change nothing — §5.2, same as the count
+    expect(screen.queryByText('play order')).toBeNull()
+    fireEvent.click(screen.getByText('on'))
+    expect(screen.getByText('play order')).toBeTruthy()
+    expect(screen.getByText('countdown').className).toContain('opt-on')
+    expect(screen.queryByText(/shuffled once for this job/)).toBeNull()
+    // random says what it is: kept per job, a re-render plays the same order
+    fireEvent.click(screen.getByText('random'))
+    expect(screen.getByText('random').className).toContain('opt-on')
+    expect(screen.getByText(/shuffled once for this job and kept/)).toBeTruthy()
+
+    commands.enqueue_job = () => 'job-shuffled'
+    fireEvent.change(screen.getByPlaceholderText(/YouTube URL or a path/), {
+      target: { value: 'C:/videos/stream.mp4' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
+    expect(call?.[1]).toMatchObject({ ranking: true, rankingCount: 5, rankingOrder: 'random' })
+    // the deck sends the word and never a seed: that is python's to draw and keep
+    expect(Object.keys(call?.[1] as object)).not.toContain('seed')
   })
 })
 

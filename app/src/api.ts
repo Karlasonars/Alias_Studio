@@ -37,12 +37,13 @@ export const api = {
     letterboxFill: string,
     ranking: boolean,
     rankingCount: number,
+    rankingOrder: string,
     watermarkImage: string,
     watermarkText: string,
     story: StoryRun | null = null
   ) =>
     invoke<string>('enqueue_job', {
-      source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+      source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount, rankingOrder,
       watermarkImage, watermarkText,
       mode: story ? 'stories' : 'clips',
       storyText: story?.text ?? null,

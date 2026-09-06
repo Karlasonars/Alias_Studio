@@ -281,6 +281,7 @@ export default function App() {
       letterboxFill: string,
       ranking: boolean,
       rankingCount: number,
+      rankingOrder: string,
       watermarkImage: string,
       watermarkText: string,
       story: StoryRun | null
@@ -300,7 +301,7 @@ export default function App() {
       setEnqueueing((n) => n + 1)
       try {
         await api.enqueueJob(
-          source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
+          source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount, rankingOrder,
           watermarkImage, watermarkText, story
         )
         if (!wasIdle) {

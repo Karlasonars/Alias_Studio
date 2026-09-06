@@ -39,10 +39,17 @@ segments, so the list never moves at a cut.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import ass as ass_mod
+
+# The play orders a ranking video can have (E18-F07). `countdown` is the
+# default and what every checkpoint from before the setting existed plays.
+COUNTDOWN = "countdown"
+RANDOM = "random"
+ORDERS = (COUNTDOWN, RANDOM)
 
 TITLE_SIZE = 64        # font size of the "TOP N" line
 TITLE_LINE = 80        # its line height
@@ -95,13 +102,39 @@ def band_for(bars: list[int], count: int) -> Band:
     return Band(top=ass_mod.TOP_SAFE_PX, line_h=LINE_BOXED, count=count, boxed=True)
 
 
-def play_order(count: int) -> list[int]:
-    """Rank positions (0 = rank 1) in the order they play: a countdown, rank
-    N first and rank 1 last. The list therefore fills from the bottom up and
-    the top slot is the last reveal — the genre's hook, and what "reveal in
-    play order, not 1 to N" (D-17) implies. One pure function, not a
-    setting: flipping to source-time order is a one-line change here."""
-    return list(range(max(0, int(count)) - 1, -1, -1))
+def play_order(
+    count: int, order: str = COUNTDOWN, seed: int | None = None, video: int = 0
+) -> list[int]:
+    """Rank positions (0 = rank 1) in the order they play.
+
+    `countdown` (the default, and what every checkpoint before E18-F07
+    plays): rank N first and rank 1 last, so the list fills from the bottom
+    up and the top slot is the last reveal — the genre's hook, and what
+    "reveal in play order, not 1 to N" (D-17) implies.
+
+    `random` (E18-F07): a shuffle of the same positions, drawn from `seed`
+    and nothing else. Pure on purpose — the seed comes in, the module keeps
+    no random state and never touches the global instance — because the
+    render stage stores that seed and asks again on every re-render, and
+    "the same job re-rendered gives the same file" only holds if this
+    function is a lookup, not a draw. `video` tells the two ranking videos
+    apart (E18-F06): both derive from the ONE stored seed, so the pair is
+    reproducible together, and each gets its own shuffle rather than the
+    same one twice.
+    """
+    positions = list(range(max(0, int(count)) - 1, -1, -1))
+    if order == COUNTDOWN:
+        return positions
+    if order != RANDOM:
+        raise ValueError(f"unknown play order {order!r}; expected one of {ORDERS}")
+    if seed is None:
+        raise ValueError("a random play order needs a seed")
+    # A private generator per call. The per-video offset is what makes one
+    # seed serve two videos; anything that mixes (seed, video) into one
+    # integer would do, as long as it never changes once shuffles are on
+    # disk — a checkpoint's seed must reproduce its order forever.
+    random.Random(int(seed) + int(video)).shuffle(positions)
+    return positions
 
 
 def title_for(count: int) -> str:
@@ -137,6 +170,7 @@ def overlay_events(
     play_index: int,
     duration: float,
     labels: Sequence[str | None] | None = None,
+    order: Sequence[int] | None = None,
 ) -> str:
     """The Dialogue lines for ONE segment: the title, the backing band when
     there is no bar, and every entry 1..N in the state it has during this
@@ -144,13 +178,18 @@ def overlay_events(
     colour, faded in at the segment start), or still to come (dimmed, digits
     only). `play_index` is this segment's position in play order, 0-based.
 
+    `order` is that play order — the rank positions as play_order() gave
+    them to the caller, so the reveal follows whatever the segments actually
+    play (E18-F07). Absent, the countdown: the reveal used to compute it
+    here on its own, which was right only while there was one order.
+
     `labels[row]` is the entry text for rank row+1 (E18-F04), None or absent
     for an entry that has none. A label appears WITH its number, at the
     reveal, and stays; the entries still to come show their digits alone,
     because a pre-filled list kills the hook (D-17).
     """
     start, end = ass_mod._fmt_time(0.0), ass_mod._fmt_time(max(0.04, duration))
-    order = play_order(band.count)
+    order = list(order) if order is not None else play_order(band.count)
     lines: list[str] = []
     if band.boxed:
         h = band.bottom

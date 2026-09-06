@@ -288,6 +288,13 @@ class RankingSettings:
     # scoring already ranked — which is also why two videos need
     # select_count >= 2N, and the stage says so when they do not have it.
     count: int = 5
+    # E18-F07: the order the moments play in. "countdown" (rank N first,
+    # rank 1 last — the default, and what every snapshot without the key
+    # plays) or "random". A setting, so it is in the render fingerprint;
+    # the shuffle's seed is NOT — it is an output the render stores
+    # (render/ranking.py), because a random number must never invalidate
+    # a render and the same job re-rendered must play the same order.
+    order: str = "countdown"
 
 
 # ---------------------------------------------------------------------------
