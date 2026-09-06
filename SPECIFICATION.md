@@ -508,6 +508,24 @@ document. The story text is content, not a setting: `jobs create
 --story-file` validates it against `narrate/limits.py` before the job row
 exists and copies it into the job dir.
 
+**The story card (E20-F05, channel-card amendment).** A rounded card in the
+app's own design, laid out like a social post card but carrying the user's
+own channel: a header row (an avatar circle, `Settings.story.channel_name`
+beside it), the title in the caption preset's face sized by length, and a
+meta row carrying the narration's duration as `narrate` measured it — a real
+number placed where a post card puts engagement, so nothing on the card is
+invented. No other platform's logo or wordmark, no invented username, no
+vote, comment, share or view counts: a product constraint, not a style. The
+avatar is the watermark PNG (E19-F02), resolved by the same
+`watermark.resolve` as the mark and hashed once in the render fingerprint as
+the watermark; `render/story.py:avatar_vf` overlays it through `movie` →
+cover-scale → centre-crop → a circular `geq` alpha mask, AFTER the caption
+burn (the ASS panel would cover it otherwise) and only while the card is up,
+ending where the card's fade-out begins. No PNG, or a missing one, and the
+ASS draws the channel's initial on the preset's accent colour; no name and
+no PNG, and there is no header. `channel_name` and `card_version` (now 2)
+are in the story render's fingerprint; the avatar has no key of its own.
+
 ## 5. The checkpoint contract
 
 This is the part most likely to bite a new contributor.

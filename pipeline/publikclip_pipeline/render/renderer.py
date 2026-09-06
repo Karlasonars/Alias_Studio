@@ -352,6 +352,7 @@ def render_story(
     timeout: float = 1800.0,
     hardware_encode: bool = False,
     overlay_vf: str = "",
+    after_vf: str = "",
 ) -> None:
     """One story (E20-F03), one ffmpeg run: the background looped or
     trimmed to `duration`, its own audio never mapped, covered and
@@ -363,7 +364,11 @@ def render_story(
     `-stream_loop -1` reads the background forever and `-t` on the output
     stops the file at the story's length, which is both the loop for a
     short background and the trim for a long one. `apad` keeps audio
-    flowing under the tail after the narrator's last word."""
+    flowing under the tail after the narrator's last word.
+
+    `overlay_vf` goes BEFORE the caption burn (the watermark, which the
+    captions draw over); `after_vf` goes AFTER it (the card's avatar,
+    E20-F05, which must sit on the panel the captions document draws)."""
     vf_parts = [cover_vf(), "setsar=1"]
     if overlay_vf:
         vf_parts.append(overlay_vf)
@@ -372,6 +377,8 @@ def render_story(
         if fonts_dir is not None:
             sub += f":fontsdir={_q(fonts_dir)}"
         vf_parts.append(sub)
+    if after_vf:
+        vf_parts.append(after_vf)
     vcodec = video_encoder_args(hardware_encode)
     args = [
         ffmpeg_bin.ffmpeg(), "-y", "-v", "error",

@@ -1,6 +1,6 @@
 # Alias Studio — Produkta prasību dokumentācija (PRD)
 
-**Versija:** 1.10 · **Datums:** 2026-09-06 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
+**Versija:** 1.11 · **Datums:** 2026-09-06 · **Statuss:** Vārti un higiēna ieviesti; gatavs pirmajam agentam
 **Autors:** produkta komanda · **Bāzes kods:** commit `5369f34` (auditēts 2026-08-22)
 **Saistītie dokumenti:** [SPECIFICATION.md](SPECIFICATION.md) (inženiertehniskā atsauce), [README.md](README.md), [VENDORED-LICENSES.md](VENDORED-LICENSES.md)
 
@@ -2200,14 +2200,16 @@ Bez šī E17 ir tikai variantu ģenerators.
 
 ---
 
-**E20-F05 · Stāsta kartīte** · `P1` · P1, P2
+**E20-F05 · Stāsta kartīte — kanāla kartīte** · `P1` · P1, P2
 
 *Pieņemšanas kritēriji:*
-- Lietotnes **pašas** dizains: caurspīdīgs tumšs panelis kadra vidējā trešdaļā, akcenta līnija preseta aktīvajā krāsā, virsraksts preseta fontā, izmērs pēc garuma.
-- **Bez svešas zīmolvedības, bez logo, bez izdomātiem balsojumu vai komentāru skaitļiem.** Tas ir produkta ierobežojums, ne stila izvēle: rīks, kas ģenerē citas platformas hromu ar safabricētiem iesaistes skaitļiem, ir viltotu ierakstu ģenerators. Ja formātam šķiet, ka tas to prasa — nē.
-- Kartīte redzama, kamēr stāstītājs lasa virsrakstu; robeža nāk no `narrate` kontrolpunkta, ne no fiksēta sekunžu skaita. Subtitri sākas ar pirmo pamatteksta vārdu.
-- Iet caur to pašu ASS dokumentu kā subtitri — kā ranga saraksts (E18-F03) un iededzinātais virsraksts (E19-F01): bez otras subtitru pārejas, bez `drawtext`.
-- Kartītes zīmējuma versija ir renderēšanas pirkstu nospiedumā, lai zīmējuma maiņa pārrenderē kešotos stāstus.
+- Lietotnes **pašas** dizains, pazīstamajā sociālā ieraksta kartītes formā, bet ar **lietotāja paša kanālu**: noapaļota tumša kartīte kadra vidū, no augšas uz leju — galvenes rinda (avatāra aplis kreisajā pusē, kanāla nosaukums tam blakus), stāsta virsraksts preseta fontā ar izmēru pēc garuma, un meta rinda tur, kur sociālā kartīte liktu iesaisti: stāsta **ilgums** (m:ss), ko `narrate` posms jau zina. Forma ir vispārīga saskarne, būvēta pēc apraksta — neviena trešās puses dizaina fails netiek reproducēts (AGPL produktā tas būtu licences jautājums, kas mums nav vajadzīgs).
+- **Bez svešas zīmolvedības, bez citas platformas logo vai vārdzīmes, bez izdomāta lietotājvārda, bez izdomātiem balsojumu, komentāru, dalīšanas vai skatījumu skaitļiem.** Tas ir produkta ierobežojums, ne stila izvēle: rīks, kas ģenerē citas platformas hromu ar safabricētiem iesaistes skaitļiem, ir viltotu ierakstu ģenerators. Ja formātam šķiet, ka tas to prasa — nē. Meta rinda nes īsto ilgumu tieši tāpēc, lai izkārtojums nevienu nekārdinātu to aizpildīt ar safabricētu iesaisti: katrs skaitlis uz kartītes ir tāds, ko darbs pats izrēķinājis.
+- Avatāra aplis ir aizpildīts ar lietotāja attēlu — **to pašu ūdenszīmes PNG**, ko [E19-F02](#e19--pārklājumi-uz-klipa) jau importē un kopē `PUBLIKCLIP_HOME`: tas pats fails, tas pats sha256 pirkstu nospiedumā, bez otra importa ceļa un bez atsevišķa iestatījuma, lai kartīte un ūdenszīme nekad nevarētu nesaskanēt par to, kurš fails tas ir. Apļa maska, centrēti apgriezts kvadrātā. Bez ūdenszīmes — kanāla nosaukuma **iniciālis** uz preseta akcenta krāsas (§5.9): nekad avārija, nekad tukšs aplis. Bez nosaukuma un bez attēla — galvenes rindas nav.
+- `story.channel_name` ir darba līmeņa iestatījums četrās vietās (§5.1): panelī blakus ūdenszīmei, `--channel-name` uz `run`, `resume` un `jobs create`, renderēšanas pirkstu nospiedumā. Nosaukuma maiņa pārrenderē; nekā nemaiņa — ne.
+- Kartīte redzama, kamēr stāstītājs lasa virsrakstu; robeža nāk no `narrate` kontrolpunkta, ne no fiksēta sekunžu skaita. Subtitri sākas ar pirmo pamatteksta vārdu. Ilgums nāk no jau uzģenerētā ierunājuma, ne no jaunas zondes.
+- Iet caur to pašu ASS dokumentu kā subtitri — kā ranga saraksts (E18-F03) un iededzinātais virsraksts (E19-F01): bez otras subtitru pārejas, bez `drawtext`. Vienīgais izņēmums ir avatāra attēls, ko ASS nespēj nest: to `ffmpeg` uzliek pēc subtitru iededzināšanas, tikai kartītes laikā.
+- Kartītes zīmējuma versija ir renderēšanas pirkstu nospiedumā, lai zīmējuma maiņa pārrenderē kešotos stāstus. Kanāla kartīte to paceļ: katrs līdz tam renderēts stāsts pārrenderējas vienreiz, un neviens darbs nerenderē kartīti, kuras kodā vairs nav.
 
 ---
 
@@ -3598,6 +3600,7 @@ Lēmumi, kas pieņemti, rakstot šo dokumentu, un to pamatojums. Papildināms tu
 |---|---|---|
 | 1.0 | 2026-08-22 | Sākotnējā redakcija, rakstīta pret `SPECIFICATION.md` (commit `3dc43c1`) |
 | 1.1 | 2026-08-22 | Q1 un Q2 atbildēti. Pievienota [2.6](#26-izplatīšanas-modelis-bezmaksas-un-atvērts) (bezmaksas modelis), D-09…D-11, R15 (uzturētāja izdegšana), Q9–Q10. Pārstrādāts [E1-F02](#e1--uzstādīšana-un-pirmā-palaišana) (Ollama kļūst par galveno LLM ceļu) un [E16-F02](#e16--izplatīšana-licences-un-kopiena) (parakstīšanas atkāpšanās ceļš). |
+| 1.11 | 2026-09-06 | **[E20-F05](#e20--stāstu-režīms) grozījums — stāsta kartīte kļūst par kanāla kartīti.** Pazīstamā sociālā ieraksta kartītes forma ar lietotāja paša kanālu: galvene (avatārs, kanāla nosaukums), virsraksts, meta rinda ar stāsta īsto ilgumu. Avatārs ir ūdenszīmes PNG ([E19-F02](#e19--pārklājumi-uz-klipa)) — tas pats fails, tas pats hešs, bez otra iestatījuma; bez tā — iniciālis. Jauns iestatījums `story.channel_name` četrās vietās. Aizliegums pret svešu zīmolvedību un izdomātiem skaitļiem paliek un ir iemesls, kāpēc kartīte izskatās tā, kā izskatās. Zīmējuma versija pacelta. Jaunas lēmumu žurnāla rindas nav. |
 | 1.10 | 2026-09-06 | **[E18-F07](#e18--ranga-video) — ranga video momentu spēlēšanas secība.** Atpakaļskaitīšana (noklusējums, un tas, ko spēlē katrs kontrolpunkts uz diska) vai nejauša secība, izvēlēta panelī pirms CUT IT blakus pārējām ranga vadīklām. Nejaušā secība ir atkārtojama: sēkla tiek izlozēta vienreiz, glabāta kontrolpunktā kā izvade (ne pirkstu nospiedumā), un abi ranga video dabū katrs savu secību no tās vienas sēklas. Pārjaukšanas pogas nav. Jaunas lēmumu žurnāla rindas nav — tas precizē E18, nevis ko atceļ; D-17 "atklāšana spēlēšanas secībā" paliek un tagad seko arī nejaušajai. |
 | 1.9 | 2026-09-06 | **Jauna epika [E20](#e20--stāstu-režīms) — Stāstu režīms** (D-19, D-20). Otra posmu ķēde `ingest → narrate → asr → render`, izvēlēta panelī virs CUT IT kā `Clips \| Stories`; režīms ir `Settings` lauks momentuzņēmumā, ieraksts bez tā ir klipu darbs. Piecas prasības: teksta ievade bez ielādes no vietnēm un ar kopiju darba mapē, ar aplēsto ilgumu un 500/1500 vārdu robežām kā sākuma vērtībām ([E20-F01](#e20--stāstu-režīms)); Kokoro stāstītājs no lokāliem svariem ar heša, balss un ātruma pirkstu nospiedumu ([E20-F02](#e20--stāstu-režīms)); lietotāja fons ciklā vai apgriezts, bez skaņas, centrēti apgriezts caur `cover_vf` ([E20-F03](#e20--stāstu-režīms)); subtitri no `asr` pār ierunājumu ar `story` presetu pa vienam vārdam ([E20-F04](#e20--stāstu-režīms)); kartīte lietotnes pašas dizainā bez svešas hromas un izdomātiem skaitļiem ([E20-F05](#e20--stāstu-režīms)). [2.5](#25-ko-mēs-apzināti-nedarām) precizēta: sintētisks stāstītājs atļauts, balss klonēšana — ne. |
 | 1.8 | 2026-09-05 | **Jauna epika [E19](#e19--pārklājumi-uz-klipa) — Pārklājumi uz klipa.** Divas prasības: [E19-F01](#e19--pārklājumi-uz-klipa) — redaktorā izvēlēts virsraksta variants tiek iededzināts klipā visā tā garumā, tikai parastajiem klipiem, kā stils, ko darba līmeņa pārkrāsošana patur; [E19-F02](#e19--pārklājumi-uz-klipa) — PNG vai vārda ūdenszīme apakšā centrā uz katra izvades faila, arī ranga video, ar paša faila saturu renderēšanas pirkstu nospiedumā. Jaunas lēmumu žurnāla rindas nav — D-18 paliek spēkā. |

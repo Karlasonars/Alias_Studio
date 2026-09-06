@@ -107,6 +107,10 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
   const [voice, setVoice] = useState('')
   const [speed, setSpeed] = useState(1.0)
   const [storyCaptions, setStoryCaptions] = useState('story')
+  // E20-F05: the channel name in the story card's header. The avatar
+  // beside it is the watermark image chosen below — the same file, never
+  // a second picker — so this is the only card field the deck carries.
+  const [channelName, setChannelName] = useState('')
   // python's numbers (narrate/limits.py) — the deck never carries a copy
   const [limits, setLimits] = useState<StoryLimits | null>(null)
   const [storyNotice, setStoryNotice] = useState<string | null>(null)
@@ -170,10 +174,13 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     api
       .settingsGet()
       .then((p) => {
-        const story = (p.defaults?.story ?? {}) as { voice?: string; speed?: number; background?: string }
+        const story = (p.defaults?.story ?? {}) as {
+          voice?: string; speed?: number; background?: string; channel_name?: string
+        }
         if (story.voice) setVoice(story.voice)
         if (typeof story.speed === 'number') setSpeed(story.speed)
         if (story.background) setBackground((b) => b || story.background!)
+        if (story.channel_name) setChannelName((c) => c || story.channel_name!)
       })
       .catch(() => {})
   }, [mode, limits])
@@ -293,7 +300,7 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
         background.trim(), llm, storyCaptions, 0, 'black', false, rankingCount, rankingOrder,
         wmKind === 'image' ? wmImage : '',
         wmKind === 'text' ? wmText.trim() : '',
-        { text: storyText, voice, speed }
+        { text: storyText, voice, speed, channelName: channelName.trim() }
       )
       // the background stays (the next story usually reuses it); the text
       // goes, exactly as the URL field clears after a cut
@@ -685,6 +692,30 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
                   {rankingOrder === 'random' && (
                     <>; shuffled once for this job and kept, so a re-render plays the same order</>
                   )}
+                </p>
+              )}
+              {/* E20-F05: the story card's header — the user's own channel
+                  name, beside the watermark because the watermark image IS
+                  the card's avatar. Nothing else on the card is chosen
+                  here: the title is the story's and the length is the
+                  narration's. */}
+              {mode === 'stories' && (
+                <div className="opt-group">
+                  <span className="opt-label">channel</span>
+                  <input
+                    className="opt-input mono"
+                    value={channelName}
+                    onChange={(e) => setChannelName(e.target.value)}
+                    placeholder="your channel"
+                    aria-label="channel name"
+                  />
+                </div>
+              )}
+              {mode === 'stories' && (
+                <p className="opt-hint">
+                  the story card: this name in its header, your watermark image as the avatar
+                  {wmKind !== 'image' && ' (none chosen — the card shows the initial instead)'}
+                  , the title, and the story's real length; no other branding, no invented counts
                 </p>
               )}
               {/* E19-F02: a picture or a word on every output file, clips

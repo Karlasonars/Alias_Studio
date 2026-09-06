@@ -470,7 +470,12 @@ function storyCommands(background = 'C:/bg/parkour.mp4') {
   commands.settings_tool = (args) => {
     const verb = (args?.args as string[])[0]
     if (verb === 'story-limits') return STORY_LIMITS
-    if (verb === 'get') return { ok: true, defaults: { story: { voice: 'af_heart', speed: 1, background } } }
+    if (verb === 'get') {
+      return {
+        ok: true,
+        defaults: { story: { voice: 'af_heart', speed: 1, background, channel_name: 'Alias' } }
+      }
+    }
     if (verb === 'remember-background') return { ok: true, defaults: {} }
     throw new Error(`unexpected settings verb ${verb}`)
   }
@@ -503,6 +508,14 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     expect(screen.getByText(/7 words · about/)).toBeTruthy()
     fireEvent.click(screen.getByText('George'))
     fireEvent.click(screen.getByText('1.2×'))
+    // E20-F05: the channel name comes prefilled from the settings default,
+    // sits beside the watermark, and says what the card is made of
+    const channel = screen.getByLabelText('channel name') as HTMLInputElement
+    expect(channel.value).toBe('Alias')
+    expect(screen.getByText(/your watermark image as the avatar/)).toBeTruthy()
+    expect(screen.getByText(/none chosen — the card shows the initial instead/)).toBeTruthy()
+    expect(screen.getByText(/no other branding, no invented counts/)).toBeTruthy()
+    fireEvent.change(channel, { target: { value: ' Alias Studio ' } })
     await act(async () => {
       fireEvent.click(screen.getByText('CUT IT'))
     })
@@ -514,6 +527,10 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     expect(args.voice).toBe('bm_george')
     expect(args.speed).toBe(1.2)
     expect(args.captions).toBe('story')
+    expect(args.channelName).toBe('Alias Studio')
+    // the avatar is never sent: it is the watermark image, one field
+    expect(Object.keys(args)).not.toContain('avatar')
+    expect(args.watermarkImage).toBe('')
     // the text clears after the cut, the background stays for the next story
     expect((screen.getByLabelText('story text') as HTMLTextAreaElement).value).toBe('')
     expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
@@ -547,12 +564,14 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     expect(screen.getByText('voice')).toBeTruthy()
     expect(screen.getByText('speed')).toBeTruthy()
     expect(screen.getByText('watermark')).toBeTruthy()
+    expect(screen.getByLabelText('channel name')).toBeTruthy()  // E20-F05: the card's header
     // and back on the clips deck they return, the story panel goes
     await act(async () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Clips' }))
     })
     expect(screen.getByText('brain')).toBeTruthy()
     expect(screen.queryByLabelText('story text')).toBeNull()
+    expect(screen.queryByLabelText('channel name')).toBeNull()  // a clip has no card (§5.2)
   })
 
   it('draws the running chain\'s rows from the job event, whichever chain it is', async () => {

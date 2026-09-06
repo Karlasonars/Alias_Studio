@@ -144,6 +144,12 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     speed = getattr(args, "speed", None)
     if speed is not None:
         settings.story.speed = float(speed)
+    # E20-F05. `is not None`, never truthiness: "" is an explicit "no
+    # header", sent by the deck so a job never inherits a name it did not
+    # show, and `resume --channel-name ""` clears one.
+    channel_name = getattr(args, "channel_name", None)
+    if channel_name is not None:
+        settings.story.channel_name = channel_name.strip()
     return settings
 
 
@@ -231,6 +237,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "watermark_text", None) is not None
         or getattr(args, "voice", None)
         or getattr(args, "speed", None) is not None
+        or getattr(args, "channel_name", None) is not None
     ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -922,6 +929,11 @@ def _add_story_flags(parser: argparse.ArgumentParser, with_text: bool) -> None:
     parser.add_argument(
         "--speed", type=float, default=None,
         help="stories mode: narration speed multiplier, 1.0 = the voice's natural pace",
+    )
+    parser.add_argument(
+        "--channel-name", dest="channel_name", default=None,
+        help="stories mode: your channel's name in the story card's header; '' for no header "
+             "(the avatar beside it is the watermark image)",
     )
 
 
