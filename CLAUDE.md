@@ -214,7 +214,7 @@ is how a shipped setting ended up dead:
 | `camera` | two strict `!=` on `__dict__` (`camera` minus `letterbox_fill`, which is render-only; `retention`) **plus `clip_framing`, which reads `clip_edits.json` off disk** — the only fingerprint that reaches outside `Settings` | no |
 | `render` | strict comparisons, camera versioned: checkpoints with a `fills` map (E6-F09) compare `camera_settings` minus `letterbox_fill` plus the **resolved** per-clip fill; older checkpoints keep the full strict compare | no |
 | `narrate` (stories only) | `narration.wav` exists + `fingerprint_ok` on the story text's sha256, the voice and the speed | yes |
-| `render` (stories, `render/story.py`) | `story: True` marker first — a clip checkpoint never serves a story job — then strict compares on caption preset, resolved caption style, loudness, encoder, watermark (which is also the card's avatar — one file, one hash), the channel name and the card's drawing version; outputs exist | no |
+| `render` (stories, `render/story.py`) | `story: True` marker first — a clip checkpoint never serves a story job — then strict compares on caption preset, resolved caption style, loudness, encoder, watermark, the card's avatar (its own file, its own hash — E20-F06; never the watermark's), the channel name and the card's drawing version; outputs exist | no |
 
 **Two chains over one runner (E20, D-19).** `run_stages()` takes its list as a
 parameter; `chains.py` names the lists and `cli._stages(mode)` builds them.

@@ -868,6 +868,72 @@ someone links a montage: by then the bad row is in the set and nothing marks
 it. Found while scoping E18-F05, where the PR named it as a fifth reader,
 adjacent and untouched; recorded here by E19's instruction rather than fixed.
 
+### T-44 · The story render tests are green for a reason unrelated to the code  [P1, found in E20-F05]
+
+```
+Blocked by  nothing
+Touches     render/ffmpeg_bin.py (the lru_cache'd resolver and the PATH
+            fallback), tests/test_stories.py and tests/test_overlays.py
+            (the isolated_home fixture and the synthetic-ffmpeg helpers),
+            CLAUDE.md §3 (the "needs ffmpeg on PATH" claim)
+Proves it   `uv run pytest -q tests/test_stories.py` alone, on a machine
+            whose only ffmpeg is the app's managed build, passes — today
+            it fails with FileNotFoundError [WinError 2] on every test
+            that spawns ffmpeg, and passes only inside the full suite
+Watch out   the fix is not "put ffmpeg on the owner's PATH". The suite
+            must resolve the binary the way the app does, or say honestly
+            that it needs one on PATH and skip when there is none. Do not
+            weaken the isolated_home fixture: it exists so a test never
+            writes into the real PUBLIKCLIP_HOME
+```
+
+`ffmpeg_bin.ffmpeg()` prefers the managed static build under
+`PUBLIKCLIP_HOME/bin` and falls back to bare `ffmpeg` on PATH, and the answer
+is `lru_cache`d for the process. `test_stories.py` and parts of
+`test_overlays.py` point `PUBLIKCLIP_HOME` at a tmp dir (`isolated_home`), so
+run alone they resolve to bare `ffmpeg` — which on the owner's machine does
+not exist: the only ffmpeg there is the managed build under the real home.
+Inside the full suite an earlier test primes the cache against the real home
+first, every later test inherits that path, and the suite is green. CLAUDE.md
+§3 says the suite "needs ffmpeg on PATH", which is not true of the owner's
+machine and not why it passes. The story render tests — the ones that
+verify real pixels — are therefore green for a reason unrelated to the code
+under test, and a reordering, a `-k`, or a `-p no:randomly` away from red.
+Found in E20-F05 (2026-09-06), filed as agent memory there; recorded here as
+work by E20-F06's instruction. Not fixed in E20-F06: it is a test-harness
+change with its own blast radius, not a card change.
+
+### T-45 · `settings story-read` returns arbitrary file contents to the webview  [P2, found in E20-F05]
+
+```
+Blocked by  nothing
+Touches     cli.py (the story-read verb), app/src/api.ts:storyRead and its
+            one caller in Studio.tsx, main.rs (settings_tool is a plain
+            passthrough)
+Proves it   a test that `settings story-read <path>` refuses anything but
+            a UTF-8 .txt under a size cap — or, if the verb stays open, a
+            written statement in SPECIFICATION.md of why the webview may
+            be handed any readable file on the machine, and what the
+            renderer must never do for that to stay safe
+Watch out   the deck's story field needs exactly one thing from this verb:
+            the text of a .txt the user just picked in a dialog. The
+            narrowest verb that does that is the fix; do not build a
+            general file API and then restrict it
+```
+
+`settings story-read <path>` (E20-F01) reads a file the deck names and prints
+its contents as JSON for the webview to put in the story field. It is the
+first CLI verb whose output is arbitrary file contents chosen by the caller,
+and the shell forwards `settings_tool` arguments unchanged. Not exploitable
+today: the only caller is the deck, the path comes from the OS file dialog,
+and the app renders no untrusted HTML and loads no remote URL. It becomes
+exploitable the day either of those stops being true — a webview that can be
+made to call `invoke('settings_tool', ['story-read', '~/.ssh/id_rsa'])` reads
+that file. The fix is cheap now (a .txt suffix check, a size cap, UTF-8 only,
+all in python where it is testable) and gets less cheap with every verb that
+copies this shape. Found in E20-F05 (2026-09-06); recorded here as work by
+E20-F06's instruction rather than fixed there.
+
 ### T-09 · E1-F02 — Onboarding: the gate that leads through     [P0]
 
 ```
