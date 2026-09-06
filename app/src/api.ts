@@ -17,12 +17,18 @@ import type {
   SettingsPayload,
   SetupState,
   SetupStatusResult,
+  StoryLimits,
+  StoryRead,
+  StoryRun,
   SyncSummary,
   TitlesResult,
   WatermarkImportResult
 } from './types'
 
 export const api = {
+  // E20: `story` is null for a clips job. For a story job it carries the
+  // mode, the text (transport only — python validates it and copies it
+  // into the job dir), the voice and the speed.
   enqueueJob: (
     source: string,
     llm: string,
@@ -32,12 +38,37 @@ export const api = {
     ranking: boolean,
     rankingCount: number,
     watermarkImage: string,
-    watermarkText: string
+    watermarkText: string,
+    story: StoryRun | null = null
   ) =>
     invoke<string>('enqueue_job', {
       source, llm, captions, gameplayAmount, letterboxFill, ranking, rankingCount,
-      watermarkImage, watermarkText
+      watermarkImage, watermarkText,
+      mode: story ? 'stories' : 'clips',
+      storyText: story?.text ?? null,
+      voice: story?.voice ?? null,
+      speed: story?.speed ?? null
     }),
+  // E20-F01: the deck's numbers come from the module that applies them
+  // (narrate/limits.py) — never a copy in this tree.
+  storyLimits: () => invoke<StoryLimits>('settings_tool', { args: ['story-limits'] }),
+  // E20-F01: a .txt the user picked, read by python into the deck's field.
+  storyRead: (path: string) => invoke<StoryRead>('settings_tool', { args: ['story-read', path] }),
+  // E20 (Q2): the last-used background is a real setting.
+  rememberBackground: (path: string) =>
+    invoke<SettingsPayload>('settings_tool', { args: ['remember-background', path] }),
+  pickBackgroundVideo: (): Promise<string | null> =>
+    openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v'] }]
+    }) as Promise<string | null>,
+  pickStoryFile: (): Promise<string | null> =>
+    openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Text', extensions: ['txt', 'md'] }]
+    }) as Promise<string | null>,
   // E19-F02: the PNG picker. A plugin call rather than an invoke, but a
   // Tauri boundary crossing all the same, so it lives here with the rest
   // (the plugin and its `dialog:allow-open` capability were already in

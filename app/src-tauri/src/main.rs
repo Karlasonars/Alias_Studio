@@ -635,8 +635,48 @@ async fn enqueue_job(
     ranking_count: Option<u32>,
     watermark_image: Option<String>,
     watermark_text: Option<String>,
+    mode: Option<String>,
+    story_text: Option<String>,
+    voice: Option<String>,
+    speed: Option<f64>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
+    // E20 (D-19): which chain. Forwarded as given; python owns the choices
+    // list and refuses an unknown one.
+    if let Some(m) = mode {
+        args.push("--mode".to_string());
+        args.push(m);
+    }
+    // E20-F01: the story text. Transport only — the deck holds the text,
+    // python validates it and copies it into the job dir (`jobs create
+    // --story-file`). A temp file rather than an argument because a pasted
+    // story can exceed what a Windows command line carries, and the
+    // refusal for that belongs to python's word limit, not to CreateProcess.
+    let story_tmp = match story_text {
+        Some(text) => {
+            let path = std::env::temp_dir().join(format!(
+                "alias-studio-story-{}-{}.txt",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            fs::write(&path, text).map_err(|e| format!("could not stage the story text: {e}"))?;
+            args.push("--story-file".to_string());
+            args.push(path.to_string_lossy().to_string());
+            Some(path)
+        }
+        None => None,
+    };
+    if let Some(v) = voice {
+        args.push("--voice".to_string());
+        args.push(v);
+    }
+    if let Some(s) = speed {
+        args.push("--speed".to_string());
+        args.push(s.to_string());
+    }
     if let Some(mode) = llm {
         args.push("--llm".to_string());
         args.push(mode);
@@ -675,7 +715,16 @@ async fn enqueue_job(
         args.push("--watermark-text".to_string());
         args.push(text);
     }
-    let created = one_shot_json(&args).ok_or_else(|| "enqueue produced no answer".to_string())?;
+    let created = one_shot_json(&args);
+    if let Some(path) = story_tmp {
+        let _ = fs::remove_file(path); // python has its own copy by now, or refused
+    }
+    let created = created.ok_or_else(|| "enqueue produced no answer".to_string())?;
+    // A refusal (E20: a story over the limit, a missing file) arrives as
+    // {ok:false, error}; the deck shows that sentence where the press was.
+    if let Some(err) = created["error"].as_str() {
+        return Err(err.to_string());
+    }
     let job_id = created["job_id"]
         .as_str()
         .ok_or_else(|| "enqueue returned no job id".to_string())?
@@ -756,6 +805,8 @@ fn job_results(job_id: String) -> Result<Value, String> {
         "job_id": job_id,
         "dir": dir.to_string_lossy(),
         "ingest": read_stage("ingest"),
+        // E20: the story's title and where its card ends; Null for a clips job
+        "narrate": read_stage("narrate"),
         "score": read_stage("score"),
         "camera": read_stage("camera"),
         "render": read_stage("render"),

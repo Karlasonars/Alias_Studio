@@ -423,3 +423,137 @@ describe('the watermark is decided before CUT IT (E19-F02)', () => {
     expect(screen.getByText('word').className).toContain('opt-on')
   })
 })
+
+/* E20 — Stories mode on the deck (D-19: a second chain, chosen above CUT
+ * IT). Pinned here rather than hand-tested: the enqueue arguments, the
+ * limits from python's numbers, the chain rows from the job event, and the
+ * absence of the clips-only controls on the stories deck (§5.2). */
+const STORY_LIMITS = {
+  ok: true,
+  max_words: 1500,
+  warn_words: 500,
+  words_per_minute: 185,
+  voices: [
+    { id: 'af_heart', label: 'Heart · American, warm' },
+    { id: 'bm_george', label: 'George · British, measured' }
+  ],
+  default_voice: 'af_heart'
+}
+
+function storyCommands(background = 'C:/bg/parkour.mp4') {
+  commands.settings_tool = (args) => {
+    const verb = (args?.args as string[])[0]
+    if (verb === 'story-limits') return STORY_LIMITS
+    if (verb === 'get') return { ok: true, defaults: { story: { voice: 'af_heart', speed: 1, background } } }
+    if (verb === 'remember-background') return { ok: true, defaults: {} }
+    throw new Error(`unexpected settings verb ${verb}`)
+  }
+}
+
+async function openStories() {
+  await mountStudio()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('tab', { name: 'Stories' }))
+  })
+  // the limits and the saved defaults arrive
+  await screen.findByLabelText('story text')
+  await act(async () => {})
+}
+
+const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+
+describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
+  it('enqueues the story with the mode, the text, the voice and the speed, over the remembered background', async () => {
+    storyCommands()
+    commands.enqueue_job = () => 'job-story'
+    await openStories()
+    expect(screen.getByText(/TELL IT/)).toBeTruthy()
+    // Q2: the last-used background is a setting and comes back prefilled
+    expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
+
+    fireEvent.change(screen.getByLabelText('story text'), {
+      target: { value: 'The chair\n\nNobody had moved the chair.' }
+    })
+    expect(screen.getByText(/7 words · about/)).toBeTruthy()
+    fireEvent.click(screen.getByText('George'))
+    fireEvent.click(screen.getByText('1.2×'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === 'enqueue_job')
+    const args = call?.[1] as Record<string, unknown>
+    expect(args.mode).toBe('stories')
+    expect(args.source).toBe('C:/bg/parkour.mp4')
+    expect(args.storyText).toBe('The chair\n\nNobody had moved the chair.')
+    expect(args.voice).toBe('bm_george')
+    expect(args.speed).toBe(1.2)
+    expect(args.captions).toBe('story')
+    // the text clears after the cut, the background stays for the next story
+    expect((screen.getByLabelText('story text') as HTMLTextAreaElement).value).toBe('')
+    expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
+  })
+
+  it('refuses above the word limit with the limit named, and warns above the soft one', async () => {
+    storyCommands()
+    await openStories()
+    const text = screen.getByLabelText('story text')
+    fireEvent.change(text, { target: { value: words(1501) } })
+    expect(screen.getByText(/the limit is 1500/)).toBeTruthy()
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(text, { target: { value: words(501) } })
+    expect(screen.queryByText(/the limit is 1500/)).toBeNull()
+    expect(screen.getByText(/Stories under 500 words tend to hold better/)).toBeTruthy()
+    expect(screen.getByText(/501 words · about 2 min 42 s of narration/)).toBeTruthy()
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(false)
+
+    // nothing to narrate, nothing to cut
+    fireEvent.change(text, { target: { value: '   ' } })
+    expect((screen.getByText('CUT IT') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('does not show the clips-only controls on the stories deck (§5.2)', async () => {
+    storyCommands()
+    await openStories()
+    expect(screen.queryByText('brain')).toBeNull()
+    expect(screen.queryByText('framing')).toBeNull()
+    expect(screen.queryByText('ranking videos')).toBeNull()
+    expect(screen.getByText('voice')).toBeTruthy()
+    expect(screen.getByText('speed')).toBeTruthy()
+    expect(screen.getByText('watermark')).toBeTruthy()
+    // and back on the clips deck they return, the story panel goes
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Clips' }))
+    })
+    expect(screen.getByText('brain')).toBeTruthy()
+    expect(screen.queryByLabelText('story text')).toBeNull()
+  })
+
+  it('draws the running chain\'s rows from the job event, whichever chain it is', async () => {
+    await mountStudio()
+    await pipelineEvent({ event: 'job', job_id: 'job-story', mode: 'stories' })
+    await pipelineEvent({ event: 'progress', stage: 'narrate', fraction: -1, message: 'Narrating…' })
+    expect(document.querySelectorAll('.deck-row').length).toBe(4)
+    expect(screen.getByText('NARRATE')).toBeTruthy()
+    expect(screen.queryByText('SPEAKERS')).toBeNull()
+
+    await pipelineEvent({ event: 'result', ok: false, error: 'stopped' })
+    // a job event without a mode is a clips job: every job on disk today
+    await pipelineEvent({ event: 'job', job_id: 'job-clips' })
+    expect(document.querySelectorAll('.deck-row').length).toBe(8)
+    expect(screen.queryByText('NARRATE')).toBeNull()
+  })
+
+  it('shows a refused story where the press was', async () => {
+    storyCommands()
+    commands.enqueue_job = () => {
+      throw new Error('The story is 1600 words; the limit is 1500.')
+    }
+    await openStories()
+    fireEvent.change(screen.getByLabelText('story text'), { target: { value: 'A title\nsome words' } })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    expect(screen.getAllByText(/the limit is 1500/).length).toBeGreaterThan(0)
+  })
+})

@@ -429,6 +429,38 @@ body {
 }
 .brand-credit-link:hover { color: var(--text); }
 
+/* E20 (D-19): the chain switch above CUT IT — two tabs, the same pill
+   language as the options under it, but larger and alone on their row so
+   they read as the first choice, not one more option */
+.mode-switch { display: flex; gap: 8px; margin-bottom: 18px; }
+.mode-tab { font-size: 12px; padding: 8px 18px; letter-spacing: 0.12em; text-transform: uppercase; }
+/* the stories panel: background row, the text, its line of facts */
+.story-panel { display: flex; flex-direction: column; gap: 12px; max-width: 780px; }
+.story-text {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom: 2px solid var(--faint);
+  color: var(--text);
+  padding: 14px 18px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+.story-text:focus { border-bottom-color: var(--amber); }
+.story-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.story-refusal { color: var(--amber); }
 .input-row { display: flex; gap: 12px; max-width: 780px; }
 .input-row input {
   flex: 1;

@@ -539,6 +539,32 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(json.dumps(limits.limits_payload()))
         return 0
 
+    if args.settings_cmd == "story-read":
+        # E20-F01: a .txt the user picked, read for the deck's textarea so
+        # the estimate and the limits apply to it exactly as to pasted
+        # text. The frontend has no file access of its own; python reads
+        # it and the deck edits it like anything pasted. The tool never
+        # fetches text from anywhere else.
+        from .narrate import limits
+
+        path = Path(args.path).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": f"not found: {args.path}"}))
+            return 1
+        except UnicodeDecodeError:
+            print(json.dumps({"ok": False, "error": f"not a UTF-8 text file: {path.name}"}))
+            return 1
+        except OSError as err:
+            print(json.dumps({"ok": False, "error": f"could not read {path.name}: {err}"}))
+            return 1
+        print(json.dumps({
+            "ok": True, "text": text, "name": path.name, "words": limits.word_count(text),
+            "refusal": limits.check(text), "warning": limits.warning(text),
+        }))
+        return 0
+
     if args.settings_cmd == "remember-background":
         # E20 (Q2): the last-used background is a real setting. The deck
         # calls this on every pick; a missing file is refused so a stale
@@ -1028,6 +1054,10 @@ def main(argv: list[str] | None = None) -> int:
         "story-limits",
         help="the story word limits, the words-per-minute estimate and the voices (E20)",
     )
+    p_sr = set_sub.add_parser(
+        "story-read", help="read a UTF-8 .txt for the deck's story field, with its word count (E20)"
+    )
+    p_sr.add_argument("path")
     p_bg = set_sub.add_parser(
         "remember-background",
         help="save a background video path as the default the next story starts from (E20)",

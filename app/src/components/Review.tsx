@@ -10,6 +10,8 @@ import ClipEditor from './ClipEditor'
  */
 
 const RESTYLE_PRESETS = ['classic', 'beast', 'hormozi', 'minimal', 'karaoke-pop']
+// E20-F04: the story's own preset leads the list on a story job.
+const STORY_RESTYLE_PRESETS = ['story', ...RESTYLE_PRESETS]
 const CAMERA_MODES: [string, string][] = [
   ['cut', 'hard cut on speaker change'],
   ['pan', 'eased pan between speakers'],
@@ -19,7 +21,10 @@ const CAMERA_MODES: [string, string][] = [
 interface Props {
   results: JobResults
   onBack: () => void
-  onRestyle: (captions: string, camera: string, gameplayAmount: number) => void
+  /** camera and gameplayAmount are undefined for a story job: the story
+   *  render reads neither, and a resume must not carry flags that change
+   *  nothing (§5.2). */
+  onRestyle: (captions: string, camera?: string, gameplayAmount?: number) => void
 }
 
 const RULE_LABELS: Record<string, string> = {
@@ -58,8 +63,13 @@ export default function Review({ results, onBack, onRestyle }: Props) {
   // clip editor, whose re-render makes a standalone file that has nothing
   // to do with the montage. The clips keep the editor (E18-F05).
   const ranking = results.render?.ranking
-  const clipCount = outputs.filter((o) => !o.montage).length
-  const montageCount = outputs.length - clipCount
+  // E20 (D-20): a story job's render.json holds one story entry. No score,
+  // no clip, no editor: the audit is the story's own facts, and a restyle
+  // offers the captions only — the camera pass never ran.
+  const isStory = outputs.some((o) => o.story)
+  const narrate = results.narrate ?? null
+  const clipCount = outputs.filter((o) => !o.montage && !o.story).length
+  const montageCount = outputs.filter((o) => o.montage).length
   const montageOf = (out: RenderOutput) => ranking?.montages?.find((m) => m.path === out.path)
   const [selected, setSelected] = useState(0)
   // Keyed by path, not clip index: a montage entry shares its rank-1
@@ -77,10 +87,11 @@ export default function Review({ results, onBack, onRestyle }: Props) {
   const [restyleGameplay, setRestyleGameplay] = useState(currentGameplayAmount)
   const [editing, setEditing] = useState<number | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const styleChanged =
-    restylePreset !== currentPreset ||
-    restyleCamera !== currentCameraMode ||
-    Math.abs(restyleGameplay - currentGameplayAmount) > 0.001
+  const styleChanged = isStory
+    ? restylePreset !== currentPreset
+    : restylePreset !== currentPreset ||
+      restyleCamera !== currentCameraMode ||
+      Math.abs(restyleGameplay - currentGameplayAmount) > 0.001
 
   const pair = useMemo(() => {
     const out = outputs[selected]
@@ -88,11 +99,15 @@ export default function Review({ results, onBack, onRestyle }: Props) {
     return { out, clip }
   }, [outputs, clips, selected])
 
-  async function doExport(out: RenderOutput, clip: Clip) {
+  async function doExport(out: RenderOutput, clip: Clip | undefined) {
     const title = results.ingest?.title ?? 'clip'
     const dest = await api.exportClip(
       out.path,
-      out.montage && out.ranks ? `${title} top ${out.ranks[0]}-${out.ranks[1]}` : `${title} ${fmtTime(clip.start)}`
+      out.story
+        ? out.title || title
+        : out.montage && out.ranks
+          ? `${title} top ${out.ranks[0]}-${out.ranks[1]}`
+          : `${title} ${fmtTime(clip?.start ?? 0)}`
     )
     setExported((prev) => ({ ...prev, [out.path]: dest }))
   }
@@ -120,7 +135,19 @@ export default function Review({ results, onBack, onRestyle }: Props) {
           ← studio
         </button>
         <div className="review-title-block">
-          <h1 className="review-title">{results.ingest?.title ?? results.job_id}</h1>
+          <h1 className="review-title">
+            {isStory ? narrate?.title || outputs[0]?.title || results.job_id : results.ingest?.title ?? results.job_id}
+          </h1>
+          {isStory ? (
+            <p className="review-sub mono">
+              a story · {narrate?.word_count ?? outputs[0]?.words ?? '—'} words ·{' '}
+              {fmtTime(outputs[0]?.duration ?? 0)} · narrated by {narrate?.settings_used?.voice ?? '—'}
+              {narrate?.settings_used?.speed && narrate.settings_used.speed !== 1
+                ? ` at ${narrate.settings_used.speed}×`
+                : ''}{' '}
+              · captions: {results.render?.caption_preset}
+            </p>
+          ) : (
           <p className="review-sub mono">
             {ranking
               ? `${clipCount} clips · ${montageCount} ranking video${montageCount === 1 ? '' : 's'}`
@@ -134,6 +161,7 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               ? ' · shock scored on fallback arousal (no SER model)'
               : ''}
           </p>
+          )}
           {/* E18-F06: one ranking video instead of two is a degradation the
               user must be able to see, and why — the stage wrote it down. */}
           {ranking?.note && <p className="review-sub mono">{ranking.note}</p>}
@@ -142,7 +170,7 @@ export default function Review({ results, onBack, onRestyle }: Props) {
 
       <div className="restyle-bar">
         <span className="opt-label">captions</span>
-        {RESTYLE_PRESETS.map((preset) => (
+        {(isStory ? STORY_RESTYLE_PRESETS : RESTYLE_PRESETS).map((preset) => (
           <button
             key={preset}
             className={`opt ${restylePreset === preset ? 'opt-on' : ''}`}
@@ -151,6 +179,8 @@ export default function Review({ results, onBack, onRestyle }: Props) {
             {preset}
           </button>
         ))}
+        {!isStory && (
+        <>
         <span className="opt-label" style={{ marginLeft: 18 }}>
           camera
         </span>
@@ -178,11 +208,17 @@ export default function Review({ results, onBack, onRestyle }: Props) {
           className="framing-slider"
         />
         <span className="slider-end">gameplay</span>
+        </>
+        )}
         <button
           className="btn-primary restyle-go"
           disabled={!styleChanged}
-          onClick={() => onRestyle(restylePreset, restyleCamera, restyleGameplay)}
-          title="re-renders only the changed stages — scores and cuts stay"
+          onClick={() =>
+            isStory
+              ? onRestyle(restylePreset)
+              : onRestyle(restylePreset, restyleCamera, restyleGameplay)
+          }
+          title={isStory ? 're-renders the story with the new captions — the narration stays' : 're-renders only the changed stages — scores and cuts stay'}
         >
           RESTYLE + RE-RENDER
         </button>
@@ -198,21 +234,60 @@ export default function Review({ results, onBack, onRestyle }: Props) {
               onClick={() => setSelected(i)}
               style={{ animationDelay: `${i * 50}ms` }}
             >
-              <span className="film-score mono">{Math.round(clip?.score ?? out.score)}</span>
+              {/* a story has no score: its card says what it is */}
+              <span className="film-score mono">{out.story ? 'STORY' : Math.round(clip?.score ?? out.score)}</span>
               <span className="film-time mono">
-                {out.montage ? fmtTime(out.duration) : clip ? fmtTime(clip.start) : ''}
+                {out.story || out.montage ? fmtTime(out.duration) : clip ? fmtTime(clip.start) : ''}
               </span>
               <span className="film-platform">
-                {out.montage
-                  ? `${montageOf(out)?.title ?? 'ranking'}${out.ranks ? ` · ${out.ranks[0]}–${out.ranks[1]}` : ''}`
-                  : out.best_platform}
+                {out.story
+                  ? out.title || 'story'
+                  : out.montage
+                    ? `${montageOf(out)?.title ?? 'ranking'}${out.ranks ? ` · ${out.ranks[0]}–${out.ranks[1]}` : ''}`
+                    : out.best_platform}
               </span>
             </button>
           )
         })}
       </div>
 
-      {pair.out && pair.clip && (
+      {pair.out && pair.out.story && (
+        <div className="bay">
+          <div className="monitor-wrap">
+            <video
+              key={pair.out.path}
+              className="monitor"
+              src={api.fileUrl(pair.out.path)}
+              controls
+              playsInline
+            />
+            <div className="monitor-actions">
+              {/* no editor for a story: it has no clip to tune (E20) */}
+              <button className="btn-primary" onClick={() => doExport(pair.out!, undefined)}>
+                {exported[pair.out.path] ? 'EXPORTED ✓' : 'EXPORT MP4'}
+              </button>
+              {exported[pair.out.path] && (
+                <span className="mono export-path">{exported[pair.out.path]}</span>
+              )}
+            </div>
+          </div>
+          <aside className="audit">
+            <p className="audit-kicker">THE STORY</p>
+            <p className="audit-summary">{pair.out.title || narrate?.title || ''}</p>
+            <p className="audit-fine mono">
+              {narrate?.word_count ?? pair.out.words} words · {fmtTime(pair.out.duration)} ·{' '}
+              narrated by {narrate?.settings_used?.voice ?? '—'} · card until{' '}
+              {narrate ? `${narrate.title_end_sec.toFixed(1)} s` : '—'} · {pair.out.words} captioned words
+            </p>
+            <p className="audit-fine mono">
+              the background is yours, looped or trimmed to the narration with its sound muted; the
+              voice is a generic synthetic narrator from local weights
+            </p>
+          </aside>
+        </div>
+      )}
+
+      {pair.out && !pair.out.story && pair.clip && (
         <div className="bay">
           <div className="monitor-wrap">
             <video

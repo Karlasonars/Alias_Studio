@@ -456,6 +456,24 @@ def test_story_limits_verb_prints_the_numbers_the_gate_uses(capsys):
     assert out["default_voice"] == kokoro_tts.DEFAULT_VOICE
 
 
+def test_story_read_hands_the_deck_the_text_and_the_same_gates(tmp_path, capsys):
+    from publikclip_pipeline import cli
+
+    txt = tmp_path / "story.txt"
+    txt.write_text("Title\n" + " ".join(["w"] * (limits.WARN_WORDS + 1)), encoding="utf-8")
+    assert cli.main(["settings", "story-read", str(txt)]) == 0
+    out = _last_json(capsys)
+    assert out["ok"] and out["name"] == "story.txt"
+    assert out["words"] == limits.WARN_WORDS + 2
+    assert out["refusal"] is None and str(limits.WARN_WORDS) in out["warning"]
+    assert out["text"].startswith("Title")
+    assert cli.main(["settings", "story-read", str(tmp_path / "gone.txt")]) == 1
+    assert "not found" in _last_json(capsys)["error"]
+    (tmp_path / "bin.txt").write_bytes(b"\xff\xfe\x00\x00")
+    assert cli.main(["settings", "story-read", str(tmp_path / "bin.txt")]) == 1
+    assert "UTF-8" in _last_json(capsys)["error"]
+
+
 def test_remember_background_saves_a_real_file_only(tmp_path, capsys):
     from publikclip_pipeline import cli
 
