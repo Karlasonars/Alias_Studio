@@ -9,13 +9,19 @@ context, the disk pre-flight and the hardware profile."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
+import wave
 
+import numpy as np
 import pytest
 
 from publikclip_pipeline import chains, config
 from publikclip_pipeline.jobs import queue
+from publikclip_pipeline.narrate import kokoro_tts, limits
+from publikclip_pipeline.narrate import stage as narrate_stage
+from publikclip_pipeline.narrate import story as story_mod
 
 
 @pytest.fixture(autouse=True)
@@ -154,3 +160,327 @@ def test_the_clips_chain_builds_ingest_with_audio_required():
     ingest = cli._stages("clips")[0]
     assert ingest.name == "ingest" and ingest.needs_audio is True
     assert chains.chain_for("clips")[0] == "ingest"
+
+
+# ---------------------------------------------------------------------------
+# The story text (F01) and its limits
+
+
+STORY = "The chair\r\n\r\nNobody had moved the chair.  \nWe had not touched it for eleven years.\r\n"
+
+
+def test_story_parse_splits_title_from_body_and_hashes_the_normalised_text():
+    a = story_mod.parse(STORY)
+    assert a.title == "The chair"
+    assert a.body == "Nobody had moved the chair.\nWe had not touched it for eleven years."
+    assert a.word_count == 15
+    # CRLF, trailing spaces and trailing blank lines are not identity: the
+    # same story from Windows and from a .txt must not re-narrate
+    b = story_mod.parse("The chair\n\nNobody had moved the chair.\nWe had not touched it for eleven years.")
+    assert a.sha256 == b.sha256 and a.text == b.text
+    assert story_mod.parse("Only a title").body == ""
+    assert story_mod.parse("   \n\n").word_count == 0
+
+
+def test_story_store_and_load_round_trip_lf_utf8(tmp_path):
+    path = story_mod.store(tmp_path, STORY)
+    raw = path.read_bytes()
+    assert b"\r" not in raw and raw.endswith(b"\n")
+    assert story_mod.load(tmp_path).sha256 == story_mod.parse(STORY).sha256
+
+
+def test_limits_refuse_over_max_and_warn_over_warn_naming_the_numbers():
+    ok = " ".join(["word"] * limits.WARN_WORDS)
+    assert limits.check(ok) is None and limits.warning(ok) is None
+    long = " ".join(["word"] * (limits.WARN_WORDS + 1))
+    assert limits.check(long) is None
+    assert str(limits.WARN_WORDS) in (limits.warning(long) or "")
+    too_long = " ".join(["word"] * (limits.MAX_WORDS + 7))
+    refusal = limits.check(too_long)
+    assert refusal and str(limits.MAX_WORDS) in refusal and "7 words" in refusal
+    assert "empty" in (limits.check("  \n ") or "")
+    # the estimate the deck shows follows the speed multiplier
+    assert limits.estimate_seconds(limits.WORDS_PER_MINUTE, 1.0) == pytest.approx(60.0)
+    assert limits.estimate_seconds(limits.WORDS_PER_MINUTE, 1.2) == pytest.approx(50.0)
+    payload = limits.limits_payload()
+    assert payload["max_words"] == limits.MAX_WORDS
+    assert [v["id"] for v in payload["voices"]] == list(kokoro_tts.VOICE_IDS)
+
+
+# ---------------------------------------------------------------------------
+# narrate (F02) against a fake synthesiser — the real weights never load here
+
+
+class FakeSynth:
+    """A quarter second of sine per word, scaled by speed: deterministic
+    durations so the title boundary can be asserted exactly."""
+
+    def __init__(self, fail: Exception | None = None):
+        self.calls: list[tuple[str, str, float]] = []
+        self.fail = fail
+
+    def synth(self, text: str, voice: str, speed: float) -> np.ndarray:
+        if self.fail is not None:
+            raise self.fail
+        self.calls.append((text, voice, speed))
+        n = int(0.25 * limits.word_count(text) * kokoro_tts.SAMPLE_RATE / speed)
+        t = np.arange(n) / kokoro_tts.SAMPLE_RATE
+        return (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+
+def _story_job(text: str = STORY, **story_kw) -> tuple[queue.Job, config.Settings]:
+    settings = _story_settings()
+    for key, value in story_kw.items():
+        assert key in {f.name for f in dataclasses.fields(config.StorySettings)}
+        setattr(settings.story, key, value)
+    job = queue.create_job("file", "C:/bg.mp4", json.dumps(settings.to_json()))
+    story_mod.store(job.dir, text)
+    return job, settings
+
+
+def _wav_seconds(path) -> float:
+    with wave.open(str(path), "rb") as wf:
+        return wf.getnframes() / wf.getframerate()
+
+
+def test_narrate_writes_the_wav_and_records_where_the_title_ends():
+    job, settings = _story_job()
+    fake = FakeSynth()
+    stage = narrate_stage.NarrateStage(synth=fake)
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    data = stage.run(ctx)
+
+    assert [c[0] for c in fake.calls] == ["The chair", story_mod.parse(STORY).body]
+    assert all(c[1] == "af_heart" and c[2] == 1.0 for c in fake.calls)
+    wav = job.dir / narrate_stage.NARRATION_FILE
+    assert wav.exists() and data["audio_path"] == str(wav)
+    # 2 title words + the gap + 13 body words
+    assert data["title_end_sec"] == pytest.approx(0.5 + narrate_stage.TITLE_GAP_SEC, abs=1e-3)
+    assert data["duration_sec"] == pytest.approx(0.5 + narrate_stage.TITLE_GAP_SEC + 13 * 0.25, abs=1e-3)
+    assert _wav_seconds(wav) == pytest.approx(data["duration_sec"], abs=1e-3)
+    assert data["title"] == "The chair" and data["word_count"] == 15
+    assert data["settings_used"] == {
+        "text_sha256": story_mod.parse(STORY).sha256, "voice": "af_heart", "speed": 1.0,
+    }
+    # the rail shows a story by its title, not the background's filename
+    assert queue.get_job(job.id).title == "The chair"
+    assert stage.artifacts_ok(ctx, data) is True
+
+
+def test_a_voice_or_speed_change_reruns_narrate_and_nothing_changed_reuses_everything():
+    job, settings = _story_job()
+    stage = narrate_stage.NarrateStage(synth=FakeSynth())
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+    data = stage.run(ctx)
+    assert stage.artifacts_ok(ctx, data) is True
+
+    other = config.Settings.from_json(settings.to_json())
+    other.story.voice = "bm_george"
+    assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is False
+    other = config.Settings.from_json(settings.to_json())
+    other.story.speed = 1.15
+    assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is False
+    # a caption restyle is not the narrator's business
+    other = config.Settings.from_json(settings.to_json())
+    other.caption_preset = "beast"
+    assert stage.artifacts_ok(queue.StageContext(job=job, settings=other, progress=_noop), data) is True
+    # a checkpoint from before a future story key existed compares against
+    # the factory value (§4 rule 3), not against nothing
+    stale = {**data, "settings_used": {"text_sha256": story_mod.parse(STORY).sha256}}
+    assert stage.artifacts_ok(ctx, stale) is True
+    # the wav going missing is stale, whatever the fingerprint says
+    (job.dir / narrate_stage.NARRATION_FILE).unlink()
+    assert stage.artifacts_ok(ctx, data) is False
+
+
+class Counting(queue.Stage):
+    schema_version = 1
+
+    def __init__(self, name):
+        self.name = name
+        self.runs = 0
+
+    def run(self, ctx):
+        self.runs += 1
+        return {"runs": self.runs, "audio_path": "x"}
+
+
+def test_a_text_edit_reruns_narrate_and_cascades_to_asr_and_render():
+    """§4 rules 1 and 2 for the new stage: the text hash is in its
+    fingerprint, and a re-run of narrate invalidates everything after it,
+    whatever those stages' own checkpoints say."""
+    job, _ = _story_job()
+    fake = FakeSynth()
+    stages = [narrate_stage.NarrateStage(synth=fake), Counting("asr"), Counting("render")]
+
+    queue.run_stages(job, stages, _noop)
+    assert len(fake.calls) == 2 and stages[1].runs == 1 and stages[2].runs == 1
+    queue.run_stages(job, stages, _noop)  # nothing changed: everything cached
+    assert len(fake.calls) == 2 and stages[1].runs == 1 and stages[2].runs == 1
+
+    story_mod.store(job.dir, STORY + "\nOne more line.")
+    queue.run_stages(job, stages, _noop)
+    assert len(fake.calls) == 4, "narrate did not re-run on a text edit"
+    assert stages[1].runs == 2 and stages[2].runs == 2, "the cascade did not reach asr and render"
+
+
+def test_narrate_degrades_with_a_described_error_never_a_traceback():
+    job, settings = _story_job()
+    ctx = queue.StageContext(job=job, settings=settings, progress=_noop)
+
+    broken = narrate_stage.NarrateStage(synth=FakeSynth(fail=kokoro_tts.NarratorUnavailable("no weights")))
+    with pytest.raises(queue.StageError) as err:
+        broken.run(ctx)
+    assert err.value.code == "narrator-unavailable" and "no weights" in str(err.value)
+
+    story_mod.path_in(job.dir).unlink()
+    with pytest.raises(queue.StageError) as err:
+        narrate_stage.NarrateStage(synth=FakeSynth()).run(ctx)
+    assert err.value.code == "story-text-missing"
+
+    story_mod.store(job.dir, "Title\n" + " ".join(["w"] * (limits.MAX_WORDS + 1)))
+    with pytest.raises(queue.StageError) as err:
+        narrate_stage.NarrateStage(synth=FakeSynth()).run(ctx)
+    assert err.value.code == "story-too-long" and str(limits.MAX_WORDS) in str(err.value)
+
+    story_mod.store(job.dir, STORY)
+    settings.story.voice = "someone_real"
+    with pytest.raises(queue.StageError) as err:
+        narrate_stage.NarrateStage(synth=FakeSynth()).run(ctx)
+    assert err.value.code == "narrator-unavailable"
+
+    from publikclip_pipeline import errors
+
+    for code in ("story-text-missing", "story-too-long", "narrator-unavailable", "narration-empty"):
+        assert code in errors.CATALOG, code
+
+
+def test_every_offered_voice_has_a_pinned_file():
+    from publikclip_pipeline.models import specs
+
+    for voice_id, _label in kokoro_tts.VOICES:
+        assert voice_id in specs.KOKORO_VOICES
+        assert specs.KOKORO_VOICES[voice_id].sha256
+    assert kokoro_tts.is_present("af_heart") is False  # fresh home: disk truth
+    with pytest.raises(ValueError):
+        kokoro_tts.specs_for("someone_real")
+
+
+# ---------------------------------------------------------------------------
+# asr hears the prior it was built for (F04)
+
+
+def test_asr_reads_the_prior_it_was_built_for(tmp_path):
+    from publikclip_pipeline.asr.stage import AsrStage
+
+    job, settings = _story_job()
+    scoped = queue._ctx_for(
+        queue.StageContext(job=job, settings=settings, progress=_noop), "asr",
+        {"ingest": {"audio_path": str(tmp_path / "audio16k.wav")}},
+    )
+    with pytest.raises(queue.StageError) as err:
+        AsrStage(source="narrate").run(scoped)
+    assert "narrate" in str(err.value) and err.value.code == "prior-stage-missing"
+
+    scoped = queue._ctx_for(
+        queue.StageContext(job=job, settings=settings, progress=_noop), "asr",
+        {"narrate": {"audio_path": str(tmp_path / "gone.wav")}},
+    )
+    with pytest.raises(queue.StageError) as err:
+        AsrStage(source="narrate").run(scoped)
+    assert "re-run narrate" in str(err.value)
+    # the clips chain's asr still names ingest
+    with pytest.raises(queue.StageError) as err:
+        AsrStage().run(scoped)
+    assert "ingest" in str(err.value)
+
+
+# ---------------------------------------------------------------------------
+# the CLI: the story reaches the job as a file, and nowhere else
+
+
+def _last_json(capsys) -> dict:
+    return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+def test_jobs_create_copies_the_story_into_the_job_and_refuses_the_rest(tmp_path, capsys):
+    from publikclip_pipeline import cli
+
+    if "stories" not in chains.CHAINS:
+        pytest.skip("the stories chain is registered with its render stage")
+    txt = tmp_path / "story.txt"
+    txt.write_text(STORY, encoding="utf-8")
+    rc = cli.main([
+        "jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt),
+        "--voice", "bm_george", "--speed", "1.1",
+    ])
+    assert rc == 0
+    job = queue.get_job(_last_json(capsys)["job_id"])
+    assert job.mode == "stories"
+    stored = story_mod.load(job.dir)
+    assert stored.title == "The chair" and stored.sha256 == story_mod.parse(STORY).sha256
+    saved = config.Settings.from_json(json.loads(job.settings_json))
+    assert saved.story.voice == "bm_george" and saved.story.speed == 1.1
+    # the text is in the job dir and NOT in the snapshot
+    assert "chair" not in job.settings_json
+
+    assert cli.main(["jobs", "create", "C:/bg.mp4", "--mode", "stories"]) == 2
+    assert "--story-file" in _last_json(capsys)["error"]
+    assert cli.main(["jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(tmp_path / "no.txt")]) == 2
+    assert "not found" in _last_json(capsys)["error"]
+    txt.write_text("Title\n" + " ".join(["w"] * (limits.MAX_WORDS + 1)), encoding="utf-8")
+    assert cli.main(["jobs", "create", "C:/bg.mp4", "--mode", "stories", "--story-file", str(txt)]) == 2
+    assert str(limits.MAX_WORDS) in _last_json(capsys)["error"]
+    # nothing above left a pending job behind for the queue to spawn
+    assert queue.next_pending().id == job.id
+    queue.cancel_pending(job.id)
+    assert queue.next_pending() is None
+    # a clips job needs no story and takes none
+    assert cli.main(["jobs", "create", "C:/x.mp4", "--story-file", str(txt)]) == 0
+    assert not story_mod.path_in(queue.get_job(_last_json(capsys)["job_id"]).dir).exists()
+
+
+def test_story_limits_verb_prints_the_numbers_the_gate_uses(capsys):
+    from publikclip_pipeline import cli
+
+    assert cli.main(["settings", "story-limits"]) == 0
+    out = _last_json(capsys)
+    assert out["max_words"] == limits.MAX_WORDS and out["warn_words"] == limits.WARN_WORDS
+    assert out["words_per_minute"] == limits.WORDS_PER_MINUTE
+    assert out["default_voice"] == kokoro_tts.DEFAULT_VOICE
+
+
+def test_remember_background_saves_a_real_file_only(tmp_path, capsys):
+    from publikclip_pipeline import cli
+
+    bg = tmp_path / "parkour.mp4"
+    bg.write_bytes(b"x")
+    assert cli.main(["settings", "remember-background", str(bg)]) == 0
+    assert _last_json(capsys)["defaults"]["story"]["background"] == str(bg)
+    assert config.load_defaults().story.background == str(bg)
+    assert cli.main(["settings", "remember-background", str(tmp_path / "gone.mp4")]) == 1
+    assert config.load_defaults().story.background == str(bg)
+
+
+def test_the_narrator_is_a_setup_item_for_stories_only():
+    from publikclip_pipeline import setup as setup_mod
+
+    clips_ids = [i.id for i in setup_mod.items(config.Settings())]
+    story_ids = [i.id for i in setup_mod.items(_story_settings(), mode="stories")]
+    assert "kokoro" not in clips_ids, "onboarding must not grow the narrator"
+    assert "kokoro" in story_ids
+    assert set(story_ids) == {"ffmpeg", "whisper", "vad", "align-en", "kokoro"}
+    assert setup_mod.status(_story_settings(), mode="stories")["total_missing_bytes"] > 0
+
+
+def test_a_story_job_is_charged_for_its_narration_and_video_by_word_count():
+    from publikclip_pipeline.jobs import disk
+
+    job, settings = _story_job(" ".join(["word"] * 300))
+    needs, unknown = disk.gather(job, settings)
+    by_label = {n.label: n for n in needs}
+    assert "the story video" in by_label and "narration audio" in by_label
+    seconds = limits.estimate_seconds(300, 1.0)
+    assert by_label["narration audio"].low == int(seconds * kokoro_tts.SAMPLE_RATE * 2) + disk.WAV_HEADER_BYTES
+    assert by_label["the story video"].high == int(seconds * disk.RENDER_BPS_HIGH)
+    assert not any("story video" in u for u in unknown)

@@ -325,6 +325,21 @@ DEFAULT_HOOK_TYPES = [
 
 
 @dataclass
+class StorySettings:
+    """The story chain's knobs (E20). Per-job values are chosen on the deck
+    and sent explicitly; these are what a story job starts from. The story
+    TEXT is deliberately not here — it is content, copied into the job dir
+    (narrate/story.py), never a default."""
+
+    voice: str = "af_heart"    # a kokoro_tts.VOICES id — generic synthetic speakers only (§8)
+    speed: float = 1.0         # Kokoro's rate multiplier; 1.0 is the voice's natural pace
+    # The last background video the deck used, remembered (E20 Q2): someone
+    # making ten stories will not pick the same file ten times. A setting,
+    # unlike the text, because it is a preference that outlives one job.
+    background: str = ""
+
+
+@dataclass
 class TitleSettings:
     variants: int = 3
     min_chars: int = 20
@@ -395,6 +410,7 @@ class Settings:
     hooks: HookSettings = field(default_factory=HookSettings)
     ranking: RankingSettings = field(default_factory=RankingSettings)
     watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
+    story: StorySettings = field(default_factory=StorySettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
@@ -434,6 +450,7 @@ class Settings:
             "hooks": {**self.hooks.__dict__, "types": list(self.hooks.types)},
             "ranking": self.ranking.__dict__.copy(),
             "watermark": self.watermark.__dict__.copy(),
+            "story": self.story.__dict__.copy(),
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
@@ -481,6 +498,7 @@ class Settings:
             hooks=hooks,
             ranking=_build(RankingSettings, data.get("ranking")),
             watermark=_build(WatermarkSettings, data.get("watermark")),
+            story=_build(StorySettings, data.get("story")),
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),

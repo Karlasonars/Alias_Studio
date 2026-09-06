@@ -243,9 +243,29 @@ def gather(job, settings: "config.Settings") -> tuple[list[Need], list[str]]:
         # duration unknown → already named in `unknown` above
 
     if story:
-        # One file whose length is the narration's, which does not exist
-        # until the narrate stage runs — named, never invented (§5.9).
-        unknown.append("the story video (sized once the narration exists)")
+        # The story video and its narration wav, sized from the word count
+        # through the same estimate the deck shows (narrate/limits.py).
+        # No story file yet — a job created outside the CLI — is named as
+        # unsized, never invented (§5.9).
+        from ..narrate import kokoro_tts, limits, story as story_mod
+
+        try:
+            words = story_mod.load(job.dir).word_count
+        except (OSError, UnicodeDecodeError):
+            words = 0
+        if words:
+            seconds = limits.estimate_seconds(words, settings.story.speed)
+            if not (job.dir / "narration.wav").exists():
+                wav = int(seconds * kokoro_tts.SAMPLE_RATE * 2) + WAV_HEADER_BYTES
+                needs.append(Need("narration audio", job.dir, wav, wav))
+            needs.append(
+                Need(
+                    "the story video", job.dir,
+                    int(seconds * RENDER_BPS_LOW), int(seconds * RENDER_BPS_HIGH),
+                )
+            )
+        else:
+            unknown.append("the story video (no story text to size it from)")
     else:
         low, high = clips_need(settings.clips)
         needs.append(Need("rendered clips", job.dir, low, high))

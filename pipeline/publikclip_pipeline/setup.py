@@ -286,6 +286,19 @@ def items(settings: "config.Settings | None" = None, mode: str = "clips") -> lis
             ),
         ]
     )
+    # E20: the narrator, for the story chain only. Not part of onboarding:
+    # a first CLIPS job never loads it, and the story chain fetches it on
+    # its first run with progress on the job's own bar.
+    from .narrate import kokoro_tts
+
+    out.append(
+        SetupItem(
+            "kokoro", "Narrator voice (Kokoro)", kokoro_tts.approx_bytes(),
+            kokoro_tts.is_present,
+            lambda progress: kokoro_tts.ensure_files(kokoro_tts.DEFAULT_VOICE, progress),
+            modes=frozenset({"stories"}),
+        )
+    )
     return [item for item in out if mode in item.modes]
 
 
@@ -301,7 +314,7 @@ def item_dir(item_id: str) -> Path:
         return _torch_hub_root()
     if item_id == "ffmpeg":
         return config.bin_dir()
-    return config.models_dir()
+    return config.models_dir()  # registry items, the narrator included
 
 
 def status(settings: "config.Settings | None" = None, mode: str = "clips") -> dict:

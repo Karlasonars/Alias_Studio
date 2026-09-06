@@ -118,14 +118,64 @@ def _apply_setting_flags(settings: "config.Settings", args: argparse.Namespace) 
     mode = getattr(args, "mode", None)
     if mode:
         settings.mode = mode
+    # E20-F02: the narrator. Explicit on the deck like the rest, so the
+    # snapshot records the choice; `resume --voice` re-narrates.
+    voice = getattr(args, "voice", None)
+    if voice:
+        settings.story.voice = voice
+    speed = getattr(args, "speed", None)
+    if speed is not None:
+        settings.story.speed = float(speed)
     return settings
+
+
+def _story_input(args: argparse.Namespace, settings: "config.Settings") -> tuple[str | None, str | None]:
+    """(text, refusal) for a story job's `--story-file` (E20-F01). Read
+    here, validated here, BEFORE the job row exists, so a refused story
+    never leaves a pending job the queue would try to run. A clips job
+    answers (None, None). The tool never fetches text from anywhere: this
+    is the only way a story reaches a job."""
+    if settings.mode != "stories":
+        return None, None
+    from .narrate import limits
+
+    path = getattr(args, "story_file", None)
+    if not path:
+        return None, "A story job needs its text: pass --story-file <a .txt file>."
+    try:
+        text = Path(path).expanduser().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, f"Story file not found: {path}"
+    except UnicodeDecodeError:
+        return None, f"Story file is not UTF-8 text: {path}"
+    except OSError as err:
+        return None, f"Story file could not be read: {err}"
+    refusal = limits.check(text)
+    if refusal:
+        return None, refusal
+    return text, None
+
+
+def _store_story(job: queue.Job, text: str | None) -> None:
+    """The copy into the job dir (E20-F01): content travels WITH the job,
+    never in the settings snapshot."""
+    if text is None:
+        return
+    from .narrate import story
+
+    story.store(job.dir, text)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     # New jobs start from the user's saved global settings; CLI flags
     # override just those fields. Existing jobs keep their own snapshot.
     settings = _apply_setting_flags(config.load_defaults(), args)
+    text, refusal = _story_input(args, settings)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
     job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
+    _store_story(job, text)
     return _execute(job, args.jsonl)
 
 
@@ -160,6 +210,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         or getattr(args, "ranking_count", None) is not None
         or getattr(args, "watermark_image", None) is not None
         or getattr(args, "watermark_text", None) is not None
+        or getattr(args, "voice", None)
+        or getattr(args, "speed", None) is not None
     ):
         settings = _apply_setting_flags(
             config.Settings.from_json(json.loads(job.settings_json)), args
@@ -337,7 +389,14 @@ def cmd_jobs(args: argparse.Namespace) -> int:
         # its settings snapshot) exists before any run does - that is what
         # makes a job that has not started representable at all (T-08).
         settings = _apply_setting_flags(config.load_defaults(), args)
+        text, refusal = _story_input(args, settings)
+        if refusal:
+            # JSON, because the shell reads this line: the deck shows the
+            # refusal where the press happened (E20-F01's limit, named).
+            print(json.dumps({"ok": False, "error": refusal}))
+            return 2
         job = queue.create_job(_source_type(args.source), args.source, json.dumps(settings.to_json()))
+        _store_story(job, text)
         print(json.dumps({"job_id": job.id, "status": job.status}))
         return 0
     if sub == "next":
@@ -454,6 +513,29 @@ def cmd_settings(args: argparse.Namespace) -> int:
         saved = config.load_caption_presets()
         saved.pop(args.name, None)
         config.save_caption_presets(saved)
+        print(json.dumps(payload()))
+        return 0
+
+    if args.settings_cmd == "story-limits":
+        # E20-F01: the deck's numbers — the word limits, the words-per-minute
+        # its length estimate uses, and the voices on offer — from the one
+        # module that applies them, so the deck cannot drift from the gate.
+        from .narrate import limits
+
+        print(json.dumps(limits.limits_payload()))
+        return 0
+
+    if args.settings_cmd == "remember-background":
+        # E20 (Q2): the last-used background is a real setting. The deck
+        # calls this on every pick; a missing file is refused so a stale
+        # path is never remembered as a default.
+        path = Path(args.path).expanduser()
+        if not path.is_file():
+            print(json.dumps({"ok": False, "error": f"not a file: {args.path}"}))
+            return 1
+        defaults = config.load_defaults()
+        defaults.story.background = str(path)
+        config.save_defaults(defaults)
         print(json.dumps(payload()))
         return 0
 
@@ -767,7 +849,29 @@ def _add_mode_flag(parser: argparse.ArgumentParser) -> None:
     resume: a job's checkpoints belong to the chain that wrote them."""
     parser.add_argument(
         "--mode", choices=sorted(chains.CHAINS), default=None,
-        help="which chain runs: clips (the default) cuts a long video into scored clips",
+        help="which chain runs: clips (the default) cuts a long video into scored clips; "
+             "stories narrates a text over a background video of yours",
+    )
+
+
+def _add_story_flags(parser: argparse.ArgumentParser, with_text: bool) -> None:
+    """E20's narrator flags — voice and speed on run, resume and `jobs
+    create`; the story file only where a job is created, because the text
+    is content copied into the job dir once (F01), not a setting."""
+    from .narrate import kokoro_tts
+
+    if with_text:
+        parser.add_argument(
+            "--story-file", dest="story_file", default=None,
+            help="stories mode: a UTF-8 .txt whose first line is the title; copied into the job",
+        )
+    parser.add_argument(
+        "--voice", choices=list(kokoro_tts.VOICE_IDS), default=None,
+        help="stories mode: the narrator voice (a generic Kokoro speaker)",
+    )
+    parser.add_argument(
+        "--speed", type=float, default=None,
+        help="stories mode: narration speed multiplier, 1.0 = the voice's natural pace",
     )
 
 
@@ -806,6 +910,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_ranking_flags(p_run)
     _add_watermark_flags(p_run)
     _add_mode_flag(p_run)
+    _add_story_flags(p_run, with_text=True)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -823,6 +928,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_ranking_flags(p_resume)
     _add_watermark_flags(p_resume)
+    _add_story_flags(p_resume, with_text=False)
     # chains.ALL_STAGES is the light-import union of every chain's stages
     # (a test pins each chain equal to cli._stages()); argparse must not
     # pay the torch tax, and it cannot know the job's chain yet — cmd_resume
@@ -877,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_ranking_flags(p_create)
     _add_watermark_flags(p_create)
     _add_mode_flag(p_create)
+    _add_story_flags(p_create, with_text=True)
     jobs_sub.add_parser("next", help="print the next pending job id, or null")
     p_ri = jobs_sub.add_parser(
         "resume-info", help="per-stage status + measured re-run cost for the resume picker (T-14)"
@@ -903,6 +1010,15 @@ def main(argv: list[str] | None = None) -> int:
         help="copy a PNG into the app's watermark folder and print its stored path (E19-F02)",
     )
     p_wm.add_argument("path")
+    set_sub.add_parser(
+        "story-limits",
+        help="the story word limits, the words-per-minute estimate and the voices (E20)",
+    )
+    p_bg = set_sub.add_parser(
+        "remember-background",
+        help="save a background video path as the default the next story starts from (E20)",
+    )
+    p_bg.add_argument("path")
     p_set.set_defaults(fn=cmd_settings)
 
     p_edit = sub.add_parser("edit", help="per-clip editing (context / visuals / render)")
