@@ -310,7 +310,9 @@ GROUPS: list[dict[str, Any]] = [
             {"key": "story.background", "label": "Last background video", "type": "text",
              "help": "The background file the deck used most recently, remembered so the next story starts with it. The deck overwrites this whenever a different file is picked; clear it to start blank."},
             {"key": "story.channel_name", "label": "Channel name", "type": "text",
-             "help": "Your channel's name, in the header of the story card beside the avatar. The avatar is your watermark image (the same PNG, no second file); with no image the card shows this name's initial instead. Blank, and the card has no header. The card never carries another platform's branding or invented counts — only this name, the title and the story's real length."},
+             "help": "Your channel's name, in the header of the story card beside the avatar. Set once here; the deck prefills it for every story and can change it for one story without changing this. With no avatar the card shows this name's initial instead. Blank, and the card has no header. The card never carries another platform's branding or invented counts — only this name, the avatar, the title and the story's real length."},
+            {"key": "story.avatar", "label": "Channel avatar", "type": "image", "import": "avatar",
+             "help": "Your channel's picture, in the story card's header — a PNG, copied into the app's own folder when chosen and centre-cropped to a circle on the card. Its content is part of the render fingerprint: a new picture under the same name re-renders. None: the card shows the channel name's initial instead. A file of its own, separate from the watermark on purpose — a watermark is a mark in a corner, an avatar is a round logo."},
         ],
     },
     {

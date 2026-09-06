@@ -473,7 +473,12 @@ function storyCommands(background = 'C:/bg/parkour.mp4') {
     if (verb === 'get') {
       return {
         ok: true,
-        defaults: { story: { voice: 'af_heart', speed: 1, background, channel_name: 'Alias' } }
+        defaults: {
+          story: {
+            voice: 'af_heart', speed: 1, background, channel_name: 'Alias',
+            avatar: 'C:/home/avatars/me-0123abcd.png'
+          }
+        }
       }
     }
     if (verb === 'remember-background') return { ok: true, defaults: {} }
@@ -512,9 +517,11 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     // sits beside the watermark, and says what the card is made of
     const channel = screen.getByLabelText('channel name') as HTMLInputElement
     expect(channel.value).toBe('Alias')
-    expect(screen.getByText(/your watermark image as the avatar/)).toBeTruthy()
-    expect(screen.getByText(/none chosen — the card shows the initial instead/)).toBeTruthy()
+    // E20-F06: so does the avatar — its own file, named on its button
+    expect(screen.getByText('me-0123abcd.png')).toBeTruthy()
+    expect(screen.queryByText(/the card shows the initial instead/)).toBeNull()
     expect(screen.getByText(/no other branding, no invented counts/)).toBeTruthy()
+    expect(screen.getByText(/changing them here changes this story only/)).toBeTruthy()
     fireEvent.change(channel, { target: { value: ' Alias Studio ' } })
     await act(async () => {
       fireEvent.click(screen.getByText('CUT IT'))
@@ -528,12 +535,61 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     expect(args.speed).toBe(1.2)
     expect(args.captions).toBe('story')
     expect(args.channelName).toBe('Alias Studio')
-    // the avatar is never sent: it is the watermark image, one field
-    expect(Object.keys(args)).not.toContain('avatar')
+    // E20-F06: the avatar rides along as the Settings default's stored
+    // path — its own field, nothing to do with the watermark
+    expect(args.avatar).toBe('C:/home/avatars/me-0123abcd.png')
     expect(args.watermarkImage).toBe('')
     // the text clears after the cut, the background stays for the next story
     expect((screen.getByLabelText('story text') as HTMLTextAreaElement).value).toBe('')
     expect((screen.getByLabelText('background video') as HTMLInputElement).value).toBe('C:/bg/parkour.mp4')
+  })
+
+  it('overrides the avatar for one story through its own import, or drops it, without touching the setting (E20-F06)', async () => {
+    storyCommands()
+    commands.enqueue_job = () => 'job-story'
+    const imports: unknown[] = []
+    const base = commands.settings_tool
+    commands.settings_tool = (args) => {
+      const a = args?.args as string[]
+      if (a[0] === 'avatar-import') {
+        imports.push(a[1])
+        return { ok: true, path: 'C:/home/avatars/other-89abcdef.png', name: 'other-89abcdef.png' }
+      }
+      return base(args)
+    }
+    dialogOpen.mockResolvedValue('C:/pictures/other.png')
+    await openStories()
+    await act(async () => {
+      fireEvent.click(screen.getByText('me-0123abcd.png'))
+    })
+    // the picked file went to python's avatar import — never the watermark's —
+    // and the STORED path is what the button now names and the job gets
+    expect(imports).toEqual(['C:/pictures/other.png'])
+    expect(screen.getByText('other-89abcdef.png')).toBeTruthy()
+    expect(callsTo('settings_tool')).toBeGreaterThan(0)
+    expect(invokeMock.mock.calls.some(([cmd, a]) => cmd === 'settings_tool' && (a?.args as string[])[0] === 'set')).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('story text'), { target: { value: 'The chair\n\nNobody moved.' } })
+    await act(async () => {
+      fireEvent.click(screen.getByText('CUT IT'))
+    })
+    let call = invokeMock.mock.calls.filter(([cmd]) => cmd === 'enqueue_job').pop()
+    expect((call?.[1] as Record<string, unknown>).avatar).toBe('C:/home/avatars/other-89abcdef.png')
+
+    // none for this story: an explicit '' rides the enqueue, the hint says
+    // the card shows the initial, and Settings was never written
+    fireEvent.click(screen.getByText('none for this story'))
+    expect(screen.getByText(/the card shows the initial instead/)).toBeTruthy()
+    // the avatar button is back to its empty label (the watermark's reads the same)
+    expect(screen.getByTitle(/cropped to a circle/).textContent).toBe('image…')
+    expect(screen.queryByText('none for this story')).toBeNull()
+    fireEvent.change(screen.getByLabelText('story text'), { target: { value: 'The chair\n\nNobody moved.' } })
+    await act(async () => {
+      fireEvent.click(screen.getByText('QUEUE IT')) // the first story is running: this one queues
+    })
+    call = invokeMock.mock.calls.filter(([cmd]) => cmd === 'enqueue_job').pop()
+    expect((call?.[1] as Record<string, unknown>).avatar).toBe('')
+    expect(invokeMock.mock.calls.some(([cmd, a]) => cmd === 'settings_tool' && (a?.args as string[])[0] === 'set')).toBe(false)
   })
 
   it('refuses above the word limit with the limit named, and warns above the soft one', async () => {

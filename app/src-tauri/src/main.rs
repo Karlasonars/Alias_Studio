@@ -641,6 +641,7 @@ async fn enqueue_job(
     voice: Option<String>,
     speed: Option<f64>,
     channel_name: Option<String>,
+    avatar: Option<String>,
 ) -> Result<String, String> {
     let mut args = vec!["jobs".to_string(), "create".to_string(), source];
     // E20 (D-19): which chain. Forwarded as given; python owns the choices
@@ -684,6 +685,12 @@ async fn enqueue_job(
     if let Some(name) = channel_name {
         args.push("--channel-name".to_string());
         args.push(name);
+    }
+    // E20-F06. The avatar's stored path (python's `settings avatar-import`
+    // copied it); "" is the deck's explicit "none for this story".
+    if let Some(path) = avatar {
+        args.push("--avatar".to_string());
+        args.push(path);
     }
     if let Some(mode) = llm {
         args.push("--llm".to_string());

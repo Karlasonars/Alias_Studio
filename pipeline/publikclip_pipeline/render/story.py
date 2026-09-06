@@ -26,25 +26,31 @@ preset's `max_words` at 1 (the built-in `story` preset), not a mechanism.
 Words that fall inside the title's audio are not captioned: the card
 (captions/story_card.py, F05) shows the title instead.
 
-The card (F05, channel-card amendment): the title under a header of the
-user's channel name and an avatar, over a meta row carrying the narration's
-duration. The avatar is the watermark PNG (E19-F02), resolved through the
-same `watermark.resolve` the mark itself uses — one file, one hash in the
-fingerprint — and overlaid by `avatar_vf` AFTER the caption burn, because
-the card's panel is drawn by the ASS and would cover a picture placed under
-it. It is enabled only while the card is up and switched off as the card's
-fade-out begins, so it never floats alone after the panel has gone; with
-no PNG the ASS draws the channel's initial on the accent colour instead.
+The card (F05, channel-card amendment; F06, channel identity): the title
+under a header of the user's channel name and avatar, over a meta row
+carrying the narration's duration. The avatar is `story.avatar`, a PNG of
+its own imported like the watermark (watermark.import_image into
+PUBLIKCLIP_HOME/avatars) and checked through the same `resolve_image` —
+never the watermark itself: F05 reused that file as a stopgap, and "why
+is my watermark my profile picture" is a state nobody should have to
+reason about. It is overlaid by `avatar_vf` AFTER the caption burn,
+because the card's panel is drawn by the ASS and would cover a picture
+placed under it, enabled only while the card is up and switched off as
+the card's fade-out begins, so it never floats alone after the panel has
+gone. Two states, predictable: an avatar, or the channel's initial on
+the accent colour (no avatar, or one that is missing or not a PNG).
 
 Fingerprint (§4 rule 1): everything this stage bakes into the pixels and
 the sound — the caption preset and its resolved style, the loudness
-targets, the encoder, the watermark (which is also the avatar), the
-channel name and the card's drawing version. The narration and the words
-reach here through the cascade (rule 2), so they need no key; the
-duration on the card is the narration's, so a re-narration re-renders it
-through that cascade too. No story checkpoint predates this build, so
-the compares are strict; `story: True` is the shape marker that keeps a
-clip checkpoint from ever serving a story job or the reverse.
+targets, the encoder, the watermark, the avatar (its own path and its own
+content hash, so a picture replaced under the same name re-renders and
+neither file can be mistaken for the other), the channel name and the
+card's drawing version. The narration and the words reach here through
+the cascade (rule 2), so they need no key; the duration on the card is
+the narration's, so a re-narration re-renders it through that cascade
+too. No story checkpoint predates this build, so the compares are
+strict; `story: True` is the shape marker that keeps a clip checkpoint
+from ever serving a story job or the reverse.
 """
 
 from __future__ import annotations
@@ -84,12 +90,26 @@ def _fingerprint(ctx: StageContext) -> dict:
         "caption_style": _caption_style_fingerprint(ctx),
         "audio": {"lufs": ctx.settings.lufs_target, "true_peak": ctx.settings.true_peak_db},
         "encoder": renderer.video_encoder_args(ctx.settings.performance.hardware_encode),
-        # The watermark entry is also the avatar's: same path, same sha256.
-        # No second hash on purpose — two entries for one file could drift.
         "watermark": watermark.fingerprint(ctx.settings),
+        # E20-F06: the avatar is its own file with its own hash — two
+        # pictures, two entries, through the one helper that defines what
+        # "this file changed" means for both. {} for none.
+        "avatar": watermark.image_fingerprint(ctx.settings.story.avatar),
         "channel_name": channel_name(ctx.settings),
         "card_version": story_card.CARD_VERSION,
     }
+
+
+def resolve_avatar(settings, say=None) -> str:
+    """The avatar PNG's path for the card, or "" for the initial fallback:
+    `story.avatar` through the same check as the watermark's image, said
+    once when the file is gone or not a PNG. Never the watermark (E20-F06):
+    avatar, then initial — two states."""
+    picture = watermark.resolve_image(
+        settings.story.avatar, say, label="Avatar image",
+        fallback="the card shows the channel's initial instead",
+    )
+    return picture.path if picture is not None else ""
 
 
 def avatar_vf(path: str, end_sec: float) -> str:
@@ -179,12 +199,13 @@ class StoryRenderStage(Stage):
         preset_name = ctx.settings.caption_preset
         overrides = ctx.settings.captions.overrides
         preset = ass_mod.resolve_preset(preset_name, overrides)
-        # One resolution of the watermark for both of its uses: the mark
-        # under the captions and the card's avatar. A PNG that is missing
-        # or not a PNG is None here, said once, and the card falls back to
-        # the initial — the same degradation the mark takes (§5.9).
+        # Two pictures, two resolutions (E20-F06): the mark under the
+        # captions from the watermark settings, the card's avatar from the
+        # story settings. Each degrades on its own when its file is gone or
+        # not a PNG, said once (§5.9) — the card to the initial, the clip
+        # to no mark — and neither ever picks up the other's file.
         resolved = watermark.resolve(ctx.settings, say=lambda m: ctx.emit(-1, m))
-        avatar = resolved.path if resolved is not None and resolved.kind == "image" else ""
+        avatar = resolve_avatar(ctx.settings, say=lambda m: ctx.emit(-1, m))
         card = story_card.Card(
             title=title, end_sec=title_end, channel=channel_name(ctx.settings),
             duration_sec=float(narrate["duration_sec"]), avatar=avatar,

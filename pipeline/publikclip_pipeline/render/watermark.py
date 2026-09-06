@@ -128,21 +128,63 @@ def _text(settings) -> str:
     return " ".join(str(settings.watermark.text or "").split())
 
 
+def content_hash(path: str | Path) -> str:
+    """sha256 of the file's bytes, or "missing" when it cannot be read —
+    the value a render fingerprint carries for an imported picture."""
+    data = _read(Path(path))
+    return hashlib.sha256(data).hexdigest() if data is not None else "missing"
+
+
+def image_fingerprint(path: str) -> dict:
+    """{path, sha256} for an imported PNG, {} for none: the shape every
+    picture a render bakes in puts in its fingerprint — the watermark here
+    and the story card's avatar (E20-F06, render/story.py). One helper so
+    the two cannot differ about what "this file changed" means, and two
+    calls so the two files carry two hashes and never each other's."""
+    path = str(path or "").strip()
+    if not path:
+        return {}
+    return {"path": path, "sha256": content_hash(path)}
+
+
 def fingerprint(settings) -> dict:
     """What the render checkpoint stores and artifacts_ok compares: the
     image's path AND its content hash, or the word, or {} — the factory
     shape, which is also what every checkpoint from before the setting
     existed reads as (§4 rule 3: nothing on disk re-renders when the
     feature arrives)."""
-    image = str(settings.watermark.image or "").strip()
+    image = image_fingerprint(settings.watermark.image)
     if image:
-        data = _read(Path(image))
-        digest = hashlib.sha256(data).hexdigest() if data is not None else "missing"
-        return {"kind": "image", "path": image, "sha256": digest}
+        return {"kind": "image", **image}
     text = _text(settings)
     if text:
         return {"kind": "text", "text": text}
     return {}
+
+
+def resolve_image(
+    path: str,
+    say: Callable[[str], None] | None = None,
+    *,
+    label: str = "Watermark image",
+    fallback: str = "rendering without a watermark",
+) -> Mark | None:
+    """An imported PNG as a Mark, or None when there is no path or the file
+    is missing or not a PNG — said once through `say` as "<label> <name>
+    is <why> — <fallback>." The watermark's image branch and the story
+    card's avatar (E20-F06) both go through here: one check, one message
+    shape, each naming its own fallback."""
+    path = str(path or "").strip()
+    if not path:
+        return None
+    data = _read(Path(path))
+    size = png_size(data)
+    if size is None:
+        if say:
+            why = "missing" if data is None else "not a PNG"
+            say(f"{label} {Path(path).name} is {why} — {fallback}.")
+        return None
+    return Mark("image", path=path, width=size[0], height=size[1])
 
 
 def resolve(settings, say: Callable[[str], None] | None = None) -> Mark | None:
@@ -152,14 +194,7 @@ def resolve(settings, say: Callable[[str], None] | None = None) -> Mark | None:
     through `say`."""
     image = str(settings.watermark.image or "").strip()
     if image:
-        data = _read(Path(image))
-        size = png_size(data)
-        if size is None:
-            if say:
-                why = "missing" if data is None else "not a PNG"
-                say(f"Watermark image {Path(image).name} is {why} — rendering without a watermark.")
-            return None
-        return Mark("image", path=image, width=size[0], height=size[1])
+        return resolve_image(image, say)
     text = _text(settings)
     if text:
         return Mark("text", text=text)
@@ -277,18 +312,22 @@ def safe_stem(name: str) -> str:
     return stem or "watermark"
 
 
-def import_image(src: Path) -> Path:
-    """Copy a chosen PNG into PUBLIKCLIP_HOME/watermarks and return the
-    stored path — what the deck sends as the job's `watermark.image`.
-    Named by the source's stem plus eight hex of its content hash: the
-    same bytes import to the same path, a changed logo to a new one, and
-    nothing the user has on disk is referenced afterwards."""
+def import_image(src: Path, dest_dir: Path | None = None) -> Path:
+    """Copy a chosen PNG into `dest_dir` — PUBLIKCLIP_HOME/watermarks by
+    default, PUBLIKCLIP_HOME/avatars for the story card's avatar
+    (E20-F06) — and return the stored path: what the deck sends as the
+    job's `watermark.image` or `story.avatar`. Named by the source's stem
+    plus eight hex of its content hash: the same bytes import to the same
+    path, a changed logo to a new one, and nothing the user has on disk is
+    referenced afterwards. One helper for both pictures, parameterised by
+    the folder alone: the PNG check, the naming and the atomic copy are
+    the same job, and a second copy of it would drift."""
     data = _read(src)
     if data is None:
         raise WatermarkError(f"cannot read {src.name}")
     if png_size(data) is None:
         raise WatermarkError(f"{src.name} is not a PNG image")
-    dest_dir = config.watermarks_dir()
+    dest_dir = dest_dir if dest_dir is not None else config.watermarks_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{safe_stem(src.stem)}-{hashlib.sha256(data).hexdigest()[:8]}.png"
     if not dest.exists():
