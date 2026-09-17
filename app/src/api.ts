@@ -3,6 +3,8 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type {
   BootstrapStatus,
   CaptionPreset,
+  DeleteJobInfo,
+  DeleteJobResult,
   DescriptionResult,
   EditContext,
   EditState,
@@ -101,6 +103,11 @@ export const api = {
   queueState: () => invoke<QueueStateResult>('queue_state'),
   cancelPendingJob: (jobId: string) =>
     invoke<{ marked: boolean }>('cancel_pending_job', { jobId }),
+  // T-30: the two halves of a delete — what it would remove, then the
+  // deed. Both decided in python; the shell adds only "is it running or
+  // rendering this job right now", which python cannot see.
+  deleteJobInfo: (jobId: string) => invoke<DeleteJobInfo>('delete_job_info', { jobId }),
+  deleteJob: (jobId: string) => invoke<DeleteJobResult>('delete_job', { jobId }),
   resumeJob: (
     jobId: string,
     llm?: string,

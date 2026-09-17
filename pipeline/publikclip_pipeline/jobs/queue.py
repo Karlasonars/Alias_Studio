@@ -150,6 +150,18 @@ def list_jobs(limit: int = 50) -> list[Job]:
     return [_row_to_job(r) for r in rows]
 
 
+def delete_job_rows(job_id: str) -> dict:
+    """Both of a job's rows, in one transaction: the LAST step of a delete
+    (jobs/delete.py), taken only once the job dir is fully gone — a row
+    without a dir is a job the rail cannot show, and a dir without a row
+    is one the queue cannot; deleting in that order leaves neither
+    behind on a partial failure. Returns how many rows went."""
+    with _connect() as conn:
+        stages = conn.execute("DELETE FROM stage_runs WHERE job_id = ?", (job_id,)).rowcount
+        jobs = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,)).rowcount
+    return {"jobs": jobs, "stage_runs": stages}
+
+
 def set_job_status(job_id: str, status: str, error: str | None = None, title: str | None = None) -> None:
     with _connect() as conn:
         if title is not None:

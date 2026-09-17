@@ -87,6 +87,11 @@ export default function App() {
   // from Rust's queue-state event whenever the queue changes.
   const [enqueueing, setEnqueueing] = useState(0)
   const [queuedCount, setQueuedCount] = useState(0)
+  // T-30: SQLite's status per job and the shell's active run, from the same
+  // queue-state push — what lets the rail (filesystem truth) offer delete
+  // on terminal jobs only.
+  const [queueStatus, setQueueStatus] = useState<Record<string, string>>({})
+  const [shellActiveJob, setShellActiveJob] = useState<string | null>(null)
   const [hardware, setHardware] = useState<HardwareProfile | null>(null)
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
@@ -130,10 +135,13 @@ export default function App() {
     // push); a count that excludes it is honest - the same derivation the
     // queue view uses for its UP NEXT list. Not a "minus one": if the
     // snapshot already saw the flip, nothing is excluded.
-    const count = (s: QueueStateResult) =>
+    const count = (s: QueueStateResult) => {
       setQueuedCount(
         s.jobs.filter((j) => j.status === 'pending' && j.id !== s.active_job_id).length
       )
+      setQueueStatus(Object.fromEntries(s.jobs.map((j) => [j.id, j.status])))
+      setShellActiveJob(s.active_job_id)
+    }
     api.queueState().then(count).catch(() => {})
     let disposed = false
     let un: (() => void) | null = null
@@ -329,6 +337,25 @@ export default function App() {
     if (r.render?.outputs?.length) setView('review')
   }, [])
 
+  // T-30: the job is gone. Re-read the rail from disk, and drop whatever
+  // this screen still held of it — the results that would reopen its
+  // Review, and the deck's error and stage bars if it was the last job
+  // shown there — so nothing on screen can lead back into a folder that
+  // no longer exists. A different job's run in progress is untouched.
+  const onJobDeleted = useCallback(
+    (jobId: string) => {
+      refreshJobs()
+      setResults((r) => (r && r.job_id === jobId ? null : r))
+      if (activeJobRef.current === jobId && !runningRef.current) {
+        setActiveJob(null)
+        setRunError(null)
+        setCancelled(false)
+        setStages({})
+      }
+    },
+    [refreshJobs]
+  )
+
   let content: ReactElement
 
   if (view === 'boot') {
@@ -397,6 +424,9 @@ export default function App() {
         }}
         onOpenQueue={() => setView('queue')}
         onOpenJob={openJob}
+        jobStatus={queueStatus}
+        activeJobId={shellActiveJob}
+        onDeleted={onJobDeleted}
         onResume={(id, fromStage) => {
           setRunning(true)
           setRunError(null)

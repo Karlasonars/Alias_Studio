@@ -5,6 +5,7 @@ import { hardwareLabel, sixtyMinEstimate } from '../hw'
 import type {
   ErrorInfo, HardwareProfile, JobSummary, LogLine, ResumeInfo, StoryLimits, StoryRun
 } from '../types'
+import DeleteJobDialog from './DeleteJobDialog'
 import ErrorPanel from './ErrorPanel'
 import KeyModal from './KeyModal'
 import ResumePicker from './ResumePicker'
@@ -96,9 +97,17 @@ interface Props {
   onOpenSettings: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, fromStage?: string) => void
+  /** T-30: SQLite's status per job id, from the queue-state push — the rail
+   *  itself is filesystem truth and cannot tell pending from failed. A job
+   *  the map does not know has no row, or is older than the listing. */
+  jobStatus: Record<string, string>
+  /** T-30: the job the shell is running right now, from the same push */
+  activeJobId: string | null
+  /** T-30: the job is gone from disk and the records */
+  onDeleted: (id: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, errorJobId, cancelled, diskNotice, log, enqueueing, queued, hardware, chain, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, errorJobId, cancelled, diskNotice, log, enqueueing, queued, hardware, chain, onCancel, onRun, onOpenLoop, onOpenQueue, onOpenSettings, onOpenJob, onResume, jobStatus, activeJobId, onDeleted }: Props) {
   const [source, setSource] = useState('')
   // E20 (D-19): the chain, chosen above CUT IT. Stories is its own panel:
   // a background of the user's, a text, a voice and a speed. The clips
@@ -259,6 +268,17 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
     if (!running) setCancelling(false)
   }, [running])
 
+  // T-30: the delete affordance shows on terminal jobs only — done, failed,
+  // cancelled, or a folder with no row — never on one that is pending,
+  // running, or the shell's active run. This is the rail's hint; python
+  // re-checks the status when asked and again when it deletes.
+  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null)
+  const deletable = (job: JobSummary) => {
+    const status = jobStatus[job.id]
+    if (status === 'pending' || status === 'running') return false
+    return job.id !== activeJobId
+  }
+
   const openResumePicker = (job: JobSummary) => {
     setResumePick({ id: job.id, title: job.title ?? job.id, info: null })
     api
@@ -379,6 +399,17 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
           onClose={() => setResumePick(null)}
         />
       )}
+      {deleting && (
+        <DeleteJobDialog
+          jobId={deleting.id}
+          title={deleting.title}
+          onClose={() => setDeleting(null)}
+          onDeleted={(id) => {
+            setDeleting(null)
+            onDeleted(id)
+          }}
+        />
+      )}
       <aside className="rail">
         <header className="rail-brand">
           <span className="rail-logo">Alias Studio</span>
@@ -388,25 +419,39 @@ export default function Studio({ jobs, running, stages, error, errorJobId, cance
           <p className="rail-label">SESSIONS</p>
           {jobs.length === 0 && <p className="rail-empty">nothing yet</p>}
           {jobs.map((job) => (
-            <button
-              key={job.id}
-              className={`rail-job ${job.rendered ? '' : 'partial'}`}
-              onClick={() => (job.rendered ? onOpenJob(job.id) : openResumePicker(job))}
-              disabled={running}
-              title={
-                job.rendered
-                  ? 'open results'
-                  : job.cancelled
-                    ? 'cancelled — resume from checkpoint'
-                    : 'resume from checkpoint'
-              }
-            >
-              <span className={`led ${job.rendered ? 'led-on' : 'led-half'}`} />
-              <span className="rail-job-title">{job.title ?? job.id}</span>
-              <span className="rail-job-hint">
-                {job.rendered ? 'open' : job.cancelled ? 'cancelled' : 'resume'}
-              </span>
-            </button>
+            <div key={job.id} className="rail-row">
+              <button
+                className={`rail-job ${job.rendered ? '' : 'partial'}`}
+                onClick={() => (job.rendered ? onOpenJob(job.id) : openResumePicker(job))}
+                disabled={running}
+                title={
+                  job.rendered
+                    ? 'open results'
+                    : job.cancelled
+                      ? 'cancelled — resume from checkpoint'
+                      : 'resume from checkpoint'
+                }
+              >
+                <span className={`led ${job.rendered ? 'led-on' : 'led-half'}`} />
+                <span className="rail-job-title">{job.title ?? job.id}</span>
+                <span className="rail-job-hint">
+                  {job.rendered ? 'open' : job.cancelled ? 'cancelled' : 'resume'}
+                </span>
+              </button>
+              {/* T-30: a sibling, not a child — a button inside a button is
+                  not HTML. Deleting another job while one runs is allowed;
+                  the running job itself never gets the control. */}
+              {deletable(job) && (
+                <button
+                  className="rail-job-delete"
+                  title="delete this job"
+                  aria-label={`delete ${job.title ?? job.id}`}
+                  onClick={() => setDeleting({ id: job.id, title: job.title ?? job.id })}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ))}
         </div>
         {/* E13-F01: the machine and its measured expectation, refreshed by
