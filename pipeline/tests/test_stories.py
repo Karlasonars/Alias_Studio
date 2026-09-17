@@ -25,7 +25,7 @@ import pytest
 from publikclip_pipeline import chains, config
 from publikclip_pipeline.jobs import queue
 from publikclip_pipeline.captions import ass as ass_mod
-from publikclip_pipeline.captions import story_card
+from publikclip_pipeline.captions import font_metrics, story_card
 from publikclip_pipeline.narrate import kokoro_tts, limits
 from publikclip_pipeline.narrate import stage as narrate_stage
 from publikclip_pipeline.narrate import story as story_mod
@@ -213,6 +213,11 @@ def test_the_clips_chain_builds_ingest_with_audio_required():
 
 
 STORY = "The chair\r\n\r\nNobody had moved the chair.  \nWe had not touched it for eleven years.\r\n"
+# Longer than any card has room for: the body must be cut at a word.
+LONG_STORY = "The chair\n\n" + " ".join(
+    ["Nobody had moved the chair. We had not touched it for eleven years, and every "
+     "Sunday she dusted it before church and put the cushion back where it had been."] * 6
+)
 
 
 def test_story_parse_splits_title_from_body_and_hashes_the_normalised_text():
@@ -669,7 +674,10 @@ def test_the_card_is_a_channel_card_in_the_apps_own_design_and_leaves_when_the_t
     preset = ass_mod.resolve_preset("classic")
     card = story_card.Card("The chair", 2.4, channel="Alias Studio", duration_sec=83.0)
     styles, events = story_card.overlay(preset, card)
-    for style in ("StoryTitle,Inter", "StoryName,Inter", "StoryMeta,Inter", "StoryInitial,Inter", "StoryShape"):
+    for style in (
+        "StoryTitle,Inter", "StoryBody,Inter", "StoryName,Inter", "StoryMeta,Inter", "StoryInitial,Inter",
+        "StoryShape",
+    ):
         assert f"Style: {style}" in styles
     parts = _named(events)
     assert set(parts) == {"shadow", "panel", "avatar", "initial", "name", "title", "heart", "share", "duration"}
@@ -688,10 +696,16 @@ def test_the_card_is_a_channel_card_in_the_apps_own_design_and_leaves_when_the_t
     assert _text_of(parts["name"]) == "Alias Studio"
     assert f"\\pos({ax + d + story_card.NAME_GAP},{ay + d // 2})" in parts["name"]
     assert "Style: StoryName,Inter,56," in styles and ",-1,0,0,0," in styles.split("StoryName")[1].split("\n")[0]
-    # the title: near-black ink, no outline, left-aligned, wrapped by libass
+    # the title: near-black ink, no outline, left-aligned, bold as the preset
+    # is, on the card's own line breaks (\q2: it must know where the title
+    # ends to put the body under it — libass's wrapping would not tell it)
     assert _text_of(parts["title"]) == "The chair"
-    assert "\\an7" in parts["title"] and "\\q0" in parts["title"] and "\\bord0" in parts["title"]
-    assert f"Style: StoryTitle,Inter,{story_card.TITLE_SIZE_SHORT},&H001A1A1A,&H001A1A1A," in styles
+    assert "\\an7" in parts["title"] and "\\q2" in parts["title"] and "\\bord0" in parts["title"]
+    assert "\\q0" not in events
+    black = "&H00000000,&H00000000"
+    assert f"Style: StoryTitle,Inter,{story_card.TITLE_SIZE_SHORT},&H001A1A1A,&H001A1A1A,{black},-1,0,0,0," in styles
+    assert f"Style: StoryBody,Inter,{story_card.BODY_SIZE},&H00333333,&H00333333,{black},-1,0,0,0," in styles
+    assert "body" not in parts  # a title-only story: no body event, nothing drawn where there is no text
     # the bottom row: two bare glyphs — drawings, nothing beside them — and one real number
     for glyph in ("heart", "share"):
         assert "\\p1}" in parts[glyph] and parts[glyph].rstrip().endswith("{\\p0}")
@@ -726,20 +740,135 @@ def test_the_title_is_sentence_case_whatever_the_preset_says():
     preset = ass_mod.resolve_preset(story_render.STORY_PRESET)
     assert preset.uppercase is True
     parts = _named(story_card.overlay_events(preset, story_card.Card("The chair nobody moved", 2.0)))
-    assert _text_of(parts["title"]) == "The chair nobody moved"
+    assert _text_of(parts["title"]).replace("\\N", " ") == "The chair nobody moved"
+    # and the two display faces are not asked for a weight they do not have
+    styles = story_card.overlay_styles(preset)
+    black = "&H00000000,&H00000000"
+    assert f"Style: StoryTitle,Archivo Black,{story_card.TITLE_SIZE_SHORT},&H001A1A1A,&H001A1A1A,{black},0,0,0,0," in styles
+    assert f"Style: StoryBody,Archivo Black,{story_card.BODY_SIZE},&H00333333,&H00333333,{black},0,0,0,0," in styles
 
 
-def test_the_longest_title_still_fits_above_the_bottom_row():
-    """Legibility at 1080x1920 with the title at its longest: the smallest
-    title size over four wrapped lines, under a full header, ends above
-    the bottom row's band with air to spare."""
-    ax, ay, d = story_card.avatar_box()
-    title_top = ay + d + story_card.HEADER_GAP
-    four_lines = 4 * int(story_card.TITLE_SIZE_LONG * 1.2)
-    row_top = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H
-    assert title_top + four_lines + 40 <= row_top
+def _card_parts(doc: str) -> dict[str, str]:
+    """The card's events out of a whole caption document — the ones in a
+    Story* style; caption and watermark lines carry no name."""
+    return _named("\n".join(line for line in doc.splitlines() if ",Story" in line))
+
+
+@pytest.mark.parametrize("preset_name", ["classic", story_render.STORY_PRESET, "beast"])
+def test_a_long_story_fills_the_card_and_is_cut_at_a_word_above_the_bottom_row(preset_name):
+    """The body is the hook: directly under the title, in the same face at
+    the same left margin, every whole line of story that fits between the
+    header and the bottom row's band — and a story longer than that ends
+    at a WORD boundary with an ellipsis: never mid-word, and no line
+    below the floor. Measured with the face's own widths, so it holds for
+    each of the three bundled faces, whose widths and line pitches differ."""
+    preset = ass_mod.resolve_preset(preset_name)
+    metrics = font_metrics.for_preset(preset)
+    assert metrics.real, "the card measures with the real face, not the estimate"
+    body = " ".join(["Nobody had moved the chair, and every Sunday she dusted it before church."] * 12)
+    card = story_card.Card(
+        "The chair nobody moved", 2.4, channel="Alias Studio", duration_sec=83.0, body=body,
+    )
+    block = story_card.layout(preset, card)
+    styles, events = story_card.overlay(preset, card)
+    parts = _named(events)
+    assert set(parts) == {
+        "shadow", "panel", "avatar", "initial", "name", "title", "body", "heart", "share", "duration",
+    }
+    assert f"Style: StoryBody,{preset.font},{story_card.BODY_SIZE},&H00333333," in styles
+    drawn = _text_of(parts["body"]).split("\\N")
+    assert tuple(drawn) == block.body_lines and block.body_truncated
+    assert len(drawn) >= 3
+    assert drawn[-1].endswith("…") and not drawn[-1].endswith(" …")
+    # at a word boundary: what is drawn is the story's own words, in order,
+    # and the last one is whole (its trailing comma, if any, went under the ellipsis)
+    words = body.split()
+    shown = " ".join(drawn).rstrip("…").split()
+    assert shown[:-1] == words[:len(shown) - 1]
+    assert words[len(shown) - 1].rstrip(".,;:") == shown[-1]
+    # one block: the body TITLE_BODY_GAP under the title's last line, same
+    # margin, on the card's own breaks — and never into the bottom row
+    left = story_card.PANEL_X + story_card.INSET
+    assert f"\\pos({left},{block.top})" in parts["title"]
+    assert f"\\pos({left},{block.body_y})" in parts["body"]
+    assert "\\q2" in parts["title"] and "\\q2" in parts["body"]
+    title_h = len(block.title_lines) * metrics.pitch(block.title_size)
+    assert block.body_y == int(round(block.top + title_h + story_card.TITLE_BODY_GAP))
+    floor = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H
+    assert block.floor == floor and block.bottom <= floor
+    pitch = metrics.pitch(story_card.BODY_SIZE)
+    assert block.body_y + len(drawn) * pitch <= floor < block.body_y + (len(drawn) + 1) * pitch
+    width = story_card.PANEL_W - 2 * story_card.INSET
+    assert all(metrics.width(line, story_card.BODY_SIZE) <= width for line in drawn)
+    assert all(metrics.width(line, block.title_size) <= width for line in block.title_lines)
+    # the bottom row is where it was, and the card's chrome is what it was
+    row_y = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H // 2
+    assert f"\\pos({story_card.PANEL_X + story_card.PANEL_W - story_card.INSET},{row_y})" in parts["duration"]
+    assert _text_of(parts["duration"]) == "1:23" and _text_of(parts["heart"]) == ""
+    assert sum("\\p1" in line for line in parts.values()) == 5
+    # the body is on screen exactly as long as the card, and fades with it
+    assert "0:00:00.00,0:00:02.40" in parts["body"] and "\\fad(" in parts["body"]
+
+
+def test_a_short_story_draws_fully_and_a_one_line_story_makes_a_valid_card():
+    """A story shorter than the space is drawn whole with no ellipsis; a
+    blank line starts a new line and a lone line break is a space; a
+    title-only story draws the card it always did, with no body event."""
+    preset = ass_mod.resolve_preset("classic")
+    short = story_card.Card(
+        "The chair", 2.0, channel="Alias", duration_sec=40.0,
+        body="Nobody had moved it.\nWe had not touched it for eleven years.\n\nUntil Sunday.",
+    )
+    block = story_card.layout(preset, short)
+    parts = _named(story_card.overlay_events(preset, short))
+    drawn = _text_of(parts["body"]).split("\\N")
+    assert tuple(drawn) == block.body_lines and not block.body_truncated
+    assert "…" not in parts["body"]
+    assert " ".join(drawn).split() == (
+        "Nobody had moved it. We had not touched it for eleven years. Until Sunday.".split()
+    )
+    assert drawn[-1] == "Until Sunday."
+    assert block.bottom <= block.floor
+    # one line: the title alone, and the card is exactly what it was
+    one = story_card.Card("The chair", 2.0, channel="Alias", duration_sec=40.0)
+    parts = _named(story_card.overlay_events(preset, one))
+    assert set(parts) == {"shadow", "panel", "avatar", "initial", "name", "title", "heart", "share", "duration"}
+    block = story_card.layout(preset, one)
+    assert block.body_lines == () and block.body_y == 0 and not block.body_truncated
+    assert block.title_lines == ("The chair",) and block.bottom == block.top + story_card.TITLE_SIZE_SHORT
+    # whitespace is no body either
+    assert story_card.layout(preset, dataclasses.replace(one, body="  \n\n ")).body_lines == ()
+    assert story_card.paragraphs("a\nb\n\n\n c \n") == ["a b", "c"]
+
+
+def test_the_longest_title_still_leaves_story_under_it_and_never_reaches_the_row():
+    """Legibility at 1080x1920 with the title at its longest sensible
+    length under a full header, in each bundled face: the title stays
+    bigger than the channel name, is not cut, ends above the bottom row
+    with at least two lines of story under it — and an absurd title is cut
+    with an ellipsis rather than drawn into the row."""
+    long_title = (
+        "I found out why my grandmother kept a chair nobody was allowed to sit in "
+        "for eleven years and now I regret it"
+    )
+    body = " ".join(["Nobody had moved the chair."] * 40)
+    for name in ("classic", story_render.STORY_PRESET, "beast"):
+        preset = ass_mod.resolve_preset(name)
+        block = story_card.layout(preset, story_card.Card(
+            long_title, 2.0, channel="Alias Studio", avatar="C:/a.png", duration_sec=90.0, body=body,
+        ))
+        assert block.title_size == story_card.TITLE_SIZE_LONG and not block.title_truncated
+        assert len(block.title_lines) <= 5 and len(block.body_lines) >= 2, name
+        assert block.bottom <= block.floor
     assert story_card.TITLE_SIZE_LONG >= 48                    # never below phone-legible
+    assert story_card.TITLE_SIZE_LONG > story_card.NAME_SIZE   # the title leads; the name is secondary
+    assert story_card.title_size("short") > story_card.title_size("x" * 50) > story_card.title_size("x" * 100)
     assert story_card.PANEL_Y + story_card.PANEL_H < ass_mod.PLAY_RES_Y - 400  # clear of the captions' band
+    absurd = story_card.layout(
+        ass_mod.resolve_preset("classic"), story_card.Card("word " * 120, 2.0, channel="Alias", body=body),
+    )
+    assert absurd.title_truncated and absurd.title_lines[-1].endswith("…") and absurd.body_lines == ()
+    assert absurd.bottom <= absurd.floor
 
 
 def test_no_picture_means_the_initial_and_nothing_means_no_header():
@@ -885,8 +1014,8 @@ def test_the_story_render_fingerprint_covers_what_it_bakes_in(tmp_path):
     # the card was redrawn as a channel card: every story rendered with the
     # old drawing re-renders once, and no job renders a card the code no
     # longer has
-    assert story_card.CARD_VERSION >= 4  # the white card (E20-F05 look): every story re-renders once
-    for old in (1, 2, 3):
+    assert story_card.CARD_VERSION >= 5  # the filled card (E20-F05 body): every story re-renders once
+    for old in (1, 2, 3, 4):
         assert stage.artifacts_ok(ctx, {**data, "card_version": old}) is False
     out.unlink()
     assert stage.artifacts_ok(ctx, data) is False
@@ -918,9 +1047,19 @@ def test_the_story_render_makes_one_verified_vertical_file(tmp_path):
     assert doc.count("Cap,,0,0,0,") == 5  # one Dialogue per word: one-word captions
     assert story_render.StoryRenderStage().artifacts_ok(ctx, data) is True
     # no watermark configured, no channel name: a card with no header, its
-    # meta row the narration's length — and the render verified above
-    assert data["card"] == {"avatar": "", "duration_label": "0:04"}
+    # meta row the narration's length, the story's two sentences whole
+    # under the title — and the render verified above
+    block = story_card.layout(
+        ass_mod.resolve_preset(story_render.STORY_PRESET),
+        story_card.Card("The chair", 1.0, duration_sec=3.5, body=story_mod.parse(STORY).body),
+    )
+    assert len(block.body_lines) >= 2 and not block.body_truncated
+    assert data["card"] == {
+        "avatar": "", "duration_label": "0:04",
+        "body_lines": len(block.body_lines), "body_truncated": False,
+    }
     assert "StoryInitial" not in doc.split("[Events]")[1] and "0:04" in doc
+    assert _text_of(_card_parts(doc)["body"]).split("\\N") == list(block.body_lines)
 
 
 def _sha(path: Path) -> str:
@@ -944,6 +1083,38 @@ def _capture_render(monkeypatch) -> dict:
     monkeypatch.setattr(ffmpeg_bin, "supports_captions", lambda: True)
     monkeypatch.setattr(ass_mod, "emoji_probe", lambda: False)
     return seen
+
+
+def test_the_render_reads_the_body_from_the_jobs_story_file_and_survives_its_absence(tmp_path, monkeypatch):
+    """The body is story.txt in the job dir — the file narrate hashed into
+    its fingerprint, so an edited story re-renders through the cascade and
+    the render's own fingerprint needs no key for it — and a file gone by
+    render time gives the title alone, said once, never a failed job."""
+    job, settings = _story_job(text=LONG_STORY, channel_name="Alias")
+    _capture_render(monkeypatch)
+    said: list[str] = []
+    ctx = queue._ctx_for(
+        queue.StageContext(job=job, settings=settings, progress=lambda s, f, m: said.append(m)),
+        "render", _story_prior(job, tmp_path),
+    )
+    assert story_render.story_body(job.dir) == story_mod.parse(LONG_STORY).body
+    data = story_render.StoryRenderStage().run(ctx)
+    doc = Path(data["outputs"][0]["ass"]).read_text(encoding="utf-8")
+    body = _text_of(_card_parts(doc)["body"])
+    assert body.startswith("Nobody had moved the chair.") and body.endswith("…")
+    assert data["card"]["body_lines"] == len(body.split("\\N")) > 0
+    assert data["card"]["body_truncated"] is True
+    assert not any("story.txt" in m for m in said)
+    # the render fingerprint has no key for the text: it is narrate's
+    assert "body" not in story_render._fingerprint(ctx) and "text_sha256" not in story_render._fingerprint(ctx)
+
+    story_mod.path_in(job.dir).unlink()
+    assert story_render.story_body(job.dir, say=said.append) == ""
+    data = story_render.StoryRenderStage().run(ctx)
+    doc = Path(data["outputs"][0]["ass"]).read_text(encoding="utf-8")
+    assert "body" not in _card_parts(doc) and ",StoryTitle," in doc
+    assert data["card"]["body_lines"] == 0 and data["card"]["body_truncated"] is False
+    assert said.count("story.txt could not be read — the card shows the title alone.") == 2
 
 
 def test_the_avatar_and_the_watermark_resolve_independently(tmp_path, monkeypatch):
@@ -1120,8 +1291,12 @@ def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_picture(tmp_path
 
     Sampled at 0.3 s, not at frame 0: the card fades in over 160 ms, so
     frame 0 of a card render is identical to frame 0 without one BY
-    DESIGN, and at 0.3 s it is fully up."""
-    job, settings = _story_job(channel_name="Alias Studio")
+    DESIGN, and at 0.3 s it is fully up.
+
+    The story is a long one, so the body fills every line it has and is
+    cut: the frame must show ink where the body is and none between the
+    block's floor and the bottom row's glyphs."""
+    job, settings = _story_job(text=LONG_STORY, channel_name="Alias Studio")
     settings.caption_preset = story_render.STORY_PRESET
     prior = _story_prior(job, tmp_path)
 
@@ -1140,14 +1315,16 @@ def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_picture(tmp_path
     assert bare["outputs"][0]["path"] == str(path)
     bare_frame = _frame(path, 0.3)
     assert not np.array_equal(card_frame, bare_frame)
-    # Inside the card, under the one-line title and above the bottom row,
-    # where nothing is written: near-white in every channel and in every
-    # pixel — an opaque white card that wins over the busy background,
-    # which is the change the owner asked for and the one a refactor
-    # would silently undo. The bare frame there is testsrc2's colour.
+    # Inside the card where nothing is written — the bottom row's band,
+    # between the share glyph and the duration: near-white in every
+    # channel and in every pixel — an opaque white card that wins over the
+    # busy background, which is the change the owner asked for and the one
+    # a refactor would silently undo. The bare frame there is testsrc2's
+    # colour. It is also exactly where a body that ran past its floor
+    # would land.
     ax, ay, d = story_card.avatar_box()
-    y0 = ay + d + story_card.HEADER_GAP + 2 * story_card.TITLE_SIZE_SHORT
-    region = (slice(y0, y0 + 40), slice(story_card.PANEL_X + 300, story_card.PANEL_X + 700))
+    row_y = story_card.PANEL_Y + story_card.PANEL_H - story_card.META_H // 2
+    region = (slice(row_y - 20, row_y + 20), slice(story_card.PANEL_X + 300, story_card.PANEL_X + 700))
     white = card_frame[region].reshape(-1, 3)
     assert white.mean(axis=0).min() > 235          # near-white on average, every channel
     assert white.min() > 200                       # ...and nowhere does the video show through
@@ -1156,6 +1333,18 @@ def test_the_card_is_in_the_pixels_and_the_avatar_is_the_masked_picture(tmp_path
     ty = ay + d + story_card.HEADER_GAP
     title_band = card_frame[ty:ty + story_card.TITLE_SIZE_SHORT, story_card.PANEL_X + 64:story_card.PANEL_X + 400]
     assert title_band.reshape(-1, 3).min() < 60
+    # the body fills the card under it: ink in its first line, the ellipsis
+    # on its last, and the air between the block's floor and the row's
+    # glyphs untouched — the body never reaches the bottom row
+    card_parts = _card_parts(doc)
+    body_y = int(card_parts["body"].split("\\pos(")[1].split(",")[1].split(")")[0])
+    assert ty + story_card.TITLE_SIZE_SHORT < body_y < row_y
+    body_band = card_frame[body_y:body_y + story_card.BODY_SIZE, story_card.PANEL_X + 64:story_card.PANEL_X + 400]
+    assert body_band.reshape(-1, 3).min() < 80
+    assert _text_of(card_parts["body"]).endswith("…") and with_card["card"]["body_truncated"] is True
+    floor, glyph_top = story_card.block_floor(), row_y - story_card.GLYPH // 2
+    air = card_frame[floor + 8:glyph_top - 8, story_card.PANEL_X + 64:story_card.PANEL_X + story_card.PANEL_W - 64]
+    assert air.reshape(-1, 3).min() > 200
 
     red = _avatar_png(tmp_path / "avatar.png")
     green = _avatar_png(tmp_path / "mark.png", rgb=(30, 220, 30))

@@ -512,12 +512,27 @@ exists and copies it into the job dir.
 card with a soft blurred shadow, near-black ink, in the app's own design,
 laid out like a social post card but carrying the user's own channel: a
 header row (a 160 px avatar circle, `Settings.story.channel_name` in bold
-beside it), the title in the caption preset's face in sentence case whatever
-the preset's `uppercase` says, sized by length, and a bottom row where a post
-card puts its engagement: a bare heart glyph, a bare share glyph (ASS
-drawings, not font glyphs — the bundled faces are not guaranteed a heart),
-and the narration's duration as `narrate` measured it, right-aligned. No
-horizontal rule. Every event carries its role in the ASS Name field (panel,
+beside it), one text block — the title in the caption preset's face, bold as
+the preset is, in sentence case whatever the preset's `uppercase` says, sized
+by length (84/70/58, never below the name's 56), and directly under it the
+story's opening text from the job's `story.txt` in the same face at 54, a
+shade lighter, flowing down to the bottom row's band and cut at a word
+boundary with an ellipsis when the story is longer: never mid-word, never
+into the row; the card does not grow and stays up for the title's narration
+as before — and a bottom row where a post card puts its engagement: a bare
+heart glyph, a bare share glyph (ASS drawings, not font glyphs — the bundled
+faces are not guaranteed a heart), and the narration's duration as `narrate`
+measured it, right-aligned. No horizontal rule. The card breaks its own lines
+(`\q2` plus `\N`) with the face's real advance widths from
+`captions/font_metrics.py`, which reads the bundled fonts' own tables and
+scales them the way libass does — an ASS font size is a line pitch, the OS/2
+win height, not an em — so it knows where the space runs out before ffmpeg
+draws anything; a missing or unreadable face degrades to a wide estimate.
+The body needs no fingerprint key: `narrate` hashes `story.txt`, so an edited
+story reaches the render through the cascade (§5 rule 2), and a file gone by
+render time gives the title alone with a message. `render.json`'s `card`
+records `body_lines` and `body_truncated` beside the avatar and the duration
+label. Every event carries its role in the ASS Name field (panel, body,
 heart, duration…) so a test finds a part by what it is. No other platform's
 logo or wordmark, no invented username, no verified badge, no award icons, no
 vote, comment, share or view counts: a glyph is decoration, a number beside
@@ -539,7 +554,7 @@ identity: set once in Settings, prefilled on the deck, overridable there for
 one job (`--channel-name`, `--avatar`; `""` is an explicit none) without
 writing back. `channel_name`, `avatar` (`{path, sha256}` through
 `watermark.image_fingerprint`, its own entry beside the watermark's so
-neither file can be mistaken for the other) and `card_version` (now 3) are
+neither file can be mistaken for the other) and `card_version` (now 5) are
 in the story render's fingerprint.
 
 ## 5. The checkpoint contract
