@@ -658,3 +658,143 @@ describe('Stories mode is a second chain on the same deck (E20, D-19)', () => {
     expect(screen.getAllByText(/the limit is 1500/).length).toBeGreaterThan(0)
   })
 })
+
+describe('a finished job can be deleted from the rail (T-30)', () => {
+  // The rail is filesystem truth (list_job_dirs); which of those jobs are
+  // terminal comes from SQLite through the queue-state snapshot, and the
+  // shell's active run rides the same push.
+  function railWithEveryStatus() {
+    commands.list_job_dirs = () => [
+      { id: 'job-done', title: 'Finished one', ingested: true, rendered: true, cancelled: false },
+      { id: 'job-failed', title: 'Failed one', ingested: true, rendered: false, cancelled: false },
+      { id: 'job-cancelled', title: 'Stopped one', ingested: true, rendered: false, cancelled: true },
+      { id: 'job-pending', title: 'Waiting one', ingested: false, rendered: false, cancelled: false },
+      { id: 'job-running', title: 'Running one', ingested: true, rendered: false, cancelled: false },
+      { id: 'job-orphan', title: null, ingested: false, rendered: false, cancelled: false }
+    ]
+    const row = (id: string, status: string) => ({
+      id, status, error: null, title: null, source: 'x', created_at: 1, stages_done: 0
+    })
+    commands.queue_state = () => ({
+      jobs: [
+        row('job-done', 'done'),
+        row('job-failed', 'failed'),
+        row('job-cancelled', 'cancelled'),
+        row('job-pending', 'pending'),
+        row('job-running', 'running')
+      ],
+      paused: false,
+      active_job_id: 'job-running',
+      ready: true
+    })
+  }
+
+  it('offers delete on terminal jobs and a row-less folder, never on pending or running', async () => {
+    railWithEveryStatus()
+    await mountStudio()
+    expect(screen.getByLabelText('delete Finished one')).toBeTruthy()
+    expect(screen.getByLabelText('delete Failed one')).toBeTruthy()
+    expect(screen.getByLabelText('delete Stopped one')).toBeTruthy()
+    // a folder with no SQLite row: nothing can be running it — terminal
+    expect(screen.getByLabelText('delete job-orphan')).toBeTruthy()
+    expect(screen.queryByLabelText('delete Waiting one')).toBeNull()
+    expect(screen.queryByLabelText('delete Running one')).toBeNull()
+    // and the shell's active run loses the control even before SQLite flips it
+    await act(async () => {
+      emit('queue-state', {
+        jobs: [{ id: 'job-done', status: 'done', error: null, title: null, source: 'x', created_at: 1, stages_done: 0 }],
+        paused: false,
+        active_job_id: 'job-done',
+        ready: true
+      })
+    })
+    expect(screen.queryByLabelText('delete Finished one')).toBeNull()
+  })
+
+  it('confirms with the numbers python measured, and KEEP calls nothing', async () => {
+    railWithEveryStatus()
+    commands.delete_job_info = () => ({
+      deletable: true, status: 'done', exists: true, clips: 12, bytes: 4.2e9, linked_reels: 2
+    })
+    commands.delete_job = () => ({ ok: true, freed_bytes: 4.2e9 })
+    await mountStudio()
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('delete Finished one'))
+    })
+    expect(callsTo('delete_job_info')).toBe(1)
+    expect(
+      (invokeMock.mock.calls.find(([c]) => c === 'delete_job_info')?.[1] as Record<string, unknown>).jobId
+    ).toBe('job-done')
+    // §28: the consequence in numbers — "Dzēsīs 12 klipus un 4.2 GB"
+    expect(screen.getByText('Delete 12 clips and 4.2 GB? This cannot be undone.')).toBeTruthy()
+    expect(screen.getByText(/2 clips are linked to posted Reels/)).toBeTruthy()
+    fireEvent.click(screen.getByText('KEEP'))
+    expect(callsTo('delete_job')).toBe(0)
+    expect(screen.queryByText(/This cannot be undone/)).toBeNull()
+    // a smaller job reads in megabytes
+    commands.delete_job_info = () => ({
+      deletable: true, status: 'failed', exists: true, clips: 1, bytes: 320.4e6, linked_reels: 0
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('delete Failed one'))
+    })
+    expect(screen.getByText('Delete 1 clip and 320 MB? This cannot be undone.')).toBeTruthy()
+    expect(screen.queryByText(/linked to posted Reels/)).toBeNull()
+  })
+
+  it('deletes on DELETE and re-reads the rail from disk', async () => {
+    railWithEveryStatus()
+    commands.delete_job_info = () => ({
+      deletable: true, status: 'done', exists: true, clips: 3, bytes: 1.5e9, linked_reels: 0
+    })
+    commands.delete_job = () => ({ ok: true, freed_bytes: 1.5e9 })
+    await mountStudio()
+    const railReads = callsTo('list_job_dirs')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('delete Finished one'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('DELETE'))
+    })
+    expect(callsTo('delete_job')).toBe(1)
+    expect(
+      (invokeMock.mock.calls.find(([c]) => c === 'delete_job')?.[1] as Record<string, unknown>).jobId
+    ).toBe('job-done')
+    expect(callsTo('list_job_dirs')).toBe(railReads + 1)
+    expect(screen.queryByText(/This cannot be undone/)).toBeNull()
+  })
+
+  it('shows a refusal or a failure where the action started, and touches nothing', async () => {
+    railWithEveryStatus()
+    // the shell holds the job (a clip render in flight): python's shape, no DELETE button
+    commands.delete_job_info = () => ({
+      deletable: false, reason: 'A clip of this job is still rendering — wait for it to finish.',
+      status: null, exists: true, clips: 0, bytes: 0, linked_reels: 0
+    })
+    await mountStudio()
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('delete Finished one'))
+    })
+    expect(screen.getByText(/still rendering/)).toBeTruthy()
+    expect(screen.queryByText('DELETE')).toBeNull()
+    fireEvent.click(screen.getByText('KEEP'))
+    // a delete that only partly happened: the error stays in the dialog and the rail is not re-read
+    commands.delete_job_info = () => ({
+      deletable: true, status: 'failed', exists: true, clips: 2, bytes: 8e8, linked_reels: 0
+    })
+    commands.delete_job = () => ({
+      ok: false, freed_bytes: 4e8,
+      error: 'The job was only partly removed: 1 item(s) could not be deleted (clip_01.mp4: in use).'
+    })
+    const railReads = callsTo('list_job_dirs')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('delete Failed one'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('DELETE'))
+    })
+    expect(screen.getByRole('alert').textContent).toContain('only partly removed')
+    expect(screen.getByText('DELETE')).toBeTruthy() // still open: a retry is one click away
+    expect(callsTo('list_job_dirs')).toBe(railReads)
+  })
+})

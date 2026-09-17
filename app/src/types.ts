@@ -379,6 +379,26 @@ export interface QueueStateResult {
   ready: boolean
 }
 
+/** T-30: what deleting a job would remove, decided in python (`jobs
+ * delete-info`) — or refused by the shell when it is running or rendering
+ * that job. `status` is the SQLite row's, null for a folder without a row.
+ * The numbers are measured off disk when asked, never estimated. */
+export interface DeleteJobInfo {
+  deletable: boolean
+  reason?: string | null
+  status: string | null
+  exists: boolean
+  clips: number
+  bytes: number
+  linked_reels: number
+}
+
+export interface DeleteJobResult {
+  ok: boolean
+  freed_bytes: number
+  error?: string | null
+}
+
 export interface SetupState {
   has_gemini_key: boolean
   onboarded: boolean

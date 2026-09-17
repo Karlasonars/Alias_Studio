@@ -3,6 +3,7 @@
 // event to the frontend, and exposes small filesystem/settings commands.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -182,6 +183,37 @@ struct QueueState {
 }
 
 struct RunState(Mutex<QueueState>);
+
+/// T-30: edit renders in flight, by job id. spawn_tool never registers in
+/// RunState — cancel must not reach an edit render — but a delete has to
+/// know: python cannot see a sidecar the shell spawned, and removing a
+/// job dir under a running render-clip would either fail halfway on a
+/// file in use or leave the render writing into a folder that is no
+/// longer a job. Counted, not flagged: the editor may start a second
+/// clip's render before the first has answered.
+struct EditRenders(Mutex<HashMap<String, u32>>);
+
+/// The one judgement about a delete that is the shell's, because only
+/// the shell can see it: is it running this job, or rendering one of its
+/// clips, right now? Some(reason) when it is. Everything else — terminal
+/// or not, what goes, what it costs — python decides (jobs/delete.py).
+fn shell_holds(app: &AppHandle, job_id: &str) -> Option<String> {
+    {
+        let state = app.state::<RunState>();
+        let guard = state.0.lock().unwrap();
+        if guard.active.as_ref().is_some_and(|run| run.job_id == job_id) {
+            return Some("This job is running — cancel it first.".to_string());
+        }
+    }
+    let renders = app.state::<EditRenders>();
+    let guard = renders.0.lock().unwrap();
+    if guard.get(job_id).copied().unwrap_or(0) > 0 {
+        return Some(
+            "A clip of this job is still rendering — wait for it to finish.".to_string(),
+        );
+    }
+    None
+}
 
 /// Which kind of sidecar stream_pipeline is driving. Only full job runs
 /// register in RunState - edit renders are never cancellable from here.
@@ -495,12 +527,18 @@ fn start_job_locked(
 }
 
 /// Spawn a non-job sidecar stream (edit render). Never registers in
-/// RunState, so cancel cannot reach it - deliberately.
-fn spawn_tool(app: &AppHandle, args: Vec<String>) {
+/// RunState, so cancel cannot reach it - deliberately. It does register
+/// the job it renders for in EditRenders (T-30) until the child is gone,
+/// so a delete of that job is refused while its clip is being written.
+fn spawn_tool(app: &AppHandle, args: Vec<String>, job_id: Option<String>) {
     let (program, base_args) = pipeline_invocation();
     let mut full = base_args;
     full.extend(args);
     let app = app.clone();
+    if let Some(id) = &job_id {
+        let renders = app.state::<EditRenders>();
+        *renders.0.lock().unwrap().entry(id.clone()).or_insert(0) += 1;
+    }
     std::thread::spawn(move || {
         let spawned = quiet_command(&program)
             .args(&full)
@@ -514,6 +552,16 @@ fn spawn_tool(app: &AppHandle, args: Vec<String>) {
                     "pipeline-event",
                     json!({"event": "result", "ok": false, "error": format!("could not start pipeline: {err}")}),
                 );
+            }
+        }
+        if let Some(id) = job_id {
+            let renders = app.state::<EditRenders>();
+            let mut guard = renders.0.lock().unwrap();
+            match guard.get_mut(&id) {
+                Some(n) if *n > 1 => *n -= 1,
+                _ => {
+                    guard.remove(&id);
+                }
             }
         }
     });
@@ -804,6 +852,37 @@ async fn resume_info(job_id: String) -> Result<Value, String> {
 async fn cancel_pending_job(app: AppHandle, job_id: String) -> Result<Value, String> {
     let out = one_shot_json(&["jobs".to_string(), "cancel-pending".to_string(), job_id])
         .ok_or_else(|| "cancel-pending produced no answer".to_string())?;
+    refresh_queue_cache(&app);
+    Ok(out)
+}
+
+/// T-30: what deleting a job would remove — python's answer (`jobs
+/// delete-info`: terminal or not, clips, bytes, linked Reels), unless
+/// the shell itself holds the job, which python cannot see. The refusal
+/// takes python's shape so the dialog reads one thing.
+#[tauri::command]
+async fn delete_job_info(app: AppHandle, job_id: String) -> Result<Value, String> {
+    if let Some(reason) = shell_holds(&app, &job_id) {
+        return Ok(json!({
+            "deletable": false, "reason": reason, "status": null, "exists": true,
+            "clips": 0, "bytes": 0, "linked_reels": 0
+        }));
+    }
+    one_shot_json(&["jobs".to_string(), "delete-info".to_string(), job_id])
+        .ok_or_else(|| "delete-info produced no answer".to_string())
+}
+
+/// T-30: the delete. The same refusal, then python's verb — which
+/// re-checks the job's status on its own and removes the dir before the
+/// rows — then the queue listing re-asked, because a row is gone. The
+/// rail re-reads the disk itself (list_job_dirs).
+#[tauri::command]
+async fn delete_job(app: AppHandle, job_id: String) -> Result<Value, String> {
+    if let Some(reason) = shell_holds(&app, &job_id) {
+        return Ok(json!({"ok": false, "freed_bytes": 0, "error": reason}));
+    }
+    let out = one_shot_json(&["jobs".to_string(), "delete".to_string(), job_id])
+        .ok_or_else(|| "delete produced no answer".to_string())?;
     refresh_queue_cache(&app);
     Ok(out)
 }
@@ -1470,9 +1549,10 @@ fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), Stri
             "--jsonl".to_string(),
             "edit".to_string(),
             "render-clip".to_string(),
-            job_id,
+            job_id.clone(),
             clip.to_string(),
         ],
+        Some(job_id),
     );
     Ok(())
 }
@@ -1629,6 +1709,7 @@ fn main() {
             paused: false,
         })))
         .manage(QueueCache(Mutex::new(QueueCacheInner { gen: 0, jobs: None })))
+        .manage(EditRenders(Mutex::new(HashMap::new())))
         .manage(SetupState(Mutex::new(None)))
         .manage(BootstrapState(Mutex::new(false)))
         .plugin(tauri_plugin_shell::init())
@@ -1646,6 +1727,8 @@ fn main() {
             set_queue_paused,
             queue_state,
             cancel_pending_job,
+            delete_job_info,
+            delete_job,
             job_results,
             list_job_dirs,
             save_gemini_key,

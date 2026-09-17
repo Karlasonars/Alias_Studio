@@ -150,6 +150,21 @@ body {
 }
 .btn-ghost:hover { color: var(--text); }
 
+/* T-30: the one irreversible button. The primary's geometry in the
+   signal-red the LEDs already use for a failure, so it cannot be mistaken
+   for CUT IT. */
+.btn-danger {
+  font-family: var(--display);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  background: var(--red);
+  color: var(--on-accent);
+  border: 0;
+  padding: 14px 26px;
+  cursor: pointer;
+}
+.btn-danger:disabled { opacity: 0.35; cursor: default; }
+
 /* ---------- LEDs ---------- */
 .led {
   display: inline-block;
@@ -354,6 +369,25 @@ body {
   transition: opacity 0.15s;
 }
 .rail-job:hover .rail-job-hint { opacity: 1; }
+/* T-30: the row holds the job button and, on terminal jobs, its delete
+   control as a sibling. Faint until the row is hovered or the control is
+   focused, so a keyboard user finds it and a mouse user is not shouted at. */
+.rail-row { display: flex; align-items: center; }
+.rail-row .rail-job { flex: 1; min-width: 0; }
+.rail-job-delete {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px 8px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.rail-row:hover .rail-job-delete,
+.rail-job-delete:focus-visible { opacity: 1; }
+.rail-job-delete:hover { color: var(--red); }
 
 .stage-area {
   position: relative;
@@ -1151,6 +1185,13 @@ body {
 .resume-loading { font-size: 13px; opacity: 0.6; }
 .resume-cost { font-size: 13px; color: var(--amber); }
 .resume-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+
+/* ---------- T-30 delete confirmation ---------- */
+.delete-dialog { min-width: 420px; display: grid; gap: 12px; border-top-color: var(--red); }
+.delete-question { font-size: 15px; line-height: 1.5; }
+.delete-note, .delete-reason { font-size: 13px; color: var(--dim); line-height: 1.5; }
+.delete-error { font-size: 13px; color: var(--red); line-height: 1.5; }
+.delete-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 .ig-intro { font-size: 14px; line-height: 1.6; color: var(--dim); margin-bottom: 22px; }
 .ig-intro em { color: var(--text); font-style: normal; }
 .ig-steps { list-style: none; padding: 0; margin: 0 0 24px; }

@@ -452,6 +452,19 @@ def cmd_jobs(args: argparse.Namespace) -> int:
     if sub == "mark-cancelled":
         print(json.dumps(queue.mark_cancelled(args.job_id)))
         return 0
+    if sub in ("delete-info", "delete"):
+        # T-30: what a delete would remove, and the delete itself. Both
+        # decided in jobs/delete.py; the verb parses and prints. `delete`
+        # re-checks the job's status on its own, so a shell that asked
+        # delete-info minutes ago cannot delete a job resumed since.
+        from .jobs import delete as job_delete
+
+        if sub == "delete-info":
+            print(json.dumps(job_delete.info(args.job_id)))
+            return 0
+        result = job_delete.delete(args.job_id)
+        print(json.dumps(result))
+        return 0 if result["ok"] else 1
     if args.jsonl:
         # The Queue view's data source: SQLite is the queue's bookkeeping,
         # and this is the one view that shows bookkeeping. The library rail
@@ -1066,6 +1079,15 @@ def main(argv: list[str] | None = None) -> int:
     jobs_sub.add_parser("reconcile", help="app-start bookkeeping for ghost 'running' rows")
     p_cp = jobs_sub.add_parser("cancel-pending", help="cancel a job that has not started")
     p_cp.add_argument("job_id")
+    p_di = jobs_sub.add_parser(
+        "delete-info",
+        help="what deleting a finished job would remove: clips, bytes, linked Reels (T-30)",
+    )
+    p_di.add_argument("job_id")
+    p_del = jobs_sub.add_parser(
+        "delete", help="delete a finished job: its folder first, then its rows (T-30)"
+    )
+    p_del.add_argument("job_id")
     p_jobs.set_defaults(fn=cmd_jobs)
 
     p_set = sub.add_parser("settings", help="read/write global settings + caption presets")
