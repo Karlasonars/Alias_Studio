@@ -27,8 +27,13 @@ Words that fall inside the title's audio are not captioned: the card
 (captions/story_card.py, F05) shows the title instead.
 
 The card (F05, channel-card amendment; F06, channel identity): the title
-under a header of the user's channel name and avatar, over a meta row
-carrying the narration's duration. The avatar is `story.avatar`, a PNG of
+and the story's opening lines under a header of the user's channel name
+and avatar, over a meta row carrying the narration's duration. The body
+is read from the job's own story.txt through `story_body` — the file
+narrate hashes into its fingerprint, so an edited story reaches this
+stage through the cascade and the card needs no key for it; a file that
+is gone by render time gives a card with the title alone, said once,
+never a failed job (§5.9). The avatar is `story.avatar`, a PNG of
 its own imported like the watermark (watermark.import_image into
 PUBLIKCLIP_HOME/avatars) and checked through the same `resolve_image` —
 never the watermark itself: F05 reused that file as a stopgap, and "why
@@ -60,6 +65,7 @@ from pathlib import Path
 from ..captions import ass as ass_mod
 from ..captions import story_card
 from ..jobs.queue import Stage, StageContext, StageError
+from ..narrate import story as story_text
 from . import renderer, watermark
 
 OUTPUT_NAME = "story.mp4"
@@ -110,6 +116,20 @@ def resolve_avatar(settings, say=None) -> str:
         fallback="the card shows the channel's initial instead",
     )
     return picture.path if picture is not None else ""
+
+
+def story_body(job_dir: Path, say=None) -> str:
+    """The story's text after its title, for the card, from the job's own
+    story.txt — the same file narrate read and hashed. "" when it cannot
+    be read: narrate would have refused to run without it, so this is a
+    file removed since, and the card then shows the title alone rather
+    than the job failing at its last stage."""
+    try:
+        return story_text.load(Path(job_dir)).body
+    except (OSError, UnicodeDecodeError):
+        if say:
+            say("story.txt could not be read — the card shows the title alone.")
+        return ""
 
 
 def avatar_vf(path: str, end_sec: float) -> str:
@@ -209,8 +229,10 @@ class StoryRenderStage(Stage):
         card = story_card.Card(
             title=title, end_sec=title_end, channel=channel_name(ctx.settings),
             duration_sec=float(narrate["duration_sec"]), avatar=avatar,
+            body=story_body(ctx.job_dir, say=lambda m: ctx.emit(-1, m)),
         )
         card_styles, card_events = story_card.overlay(preset, card)
+        block = story_card.layout(preset, card) if card_events else None
         # The picture covers the canvas, so the mark takes its on-picture
         # placement under the captions, through the one function every
         # render path calls (§5.8).
@@ -269,8 +291,16 @@ class StoryRenderStage(Stage):
             "title": title,
             "title_end_sec": title_end,
             # What the card showed, for the reader of the job dir: the
-            # avatar's file ("" = the initial) and the one number on it.
-            "card": {"avatar": avatar, "duration_label": story_card.duration_label(card.duration_sec)},
+            # avatar's file ("" = the initial), the one number on it, and
+            # how much of the story fit under the title — "why does my
+            # card end with an ellipsis" is answered here, not by opening
+            # the video.
+            "card": {
+                "avatar": avatar,
+                "duration_label": story_card.duration_label(card.duration_sec),
+                "body_lines": len(block.body_lines) if block else 0,
+                "body_truncated": bool(block.body_truncated) if block else False,
+            },
             "emoji_ok": emoji_ok,
             "captions_burned": captions_ok,
             **_fingerprint(ctx),
