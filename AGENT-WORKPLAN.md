@@ -599,19 +599,42 @@ truncated file served as done. Pre-existing — any crash does it — but cancel
 turned a rare event into a routine one, which is why T-07 closed the render instance
 inside `mark_cancelled` and reported the rest.
 
-### T-30 · Delete a finished job                          [P1, raised from use]
+### T-30 · Delete a finished job                          [DONE 2026-09-17]
 
 ```
-Blocked by  nothing
-Proves it   terminal-only guard; row and dir both gone; already-missing dir;
-            partial failure leaves the row intact
-Watch out   artifacts on disk are the truth (§2). Deleting a job destroys its
-            rendered clips. The confirmation must say how many and how many MB
+Merged      d84bed5  jobs/delete.py, the two verbs, the shell's refusal, the
+            rail's control, tests/test_job_delete.py, App.test.tsx
+Proves it   tests/test_job_delete.py — terminal-only guard (and `delete`
+            re-checks it itself); folder and both row kinds gone with other
+            jobs untouched; already-missing folder; folder with no row;
+            partial failure keeps the row (a monkeypatched remover, not a
+            Windows lock); bytes and clips measured off disk, stories too;
+            sixteen traversal ids refused; linked Reels named and kept.
+            App.test.tsx — the control on terminal rows only, the numbers
+            in the confirmation, KEEP calls nothing, DELETE re-reads the rail
+Watch out   artifacts on disk are the truth (§2): the folder goes first and
+            the rows only once it is fully gone. The confirmation says how
+            many clips and how many MB/GB, measured, never estimated
 ```
 
-Nothing can ever be removed. After a week of testing the library is a wall of dead
-rows. Only terminal jobs (done, failed, cancelled) — pending has cancel already,
-running has T-07. No bulk delete, no trash, no auto-cleanup by age (§8).
+Nothing could ever be removed. After a week of testing the library was a wall of
+dead rows. Only terminal jobs (done, failed, cancelled) — pending has cancel,
+running has T-07; a folder with no SQLite row counts as terminal. No bulk delete,
+no trash, no auto-cleanup by age (§8). E2-F01 stays partial: rename, search and
+sort are not built.
+
+Two things the brief asked to confirm rather than assume. A folder with no row
+never comes from this code — the row is always written before the folder, and
+every other writer refuses without one; it comes from `db.sqlite3` replaced under
+an existing `jobs/`, or a folder copied in by hand. And the shell did not track
+edit renders at all — `spawn_tool` forgot the child once spawned — so
+`EditRenders` now counts them, inside `spawn_tool` alone; `stream_child` and
+`start_job_locked` are untouched and the kill path was not exercised.
+
+Instagram links and calibration rows are KEPT and named in the confirmation: the
+fit replays the provenance stored at link time and never reads the folder, and
+the Loop already draws a linked clip whose file is gone. Deleting the row would
+have silently dropped an outcome (E17-F06).
 
 ### T-32 · Instagram tokens ride in query parameters      [P1, found in T-31]
 

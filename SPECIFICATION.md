@@ -814,6 +814,7 @@ unexpectedly" with the actual error thrown away.
 | `diagnose_job` | builds the T-15 bundle via the CLI, copies it to Downloads |
 | `job_results` | read every stage checkpoint for a job |
 | `list_job_dirs` | enumerate jobs |
+| `delete_job_info`, `delete_job` | T-30: passthroughs to `jobs delete-info` / `jobs delete`, refused first — in python's answer shape — when the shell is running that job or rendering one of its clips (`EditRenders`, counted in and out by `spawn_tool`); `delete_job` re-asks the queue listing afterwards |
 | `save_clip_edits` | write `clip_edits.json` |
 | `run_edit_render` | single-clip re-render |
 | `edit_tool`, `settings_tool`, `ig_tool` | generic passthrough to CLI subcommands |
@@ -907,6 +908,24 @@ All model caches are redirected under `PUBLIKCLIP_HOME` deliberately, so
 "delete the app data" actually reclaims the disk.
 
 Job IDs are `YYYYMMDD-HHMMSS-<6 hex>`.
+
+**Deleting a job (T-30, E2-F01).** `jobs delete <id>` (`jobs/delete.py`) removes
+`jobs/<id>/` whole — source media, intermediates, checkpoints, rendered clips —
+and only then the job's `jobs` and `stage_runs` rows, in that order: a folder
+that could not be fully removed (on Windows, a clip held open by a player)
+keeps its row, and the verb answers that the job was only partly removed so a
+second delete can finish it; a folder already gone is not an error, the rows
+go. Only terminal jobs — done, failed, cancelled; a folder with no row (a
+replaced `db.sqlite3`, a folder copied in) counts as terminal. The id must be
+one path component whose resolved path is a direct child of `jobs/`. The
+confirmation's numbers are measured, never estimated: the bytes on disk and
+the entries of `render.json`'s `outputs`. Everything outside the folder
+survives: clips exported to Downloads, the shared `watermarks/` and
+`avatars/` pictures, and the Instagram loop's `published_clips` and
+`match_rejections` rows — calibration history, which the fit replays from the
+provenance stored at link time; the Loop lists such a clip without its
+picture. One job at a time; no trash, no undo, no cleanup by age (E2-F06 is
+the separate "intermediates only" task).
 
 ### Disk pre-flight (E1-F07, T-12)
 
@@ -1187,6 +1206,8 @@ changes take effect on the next job with no rebuild.
 | `jobs resume-info <job_id>` | per-stage status + measured re-run cost, for the resume picker |
 | `diagnose [job_id] [--out]` | one inspectable, redacted zip for a bug report (T-15) — allowlist-built, no network |
 | `jobs` | list jobs |
+| `jobs delete-info <job_id>` | what deleting a finished job would remove: deletable?, status, clips, bytes measured off disk, linked Reels (T-30) |
+| `jobs delete <job_id>` | delete a finished job — the folder first with every failure collected, then both rows; re-checks the status itself; a partial removal keeps the row and says so (T-30) |
 | `settings get\|set\|reset` | read/write the global settings tree |
 | `settings preset-save\|preset-reset <name>` | caption preset editing |
 | `settings watermark-import <png>` | copy a PNG into `watermarks/`, print its stored path — what the deck sends as `--watermark-image` (E19-F02) |
